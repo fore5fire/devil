@@ -27,7 +27,7 @@ impl<'a, B: Backend> SelectPanel<'a, B> {
         let Some(i) = i else {
             return Vec::new();
         };
-        if i >= self.list.choices.len() {
+        if i >= self.list.items.len() {
             return Vec::new();
         }
         (self.callback)(i)
