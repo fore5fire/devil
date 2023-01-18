@@ -29,6 +29,15 @@ impl IndexPanel {
             list: ListPartial::new(has_focus, 0, Vec::new()),
         }
     }
+
+    fn insert(&mut self, entry: IndexEntry) {
+        self.entries.insert(entry);
+        self.list.items = self
+            .entries
+            .iter()
+            .map(|e| format!("{} {}", e.url, e.method))
+            .collect();
+    }
 }
 
 impl<B: Backend> Panel<B> for IndexPanel {
@@ -64,7 +73,7 @@ impl<B: Backend> Panel<B> for IndexPanel {
     fn tick(&mut self) -> Vec<Signal<B>> {
         // Add any completed updates to the output.
         while let Ok(entry) = self.rx.try_recv() {
-            self.entries.insert(entry);
+            self.insert(entry);
         }
         Vec::new()
     }
@@ -73,4 +82,5 @@ impl<B: Backend> Panel<B> for IndexPanel {
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct IndexEntry {
     url: Url,
+    method: String,
 }

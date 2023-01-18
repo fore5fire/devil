@@ -1,7 +1,7 @@
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use tui::{
     backend::Backend,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout},
     style::{Color, Style},
     symbols::DOT,
     text::Spans,
@@ -25,11 +25,11 @@ struct Section {
 
 impl<B: Backend + 'static> App<B> {
     pub fn new() -> Self {
+        let mut panels = vec![Self::new_panel(true), Self::new_panel(false)];
+        panels[0].push(Box::new(ConsolePanel::new(true)));
+        panels[1].push(Box::new(PlanListPanel::new(false)));
         Self {
-            panels: vec![
-                NavStack::new(Box::new(ConsolePanel::new(true))),
-                NavStack::new(Box::new(PlanListPanel::new(false))),
-            ],
+            panels,
             focus: 0,
             sections: [
                 Section {
@@ -41,7 +41,7 @@ impl<B: Backend + 'static> App<B> {
                     panels: vec![1],
                 },
             ],
-            layout: AppLayout::VerticalSplit(50),
+            layout: AppLayout::HorizontalSplit(50),
         }
     }
 
@@ -52,7 +52,7 @@ impl<B: Backend + 'static> App<B> {
     pub fn event(&mut self, event: Event) -> Vec<Signal<B>> {
         // Forward any non-key events to the focused panel.
         let Event::Key(key) = event else {
-            return self.get_focused_mut().event(event);
+            return self.focused_mut().event(event);
         };
         match key.code {
             KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
@@ -127,7 +127,7 @@ impl<B: Backend + 'static> App<B> {
             KeyCode::Char('j') if key.modifiers == KeyModifiers::CONTROL => {
                 self.notify_focus(false);
                 self.panels
-                    .push(NavStack::new(Box::new(IndexPanel::new(true))));
+                    .push(NavStack::new(vec![Box::new(IndexPanel::new(true))]));
                 let section = &mut self.sections[self.focus];
                 section.focus += 1;
                 section.panels.insert(self.focus, self.panels.len() - 1);
@@ -135,30 +135,13 @@ impl<B: Backend + 'static> App<B> {
             }
             KeyCode::Char('n') if key.modifiers == KeyModifiers::CONTROL => {
                 self.notify_focus(false);
-                self.panels.push(NavStack::new(Box::new(SelectPanel::new(
-                    "New",
-                    true,
-                    Vec::from([
-                        "1. Console".to_owned(),
-                        "2. Plans".to_owned(),
-                        "3. Index".to_owned(),
-                    ]),
-                    Box::new(|i| {
-                        let panel: Box<dyn Panel<B>> = match i {
-                            0 => Box::new(ConsolePanel::new(true)),
-                            1 => Box::new(PlanListPanel::new(true)),
-                            2 => Box::new(IndexPanel::new(true)),
-                            _ => unreachable!(),
-                        };
-                        Vec::from([Signal::NavStackPush(panel)])
-                    }),
-                ))));
                 let section = &mut self.sections[self.focus];
                 section.focus += 1;
-                section.panels.insert(section.focus, self.panels.len() - 1);
+                let section_focus = section.focus;
+                self.add_panel(self.focus, section_focus, true);
                 Vec::new()
             }
-            KeyCode::Char('w') if key.modifiers == KeyModifiers::CONTROL => {
+            KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
                 self.layout = match self.layout {
                     AppLayout::NoSplit => AppLayout::VerticalSplit(50),
                     AppLayout::VerticalSplit(_) => AppLayout::HorizontalSplit(50),
@@ -166,8 +149,28 @@ impl<B: Backend + 'static> App<B> {
                 };
                 Vec::new()
             }
+            // ctrl-w closes the focused panel.
+            KeyCode::Char('w') if key.modifiers == KeyModifiers::CONTROL => {
+                // Notify and remove the focused panel.
+                self.notify_focus(false);
+                let section = self.focused_section_mut();
+                section.panels.remove(section.focus);
+
+                // If there are no more panels in this section then open a new one.
+                if section.panels.is_empty() {
+                    self.add_panel(self.focus, 0, true);
+                }
+
+                // If we removed the last panel the focus is now overflowing, so cap it at the
+                // last of this section's panels.
+                let section = self.focused_section_mut();
+                section.focus = section.focus.min(section.panels.len() - 1);
+
+                self.notify_focus(true);
+                Vec::new()
+            }
             // All other key events are forwarded to the focused panel.
-            _ => self.get_focused_mut().event(event),
+            _ => self.focused_mut().event(event),
         }
     }
 
@@ -268,13 +271,45 @@ impl<B: Backend + 'static> App<B> {
         }
     }
 
-    fn get_focused_mut(&mut self) -> &mut NavStack<B> {
+    fn focused_mut(&mut self) -> &mut NavStack<B> {
         let section = &mut self.sections[self.focus];
         &mut self.panels[section.panels[section.focus]]
     }
 
+    fn focused_section_mut(&mut self) -> &mut Section {
+        &mut self.sections[self.focus]
+    }
+
     fn notify_focus(&mut self, has_focus: bool) {
-        self.get_focused_mut().set_focus(has_focus)
+        self.focused_mut().set_focus(has_focus)
+    }
+
+    fn new_panel(has_focus: bool) -> NavStack<B> {
+        NavStack::new(vec![Box::new(SelectPanel::new(
+            "New",
+            has_focus,
+            Vec::from([
+                "1. Console".to_owned(),
+                "2. Plans".to_owned(),
+                "3. Index".to_owned(),
+            ]),
+            Box::new(|i| {
+                let panel: Box<dyn Panel<B>> = match i {
+                    0 => Box::new(ConsolePanel::new(true)),
+                    1 => Box::new(PlanListPanel::new(true)),
+                    2 => Box::new(IndexPanel::new(true)),
+                    _ => unreachable!(),
+                };
+                Vec::from([Signal::NavStackPush(panel)])
+            }),
+        ))])
+    }
+
+    /// Add a new panel at self.sections[section].panels[panel].
+    fn add_panel(&mut self, section: usize, panel: usize, has_focus: bool) {
+        self.panels.push(Self::new_panel(has_focus));
+        let section = &mut self.sections[section];
+        section.panels.insert(panel, self.panels.len() - 1);
     }
 }
 

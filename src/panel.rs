@@ -1,4 +1,5 @@
 mod console;
+mod editor;
 mod index;
 mod list;
 mod nav;
@@ -6,6 +7,7 @@ mod plan;
 mod select;
 
 pub use console::*;
+pub use editor::*;
 pub use index::*;
 pub use list::*;
 pub use nav::*;

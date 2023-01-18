@@ -11,7 +11,7 @@ use tui::widgets::Paragraph;
 use tui::widgets::{canvas::Label, Block, BorderType, Borders, Widget};
 use tui::Frame;
 
-use super::{ListPartial, Signal};
+use super::{EditorPartial, ListPartial, Signal};
 
 pub struct PlanListPanel {
     plans: Vec<Plan>,
@@ -96,45 +96,48 @@ struct Plan {
     text: String,
 }
 
-struct PlanEditPanel {
+struct PlanEditPanel<'a> {
     plan: Plan,
-    has_focus: bool,
+    editor: EditorPartial<'a>,
 }
 
-impl PlanEditPanel {
+impl PlanEditPanel<'_> {
     fn new(plan: Plan, has_focus: bool) -> Self {
-        Self { plan, has_focus }
+        Self {
+            editor: EditorPartial::new(plan.text.clone(), has_focus),
+            plan,
+        }
     }
 }
 
-impl<B: Backend> super::Panel<B> for PlanEditPanel {
+impl<B: Backend> super::Panel<B> for PlanEditPanel<'_> {
     fn tick(&mut self) -> Vec<Signal<B>> {
         Vec::new()
     }
 
     fn draw(&mut self, f: &mut Frame<B>, r: Rect) {
-        let paragraph = Paragraph::new(self.plan.text.as_ref());
-        f.render_widget(paragraph, r);
+        self.editor.draw(f, r)
     }
 
     fn event(&mut self, event: Event) -> Vec<Signal<B>> {
+        self.editor.event(event.clone());
+
         let Event::Key(key) = event else {
             return Vec::new();
         };
         match key.code {
             KeyCode::Enter => Vec::new(),
-            KeyCode::Esc => Vec::from([Signal::NavStackPop]),
             KeyCode::Delete => Vec::new(),
             _ => Vec::new(),
         }
     }
 
     fn set_focus(&mut self, has_focus: bool) {
-        self.has_focus = has_focus
+        self.editor.has_focus = has_focus
     }
 
     fn has_focus(&self) -> bool {
-        self.has_focus
+        self.editor.has_focus
     }
 
     fn title(&self) -> &str {

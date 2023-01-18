@@ -2,17 +2,16 @@ use crossbeam::channel::{unbounded, Receiver};
 use crossterm::event::{Event, KeyCode};
 use tui::backend::Backend;
 use tui::layout::Rect;
-use tui::style::Modifier;
-use tui::widgets::{canvas::Label, Block, Borders, ListState};
+use tui::widgets::{canvas::Label, Block, Borders};
 use tui::Frame;
 use url::Url;
 
-use super::{Panel, Signal};
+use super::{ListPartial, Panel, Signal};
 
 pub struct ConsolePanel {
     has_focus: bool,
     rx: Receiver<Request>,
-    list_state: ListState,
+    list: ListPartial,
     history: Vec<Request>,
 }
 
@@ -25,34 +24,27 @@ impl ConsolePanel {
         Self {
             has_focus,
             rx,
-            list_state: ListState::default(),
+            list: ListPartial::new(has_focus, 0, Vec::new()),
             history: Vec::new(),
         }
+    }
+
+    fn push(&mut self, req: Request) {
+        self.history.push(req);
+        self.list.items = self.history.iter().map(|req| req.to_string()).collect();
     }
 }
 
 impl<B: Backend> Panel<B> for ConsolePanel {
-    fn draw<'a>(&mut self, f: &mut Frame<B>, r: Rect) {}
+    fn draw<'a>(&mut self, f: &mut Frame<B>, r: Rect) {
+        self.list.draw(f, r);
+    }
 
     fn event(&mut self, event: Event) -> Vec<Signal<B>> {
         let Event::Key(key) = event else {
             return Vec::new();
         };
         match key.code {
-            KeyCode::Char('j') => {
-                let i = match self.list_state.selected() {
-                    Some(i) => (i + 1).min(self.history.len() - 1),
-                    None => 0,
-                };
-                self.list_state.select(Some(i));
-            }
-            KeyCode::Char('k') => {
-                let mut i = self.list_state.selected().unwrap_or(0);
-                if i > 0 {
-                    i -= 1;
-                }
-                self.list_state.select(Some(i));
-            }
             KeyCode::Delete => {}
             _ => {}
         }
@@ -74,7 +66,7 @@ impl<B: Backend> Panel<B> for ConsolePanel {
     fn tick(&mut self) -> Vec<Signal<B>> {
         // Add any completed updates to the output.
         while let Ok(entry) = self.rx.try_recv() {
-            self.history.push(entry);
+            self.push(entry);
         }
         Vec::new()
     }
@@ -83,4 +75,11 @@ impl<B: Backend> Panel<B> for ConsolePanel {
 #[derive(Debug, PartialEq, Eq)]
 struct Request {
     url: Url,
+    method: String,
+}
+
+impl ToString for Request {
+    fn to_string(&self) -> String {
+        format!("{} {}", self.url, self.method)
+    }
 }

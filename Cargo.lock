@@ -11,6 +11,7 @@ dependencies = [
  "futures",
  "tokio",
  "tui",
+ "unicode-segmentation",
  "url",
 ]
 
