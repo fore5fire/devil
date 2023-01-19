@@ -27,7 +27,7 @@ impl PlanListPanel {
         let plans = Vec::from([
             Plan {
                 name: "hi".to_owned(),
-                text: "hi test 123\nabc".to_owned(),
+                text: "hi test gaiorejg oireajg ioerj goiaejr goirjgireoagjirejag oirejg oairejgoi ajer goijreaoi gjreoi jgaeaoi rjg123 airoegj oiaerj golr;ejia ggerji g;oiaerjg;orieja;g ierja ;ioj1234456y7ui98765433456788876544456787654456787654\nabc".to_owned(),
             },
             Plan {
                 name: "bye".to_owned(),

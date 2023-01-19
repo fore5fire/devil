@@ -41,7 +41,7 @@ MVP release items are in bold.
   - [ ] Import from curl
   - [ ] Concurrent requests
   - [ ] Execute individual steps
-- [ ] **Integrated editor**
+- [X] **Integrated editor**
   - [ ] UTF-8 support
   - [ ] View/edit 0-width, whitespace, and invalid codepoints/graphemes
   - [ ] Auto-fill (variables, functions, data from index)
