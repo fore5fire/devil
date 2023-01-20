@@ -15,6 +15,7 @@ pub struct EditorPartial<'a> {
     pub has_focus: bool,
     cursor_index: (usize, usize),
     cursor: Point,
+    restore_x: usize,
     window: Rect,
 }
 
@@ -25,6 +26,7 @@ impl<'a> EditorPartial<'a> {
             has_focus,
             cursor_index: (0, 0),
             cursor: Point::default(),
+            restore_x: 0,
             window: Rect::default(),
         }
     }
@@ -53,37 +55,43 @@ impl<'a> EditorPartial<'a> {
         match key.code {
             KeyCode::Up => {
                 self.set_cursor(Point {
-                    x: self.cursor.x,
+                    x: self.restore_x,
                     y: self.cursor.y.saturating_sub(1),
                 });
             }
             KeyCode::Down => {
                 self.set_cursor(Point {
-                    x: self.cursor.x,
+                    x: self.restore_x,
                     y: self.cursor.y.saturating_add(1),
                 });
             }
             KeyCode::Left => {
-                self.set_cursor(Point {
-                    x: self.cursor.x.saturating_sub(1),
-                    y: self.cursor.y,
-                });
+                if self.cursor.x > 0 {
+                    self.set_cursor(Point {
+                        x: self.cursor.x.saturating_sub(1),
+                        y: self.cursor.y,
+                    });
+                    self.restore_x = self.cursor.x;
+                }
             }
             KeyCode::Right => {
-                self.set_cursor(Point {
-                    x: self.cursor.x.saturating_add(1),
-                    y: self.cursor.y,
-                });
+                if self.cursor.x < self.text.lines[self.cursor.y].width() {
+                    self.set_cursor(Point {
+                        x: self.cursor.x.saturating_add(1),
+                        y: self.cursor.y,
+                    });
+                    self.restore_x = self.cursor.x;
+                }
             }
 
             KeyCode::Enter => {
                 self.newline();
                 self.set_cursor(Point {
-                    x: self.cursor.x,
+                    x: 0,
                     y: self.cursor.y + 1,
                 })
             }
-            // TODO: what's the expected behavior for multi-codepoint graphemes?
+
             KeyCode::Delete => self.delete(),
             KeyCode::Backspace => {
                 // Move to the previous character then delete it. It's possible that the previous
@@ -127,7 +135,14 @@ impl<'a> EditorPartial<'a> {
         // is even if part of it is before the cursor so we can have ownership to truncate
         // it, and then we add it back again.
         let mut remainder = old.drain(self.cursor_index.0..);
-        let (pre, post) = match remainder.next().unwrap_or(Span::raw("")).content {
+        // If there's nothing past the cursor to copy, just add an empty line and return.
+        let Some(span) = remainder.next() else {
+            drop(remainder);
+            self.text.lines.insert(self.cursor.y + 1, new.into());
+            return;
+        };
+        // Split the the span under the cursor into the part to keep and part to move.
+        let (pre, post) = match span.content {
             std::borrow::Cow::Owned(mut s) => {
                 let post =
                     std::borrow::Cow::Owned(s.drain(self.cursor_index.1..).collect::<String>());
@@ -145,15 +160,11 @@ impl<'a> EditorPartial<'a> {
         new.extend(&mut remainder);
         // Move the beginning of the split span back if non-empty.
         drop(remainder);
-        old.push(pre);
-        // Move the cursor to the start of the new line.
-        self.cursor = Point {
-            x: 0,
-            y: self.cursor.y + 1,
-        };
-        self.cursor_index = (0, 0);
+        if pre.content.len() > 0 {
+            old.push(pre);
+        }
         // Add the new line to the editor.
-        self.text.lines.insert(self.cursor.y, new.into());
+        self.text.lines.insert(self.cursor.y + 1, new.into());
     }
 
     // Delete the grapheme after the cursor.
