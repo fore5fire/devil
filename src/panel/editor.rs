@@ -1,15 +1,15 @@
+use std::borrow::Cow;
 use std::convert::TryInto;
 use std::ops::Range;
 
-use crossterm::event::{Event, KeyCode};
 use tui::backend::Backend;
 use tui::style::Style;
-use tui::text::{Span, Text};
+use tui::text::{Span, Spans, Text};
 use tui::widgets::Paragraph;
 use tui::Frame;
 use unicode_segmentation::UnicodeSegmentation;
 
-// EditorPartial provides utilities for rendering and controlling a text editor with tui-rs.
+/// EditorPartial provides utilities for rendering and controlling a text editor with tui-rs.
 pub struct EditorPartial<'a> {
     text: Text<'a>,
     pub has_focus: bool,
@@ -20,7 +20,10 @@ pub struct EditorPartial<'a> {
 }
 
 impl<'a> EditorPartial<'a> {
-    pub fn new(text: String, has_focus: bool) -> Self {
+    pub fn new<T>(text: T, has_focus: bool) -> Self
+    where
+        T: Into<Cow<'a, str>>,
+    {
         Self {
             text: Text::raw(text),
             has_focus,
@@ -31,13 +34,13 @@ impl<'a> EditorPartial<'a> {
         }
     }
 
-    // Draw the editor.
+    /// Draw the editor.
     pub fn draw<B: Backend>(&mut self, f: &mut Frame<B>, r: tui::layout::Rect) {
         self.window.width = r.width.into();
         self.window.height = r.height.into();
         f.set_cursor(
-            r.x + u16::try_from(self.cursor.x - self.window.x).unwrap(),
-            r.y + u16::try_from(self.cursor.y - self.window.y).unwrap(),
+            r.x + u16::try_from(self.cursor.x.saturating_sub(self.window.x)).unwrap(),
+            r.y + u16::try_from(self.cursor.y.saturating_sub(self.window.y)).unwrap(),
         );
         let paragraph = Paragraph::new(self.text.clone());
         let paragraph = paragraph.scroll((
@@ -47,128 +50,189 @@ impl<'a> EditorPartial<'a> {
         f.render_widget(paragraph, r);
     }
 
-    // Process an event.
-    pub fn event(&mut self, event: Event) {
-        let Event::Key(key) = event else {
-            return;
-        };
-        match key.code {
-            KeyCode::Up => {
-                self.set_cursor(Point {
-                    x: self.restore_x,
-                    y: self.cursor.y.saturating_sub(1),
-                });
-            }
-            KeyCode::Down => {
-                self.set_cursor(Point {
-                    x: self.restore_x,
-                    y: self.cursor.y.saturating_add(1),
-                });
-            }
-            KeyCode::Left => {
-                if self.cursor.x > 0 {
-                    self.set_cursor(Point {
-                        x: self.cursor.x.saturating_sub(1),
-                        y: self.cursor.y,
-                    });
-                    self.restore_x = self.cursor.x;
-                }
-            }
-            KeyCode::Right => {
-                if self.cursor.x < self.text.lines[self.cursor.y].width() {
-                    self.set_cursor(Point {
-                        x: self.cursor.x.saturating_add(1),
-                        y: self.cursor.y,
-                    });
-                    self.restore_x = self.cursor.x;
-                }
-            }
+    pub fn set_scroll(&mut self, x: usize, y: usize) {
+        self.window.x = x;
+        self.window.y = y;
+    }
 
-            KeyCode::Enter => {
-                self.newline();
-                self.set_cursor(Point {
-                    x: 0,
-                    y: self.cursor.y + 1,
-                })
-            }
+    pub fn cursor(&self) -> Point {
+        self.cursor
+    }
 
-            KeyCode::Delete => self.delete(),
-            KeyCode::Backspace => {
-                // Move to the previous character then delete it. It's possible that the previous
-                // character is on the previous line, or doesn't exist at all.
-                if self.cursor.x > 0 {
-                    self.set_cursor(Point {
-                        x: self.cursor.x - 1,
-                        y: self.cursor.y,
-                    });
-                    self.delete();
-                } else if self.cursor.y > 0 {
-                    self.set_cursor(Point {
-                        x: usize::MAX,
-                        y: self.cursor.y - 1,
-                    });
-                    self.delete();
-                }
-            }
-            KeyCode::Char(c) => {
-                self.text.lines[self.cursor.y].0[self.cursor_index.0]
-                    .content
-                    .to_mut()
-                    .insert(self.cursor_index.1, c);
-                // TODO: we shouldn't move the cursor if inserting a codepoint which combines with
-                // the previous grapheme.
+    /// Moves the cursor relative to its current position. Returns whether the cursor was able to
+    /// move at least one position.
+    pub fn move_cursor(&mut self, direction: Direction, steps: usize) -> bool {
+        match direction {
+            Direction::Left => {
+                let prev = self.cursor.x;
                 self.set_cursor(Point {
-                    x: self.cursor.x + 1,
+                    x: self.cursor.x.saturating_sub(steps),
                     y: self.cursor.y,
                 });
+                if self.cursor.x != prev {
+                    self.restore_x = self.cursor.x;
+                }
+                self.cursor.x != prev
             }
-
-            _ => {}
+            Direction::Right => {
+                let prev = self.cursor.x;
+                self.set_cursor(Point {
+                    x: self.cursor.x.saturating_add(steps),
+                    y: self.cursor.y,
+                });
+                if self.cursor.x != prev {
+                    self.restore_x = self.cursor.x;
+                }
+                self.cursor.x != prev
+            }
+            Direction::Up => {
+                let prev = self.cursor;
+                self.set_cursor(Point {
+                    x: self.restore_x,
+                    y: self.cursor.y.saturating_sub(steps),
+                });
+                self.cursor != prev
+            }
+            Direction::Down => {
+                let prev = self.cursor;
+                self.set_cursor(Point {
+                    x: self.restore_x,
+                    y: self.cursor.y.saturating_add(steps),
+                });
+                self.cursor != prev
+            }
+            // TODO: right-to-left text support. For now this just allows convinent line wrap.
+            Direction::Prev => {
+                let mut remaining = steps;
+                let mut dest = self.cursor;
+                while remaining > 0 {
+                    if dest.x >= remaining {
+                        dest.x -= remaining;
+                        break;
+                    } else if dest.y == 0 {
+                        dest.x = 0;
+                        break;
+                    } else {
+                        remaining -= dest.x + 1;
+                        dest.y -= 1;
+                        dest.x = self.text.lines[dest.y].width();
+                    }
+                }
+                // Set the identified cursor location.
+                let prev = self.cursor;
+                self.set_cursor(dest);
+                if self.cursor != prev {
+                    self.restore_x = dest.x;
+                }
+                self.cursor != prev
+            }
+            Direction::Next => {
+                if self.cursor.y >= self.text.lines.len() {
+                    return false;
+                }
+                let mut remaining = steps;
+                let mut dest = self.cursor;
+                while remaining > 0 {
+                    let line_steps = self.text.lines[dest.y].width() - dest.x;
+                    if line_steps >= remaining {
+                        dest.x += remaining;
+                        break;
+                    } else if dest.y == self.text.lines.len() - 1 {
+                        dest.x += line_steps;
+                        break;
+                    } else {
+                        remaining -= line_steps + 1;
+                        dest.y += 1;
+                        dest.x = 0;
+                    }
+                }
+                // Set the identified cursor location.
+                let prev = self.cursor;
+                self.set_cursor(dest);
+                if self.cursor != prev {
+                    self.restore_x = dest.x;
+                }
+                self.cursor != prev
+            }
         }
     }
 
-    // Insert a newline at the cursor location.
+    /// Insert a codepoint at the cursor location. Returns whether the insert created a new
+    /// grapheme.
+    pub fn insert(&mut self, c: char) -> bool {
+        if self.cursor.y == self.text.lines.len() {
+            self.text.lines.push(Spans::from(""));
+        };
+        let line = &mut self.text.lines[self.cursor.y];
+
+        if self.cursor_index.0 == line.0.len() {
+            line.0.push(Span::from(""))
+        }
+
+        line.0[self.cursor_index.0]
+            .content
+            .to_mut()
+            .insert(self.cursor_index.1, c);
+
+        // TODO: report whether inserting a codepoint combined with the previous grapheme.
+        true
+    }
+
+    /// Insert a newline at the cursor location.
     pub fn newline(&mut self) {
+        if self.cursor.y >= self.text.height() {
+            self.text.lines.insert(self.cursor.y, Spans::from(""));
+        };
         let old = &mut self.text.lines[self.cursor.y].0;
-        let mut new: Vec<Span> = Vec::new();
         // Split the line after the cursor. We also take the entire span where the cursor
         // is even if part of it is before the cursor so we can have ownership to truncate
         // it, and then we add it back again.
         let mut remainder = old.drain(self.cursor_index.0..);
         // If there's nothing past the cursor to copy, just add an empty line and return.
-        let Some(span) = remainder.next() else {
+        let Some(mut span) = remainder.next() else {
             drop(remainder);
-            self.text.lines.insert(self.cursor.y + 1, new.into());
+            self.text.lines.insert(self.cursor.y + 1, Spans::from(""));
             return;
         };
         // Split the the span under the cursor into the part to keep and part to move.
         let (pre, post) = match span.content {
-            std::borrow::Cow::Owned(mut s) => {
-                let post =
-                    std::borrow::Cow::Owned(s.drain(self.cursor_index.1..).collect::<String>());
-                let pre = Span::raw(s);
-                (pre, post)
+            std::borrow::Cow::Owned(ref mut s) => {
+                let post = Span::styled(
+                    s.drain(self.cursor_index.1..).collect::<String>(),
+                    span.style,
+                );
+                (span, post)
             }
             std::borrow::Cow::Borrowed(s) => (
-                Span::raw(&s[..self.cursor_index.1]),
-                std::borrow::Cow::Borrowed(&s[self.cursor_index.1..]),
+                Span::styled(&s[..self.cursor_index.1], span.style),
+                Span::styled(&s[self.cursor_index.1..], span.style),
             ),
         };
-        // Add the portion of the span after the cursor to the new line.
-        new.push(Span::raw(post));
-        // Move all remaining spans to the new line.
+        // Build the new line from the split span and all following spans, ensuring it contains at
+        // least one span.
+        let mut new: Vec<Span> =
+            Vec::with_capacity(remainder.len() + if post.content.is_empty() { 0 } else { 1 });
+        if !post.content.is_empty() || remainder.len() == 0 {
+            new.push(post);
+        }
         new.extend(&mut remainder);
-        // Move the beginning of the split span back if non-empty.
+        // Move the beginning of the split span back to the original line if non-empty.
         drop(remainder);
         if pre.content.len() > 0 {
             old.push(pre);
         }
         // Add the new line to the editor.
-        self.text.lines.insert(self.cursor.y + 1, new.into());
+        self.text.lines.insert(self.cursor.y + 1, Spans::from(new));
     }
 
-    // Delete the grapheme after the cursor.
+    /// Delete the grapheme after the cursor.
     pub fn delete(&mut self) {
+        // If the cursor is after the end of a document, like in a newly created empty document,
+        // then there's nothing to do.
+        if self.cursor.y >= self.text.lines.len() {
+            return;
+        };
+
         let line = &mut self.text.lines[self.cursor.y].0;
         // There are four cases we need to handle, from highest priority to lowest:
         // 1. The current span contains at least one grapheme after the cursor that we can delete.
@@ -206,8 +270,14 @@ impl<'a> EditorPartial<'a> {
 
     /// Sets the cursor position to p.
     pub fn set_cursor(&mut self, p: Point) {
-        self.cursor.y = p.y.min(self.text.height() - 1);
-        self.cursor.x = p.x.min(self.text.lines[self.cursor.y].width());
+        self.cursor.y = p.y.min(self.text.height().saturating_sub(1));
+        self.cursor.x = p.x.min(
+            self.text
+                .lines
+                .get_mut(self.cursor.y)
+                .map(|line| line.width())
+                .unwrap_or(0),
+        );
         if self.cursor.x < self.window.x {
             self.window.x = self.cursor.x;
         } else if self.cursor.x >= self.window.x + self.window.width {
@@ -221,10 +291,25 @@ impl<'a> EditorPartial<'a> {
         self.reindex_cursor();
     }
 
-    // Set self.cursor_index based by reading self.cursor and searching the line's graphemes for
-    // the cursor position.
+    /// Returns the number of lines in the document.
+    pub fn height(&self) -> usize {
+        self.text.height().max(1)
+    }
+
+    /// Returns the width of the line the cursor is on.
+    pub fn line_width(&self) -> usize {
+        self.text
+            .lines
+            .get(self.cursor.y)
+            .map(|line| line.width())
+            .unwrap_or(0)
+    }
+
+    /// Set self.cursor_index based by reading self.cursor and searching the line's graphemes for
+    /// the cursor position.
     fn reindex_cursor(&mut self) {
-        let line = &self.text.lines[self.cursor.y];
+        let default = Spans::from("");
+        let line = self.text.lines.get(self.cursor.y).unwrap_or(&default);
         // Find the span which contains the cursor.
         let mut i = 0;
         self.cursor_index.0 = 0;
@@ -237,9 +322,9 @@ impl<'a> EditorPartial<'a> {
             self.cursor_index.0 += 1;
         }
         // If we went past the end of the line then use the last element.
-        if self.cursor_index.0 == line.0.len() {
-            self.cursor_index.0 = line.0.len() - 1;
-            self.cursor_index.1 = line.0.last().unwrap_or(&Span::raw("")).width();
+        if self.cursor_index.0 >= line.0.len() {
+            self.cursor_index.0 = line.0.len().saturating_sub(1);
+            self.cursor_index.1 = line.0.last().map(|span| span.width()).unwrap_or(0);
             return;
         }
         // Find the cursor index within the selected span.
@@ -251,6 +336,7 @@ impl<'a> EditorPartial<'a> {
         self.cursor_index.1 = remaining.min(count);
     }
 
+    /// Deletes a range of a span's content and verifies the span still contains valid UTF-8 text.
     fn delete_bytes(span: &mut Span, range: Range<usize>) {
         let mut content = std::mem::replace(&mut span.content, "".into());
         let mut raw_content = content.to_mut().to_owned().into_bytes();
@@ -261,14 +347,35 @@ impl<'a> EditorPartial<'a> {
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 pub struct Point {
-    x: usize,
-    y: usize,
+    pub x: usize,
+    pub y: usize,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
-struct Rect {
+pub struct Rect {
     x: usize,
     y: usize,
     width: usize,
     height: usize,
+}
+
+impl From<tui::layout::Rect> for Rect {
+    fn from(r: tui::layout::Rect) -> Self {
+        Rect {
+            x: r.x.into(),
+            y: r.y.into(),
+            width: r.width.into(),
+            height: r.height.into(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum Direction {
+    Up,
+    Down,
+    Left,
+    Right,
+    Prev,
+    Next,
 }

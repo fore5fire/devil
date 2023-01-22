@@ -11,7 +11,7 @@ use tui::widgets::Paragraph;
 use tui::widgets::{canvas::Label, Block, BorderType, Borders, Widget};
 use tui::Frame;
 
-use super::{EditorPartial, ListPartial, Signal};
+use super::{Direction, EditorPartial, ListPartial, Signal};
 
 pub struct PlanListPanel {
     plans: Vec<Plan>,
@@ -120,14 +120,47 @@ impl<B: Backend> super::Panel<B> for PlanEditPanel<'_> {
     }
 
     fn event(&mut self, event: Event) -> Vec<Signal<B>> {
-        self.editor.event(event.clone());
-
         let Event::Key(key) = event else {
             return Vec::new();
         };
         match key.code {
-            KeyCode::Enter => Vec::new(),
-            KeyCode::Delete => Vec::new(),
+            KeyCode::Up => {
+                self.editor.move_cursor(Direction::Up, 1);
+                Vec::new()
+            }
+            KeyCode::Down => {
+                self.editor.move_cursor(Direction::Down, 1);
+                Vec::new()
+            }
+            KeyCode::Left => {
+                self.editor.move_cursor(Direction::Left, 1);
+                Vec::new()
+            }
+            KeyCode::Right => {
+                self.editor.move_cursor(Direction::Right, 1);
+                Vec::new()
+            }
+            KeyCode::Enter => {
+                self.editor.newline();
+                self.editor.move_cursor(Direction::Next, 1);
+                Vec::new()
+            }
+            KeyCode::Backspace => {
+                if self.editor.move_cursor(Direction::Prev, 1) {
+                    self.editor.delete();
+                }
+                Vec::new()
+            }
+            KeyCode::Delete => {
+                self.editor.delete();
+                Vec::new()
+            }
+            KeyCode::Char(c) => {
+                if self.editor.insert(c) {
+                    self.editor.move_cursor(Direction::Next, 1);
+                }
+                Vec::new()
+            }
             _ => Vec::new(),
         }
     }

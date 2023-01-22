@@ -8,7 +8,7 @@ MVP release items are in bold.
 
 - [ ] **Execute web queries**
   - [ ] **HTTP/1.0**
-  - [ ] HTTP/1.1
+  - [ ] **HTTP/1.1**
   - [ ] HTTP/2
   - [ ] HTTP/3
   - [ ] websockets
@@ -33,11 +33,11 @@ MVP release items are in bold.
   - [ ] GraphQL
   - [ ] Persistence
 - [ ] **Query plans**
-  - [ ] Persistence
-  - [ ] Variables
-  - [ ] Functions
-  - [ ] Execute and view results in history
-  - [ ] Export to curl
+  - [ ] **Execute and view results in history**
+  - [ ] **Persistence**
+  - [ ] **Variables**
+  - [ ] **Functions**
+  - [ ] **Export to curl**
   - [ ] Import from curl
   - [ ] Concurrent requests
   - [ ] Execute individual steps
@@ -54,9 +54,11 @@ MVP release items are in bold.
   - [ ] **Vi-style modes**
   - [ ] Chords
   - [ ] Emacs and vi default keymaps
+  - [ ] Vim-style jumplist
 - [ ] **Plugins**
   - [ ] **Add custom query plan functions (with examples for bash, python, rust, go,
   js)**
   - [ ] **Endpoint scanning with rate limit detection to populate index**
   - [ ] MITM proxy to populate index for set of domains/IPs
   - [ ] Fuzz endpoints in index to generate plans for detected bugs
+- [ ] **Help screen**

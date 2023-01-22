@@ -8,21 +8,19 @@ use url::Url;
 
 use super::{ListPartial, Panel, Signal};
 
-pub struct ConsolePanel {
-    has_focus: bool,
+pub struct HistoryPanel {
     rx: Receiver<Request>,
     list: ListPartial,
     history: Vec<Request>,
 }
 
-impl ConsolePanel {
+impl HistoryPanel {
     pub fn new(has_focus: bool) -> Self {
-        // We use crossbeam channels despite having async produceers since we have a synchronous
+        // We use crossbeam channels despite having async producers since we have a synchronous
         // reciever and use an unboounded channel.
         let (tx, rx) = unbounded();
 
         Self {
-            has_focus,
             rx,
             list: ListPartial::new(has_focus, 0, Vec::new()),
             history: Vec::new(),
@@ -35,32 +33,34 @@ impl ConsolePanel {
     }
 }
 
-impl<B: Backend> Panel<B> for ConsolePanel {
+impl<B: Backend> Panel<B> for HistoryPanel {
     fn draw<'a>(&mut self, f: &mut Frame<B>, r: Rect) {
         self.list.draw(f, r);
     }
 
     fn event(&mut self, event: Event) -> Vec<Signal<B>> {
+        self.list.event(&event);
+
         let Event::Key(key) = event else {
             return Vec::new();
         };
         match key.code {
-            KeyCode::Delete => {}
+            KeyCode::Enter => {}
             _ => {}
         }
         Vec::new()
     }
 
     fn set_focus(&mut self, has_focus: bool) {
-        self.has_focus = has_focus
+        self.list.has_focus = has_focus;
     }
 
     fn has_focus(&self) -> bool {
-        self.has_focus
+        self.list.has_focus
     }
 
     fn title(&self) -> &str {
-        "Console"
+        "History"
     }
 
     fn tick(&mut self) -> Vec<Signal<B>> {

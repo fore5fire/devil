@@ -1,15 +1,15 @@
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use tui::{
     backend::Backend,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     symbols::DOT,
-    text::Spans,
+    text::{Span, Spans},
     widgets::{Block, Borders, Tabs},
     Frame,
 };
 
-use crate::panel::{ConsolePanel, IndexPanel, NavStack, Panel, PlanListPanel, SelectPanel, Signal};
+use crate::panel::{HistoryPanel, IndexPanel, NavStack, Panel, PlanListPanel, SelectPanel, Signal};
 
 pub struct App<B: Backend> {
     panels: Vec<NavStack<B>>,
@@ -26,7 +26,7 @@ struct Section {
 impl<B: Backend + 'static> App<B> {
     pub fn new() -> Self {
         let mut panels = vec![Self::new_panel(true), Self::new_panel(false)];
-        panels[0].push(Box::new(ConsolePanel::new(true)));
+        panels[0].push(Box::new(HistoryPanel::new(true)));
         panels[1].push(Box::new(PlanListPanel::new(false)));
         Self {
             panels,
@@ -235,21 +235,34 @@ impl<B: Backend + 'static> App<B> {
             ),
         };
         for (i, (section, rect)) in sections.iter().enumerate() {
+            // Create the block widget.
             let block = Block::default().borders(Borders::ALL);
-            let mut tabs_rect = block.inner(*rect);
-            tabs_rect.height = 1;
-            let mut panel_rect = block.inner(*rect);
-            panel_rect.height -= 1;
-            panel_rect.y += 1;
-            f.render_widget(block, *rect);
+
+            // Render the panel's contents.
+            let panel_rect = block.inner(*rect);
             self.panels[section.panels[section.focus]].draw(f, panel_rect);
-            let titles = section
+
+            // Calculate the tab size and set a blank block title to make space for it.
+            let titles: Vec<_> = section
                 .panels
                 .iter()
                 .map(|p| self.panels[*p].title())
-                .to_owned()
                 .map(Spans::from)
                 .collect();
+            // The total width is the width of each title, plus the width of spacers between the
+            // titles, plus one space around the outside of the tabs section.
+            let tabs_width = titles.iter().fold(0, |total, title| total + title.width())
+                + titles.len().saturating_sub(1) * (2 + Span::raw(DOT).width())
+                + 2;
+            let block = block.title(" ".repeat(tabs_width));
+
+            // Create the tabs widget.
+            let tabs_rect = Rect {
+                x: rect.x + 1,
+                y: rect.y,
+                width: rect.width.saturating_sub(2),
+                height: 1,
+            };
             let highlight_style = Style::default();
             let highlight_style = if i == focus_section {
                 highlight_style.fg(Color::Blue).bg(Color::Gray)
@@ -260,13 +273,9 @@ impl<B: Backend + 'static> App<B> {
                 .select(section.focus)
                 .highlight_style(highlight_style)
                 .divider(DOT);
-            //let mut block = Block::default().title(" Attack ").borders(Borders::ALL);
-            //block = if self.has_focus {
-            //    block.border_style(tui::style::Style::default().add_modifier(Modifier::BOLD))
-            //} else {
-            //    block.border_style(tui::style::Style::default().add_modifier(Modifier::DIM))
-            //};
-            //let rect = block.inner(rect);
+
+            // Render the panel's block and tabs.
+            f.render_widget(block, *rect);
             f.render_widget(tabs, tabs_rect);
         }
     }
@@ -295,7 +304,7 @@ impl<B: Backend + 'static> App<B> {
             ]),
             Box::new(|i| {
                 let panel: Box<dyn Panel<B>> = match i {
-                    0 => Box::new(ConsolePanel::new(true)),
+                    0 => Box::new(HistoryPanel::new(true)),
                     1 => Box::new(PlanListPanel::new(true)),
                     2 => Box::new(IndexPanel::new(true)),
                     _ => unreachable!(),
