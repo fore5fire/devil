@@ -251,7 +251,7 @@ impl<B: Backend + 'static> App<B> {
                 .collect();
             // The total width is the width of each title, plus the width of spacers between the
             // titles, plus one space around the outside of the tabs section.
-            let tabs_width = titles.iter().fold(0, |total, title| total + title.width())
+            let tabs_width = titles.iter().map(|title| title.width()).sum::<usize>()
                 + titles.len().saturating_sub(1) * (2 + Span::raw(DOT).width())
                 + 2;
             let block = block.title(" ".repeat(tabs_width));

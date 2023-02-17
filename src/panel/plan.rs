@@ -1,17 +1,13 @@
-use std::collections::HashSet;
-use std::task::Poll;
-
 use crossbeam::channel::{unbounded, Receiver};
 use crossterm::event::{Event, KeyCode};
 use tui::backend::Backend;
-use tui::layout::Rect;
-use tui::style::{Color, Modifier};
-use tui::text::{Span, Spans, Text};
+use tui::layout::{self, Rect};
 use tui::widgets::Paragraph;
 use tui::widgets::{canvas::Label, Block, BorderType, Borders, Widget};
 use tui::Frame;
 
 use super::{Direction, EditorPartial, ListPartial, Signal};
+use crate::ql::{HTTPRequest, HTTPResponse, Plam, Step};
 
 pub struct PlanListPanel {
     plans: Vec<Plan>,
@@ -27,11 +23,19 @@ impl PlanListPanel {
         let plans = Vec::from([
             Plan {
                 name: "hi".to_owned(),
-                text: "hi test gaiorejg oireajg ioerj goiaejr goirjgireoagjirejag oirejg oairejgoi ajer goijreaoi gjreoi jgaeaoi rjg123 airoegj oiaerj golr;ejia ggerji g;oiaerjg;orieja;g ierja ;ioj1234456y7ui98765433456788876544456787654456787654\nabc".to_owned(),
+                steps: vec![Step::HTTP(
+                    HTTPRequest("hi test gaiorejg oireajg ioerj goiaejr goirjgireoagjirejag oirejg oairejgoi ajer goijreaoi gjreoi jgaeaoi rjg123 airoegj oiaerj golr;ejia ggerji g;oiaerjg;orieja;g ierja ;ioj1234456y7ui98765433456788876544456787654456787654\nabc".to_owned()),
+                    Some(HTTPResponse("HTTP 1.1 200 OK\nContent-Type: application/json".into())),
+                ), Step::HTTP(
+                    HTTPRequest("hi second req".to_owned()),
+                    Some(HTTPResponse("hi second response".into())))],
             },
             Plan {
                 name: "bye".to_owned(),
-                text: "bye test 123\nabc".to_owned(),
+                steps: vec![Step::HTTP(
+                    HTTPRequest("".to_owned()),
+                    Some(HTTPResponse("bye test 123\nabc".into())),
+                )],
             },
         ]);
         Self {
@@ -91,20 +95,29 @@ impl<B: Backend> super::Panel<B> for PlanListPanel {
 }
 
 #[derive(Debug, Clone)]
-struct Plan {
-    name: String,
-    text: String,
-}
+struct HTTPResponse(Vec<u8>);
+
+#[derive(Debug, Clone)]
+struct HTTPRequest(String);
 
 struct PlanEditPanel<'a> {
     plan: Plan,
     editor: EditorPartial<'a>,
 }
 
-impl PlanEditPanel<'_> {
-    fn new(plan: Plan, has_focus: bool) -> Self {
+impl<'a> PlanEditPanel<'a> {
+    fn new(plan: Plan, has_focus: bool) -> PlanEditPanel<'a> {
         Self {
-            editor: EditorPartial::new(plan.text.clone(), has_focus),
+            editor: EditorPartial::new(
+                plan.steps
+                    .iter()
+                    .map(|s| match s {
+                        Step::HTTP(req, _) => req.0.as_str(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+                has_focus,
+            ),
             plan,
         }
     }
@@ -115,8 +128,24 @@ impl<B: Backend> super::Panel<B> for PlanEditPanel<'_> {
         Vec::new()
     }
 
-    fn draw(&mut self, f: &mut Frame<B>, r: Rect) {
-        self.editor.draw(f, r)
+    fn draw(&mut self, frame: &mut Frame<B>, area: Rect) {
+        let mut layout = layout::Layout::default()
+            .direction(layout::Direction::Horizontal)
+            .margin(0)
+            .constraints(
+                [
+                    layout::Constraint::Percentage(50),
+                    layout::Constraint::Percentage(50),
+                ]
+                .as_ref(),
+            )
+            .split(area)
+            .into_iter();
+
+        self.editor.draw(frame, layout.next().unwrap());
+
+        let responses = Paragraph::new("");
+        frame.render_widget(responses, layout.next().unwrap());
     }
 
     fn event(&mut self, event: Event) -> Vec<Signal<B>> {

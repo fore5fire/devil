@@ -22,7 +22,6 @@ MVP release items are in bold.
   - [ ] Lower level protocols using something like [libpnet](https://github.com/libpnet/libpnet)
 - [ ] **Query history**
   - [ ] **Copy to plan**
-  - [ ] **Rerun query**
   - [ ] View responses at each protocol boundary
   - [ ] Search
   - [ ] Persist across sessions
@@ -33,7 +32,7 @@ MVP release items are in bold.
   - [ ] GraphQL
   - [ ] Persistence
 - [ ] **Query plans**
-  - [ ] **Execute and view results in history**
+  - [ ] **Execute and view results**
   - [ ] **Persistence**
   - [ ] **Variables**
   - [ ] **Functions**

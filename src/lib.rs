@@ -9,8 +9,20 @@ use panel::Signal;
 mod app;
 mod input;
 mod panel;
+mod ql;
 
 pub fn run<B: Backend + 'static>(term: &mut Terminal<B>) -> Result<(), Box<dyn std::error::Error>> {
+    assert_eq!(
+        ql::hex_color("#2F14DF"),
+        Ok((
+            "",
+            ql::Color {
+                red: 47,
+                green: 20,
+                blue: 223,
+            }
+        ))
+    );
     // Setup tokio runtime.
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
