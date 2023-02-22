@@ -6,7 +6,7 @@ Written in rust.
 
 MVP release items are in bold.
 
-- [ ] **Execute web queries**
+- [ ] **Query Language**
   - [ ] **HTTP/1.0**
   - [ ] **HTTP/1.1**
   - [ ] HTTP/2
@@ -19,7 +19,9 @@ MVP release items are in bold.
   - [ ] TLS
   - [ ] quic
   - [ ] h2c
+  - [ ] HTTP auto-serialized bodies (protobuf, zstd, gzip, etc.)
   - [ ] Lower level protocols using something like [libpnet](https://github.com/libpnet/libpnet)
+  - [ ] Non-UTF8 payloads (UTF16/32, GB 18030, etc.)
 - [ ] **Query history**
   - [ ] **Copy to plan**
   - [ ] View responses at each protocol boundary

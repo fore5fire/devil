@@ -7,7 +7,7 @@ use tui::widgets::{canvas::Label, Block, BorderType, Borders, Widget};
 use tui::Frame;
 
 use super::{Direction, EditorPartial, ListPartial, Signal};
-use crate::ql::{HTTPRequest, HTTPResponse, Plam, Step};
+use crate::ql::{HTTPRequest, Plan, Step};
 
 pub struct PlanListPanel {
     plans: Vec<Plan>,
@@ -20,24 +20,7 @@ impl PlanListPanel {
         // We use crossbeam channels despite having async produceers since we have a synchronous
         // reciever and use an unboounded channel.
         let (tx, rx) = unbounded();
-        let plans = Vec::from([
-            Plan {
-                name: "hi".to_owned(),
-                steps: vec![Step::HTTP(
-                    HTTPRequest("hi test gaiorejg oireajg ioerj goiaejr goirjgireoagjirejag oirejg oairejgoi ajer goijreaoi gjreoi jgaeaoi rjg123 airoegj oiaerj golr;ejia ggerji g;oiaerjg;orieja;g ierja ;ioj1234456y7ui98765433456788876544456787654456787654\nabc".to_owned()),
-                    Some(HTTPResponse("HTTP 1.1 200 OK\nContent-Type: application/json".into())),
-                ), Step::HTTP(
-                    HTTPRequest("hi second req".to_owned()),
-                    Some(HTTPResponse("hi second response".into())))],
-            },
-            Plan {
-                name: "bye".to_owned(),
-                steps: vec![Step::HTTP(
-                    HTTPRequest("".to_owned()),
-                    Some(HTTPResponse("bye test 123\nabc".into())),
-                )],
-            },
-        ]);
+        let plans = Vec::from([]);
         Self {
             list: ListPartial::new(has_focus, 0, plans.iter().map(|p| p.name.clone()).collect()),
             plans,
@@ -94,12 +77,6 @@ impl<B: Backend> super::Panel<B> for PlanListPanel {
     }
 }
 
-#[derive(Debug, Clone)]
-struct HTTPResponse(Vec<u8>);
-
-#[derive(Debug, Clone)]
-struct HTTPRequest(String);
-
 struct PlanEditPanel<'a> {
     plan: Plan,
     editor: EditorPartial<'a>,
@@ -112,7 +89,7 @@ impl<'a> PlanEditPanel<'a> {
                 plan.steps
                     .iter()
                     .map(|s| match s {
-                        Step::HTTP(req, _) => req.0.as_str(),
+                        Step::HTTP(req) => req.0.as_str(),
                     })
                     .collect::<Vec<_>>()
                     .join("\n\n"),
