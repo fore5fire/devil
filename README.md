@@ -29,6 +29,12 @@ MVP release items are in bold.
 ### CLI
 - [ ] **Execute queries**
 
+### Editor Support
+- [ ] LSP
+- [ ] Syntax highlighting
+  - [ ] vim
+  - [ ] VS Code
+
 ### TUI
 - [ ] **Query history**
   - [ ] **Copy to plan**
