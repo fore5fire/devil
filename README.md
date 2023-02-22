@@ -1,5 +1,5 @@
 # courier
-An no-magic web request language for developers and security researchers.
+A no-magic web request language for developers and security researchers.
 Written in rust.
 
 ## Features & Roadmap
