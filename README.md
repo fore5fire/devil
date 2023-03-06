@@ -1,27 +1,41 @@
 # courier
-An efficient web request TUI designed for developers and security researchers.
-Written in rust.
+A no-magic web request language for developers and security researchers.
+Written in Rust.
 
-## Features/Roadmap
+## Features & Roadmap
 
 MVP release items are in bold.
 
-- [ ] **Query Language**
-  - [ ] **HTTP/1.0**
-  - [ ] **HTTP/1.1**
-  - [ ] HTTP/2
-  - [ ] HTTP/3
-  - [ ] websockets
-  - [ ] gRPC
-  - [ ] GraphQL
-  - [ ] TCP
-  - [ ] UDP
-  - [ ] TLS
-  - [ ] quic
-  - [ ] h2c
-  - [ ] HTTP auto-serialized bodies (protobuf, zstd, gzip, etc.)
-  - [ ] Lower level protocols using something like [libpnet](https://github.com/libpnet/libpnet)
-  - [ ] Non-UTF8 payloads (UTF16/32, GB 18030, etc.)
+### Query Language
+- [ ] **HTTP/1.0**
+- [X] **HTTP/1.1**
+- [ ] HTTP/2
+- [ ] HTTP/3
+- [ ] websockets
+- [ ] gRPC
+- [ ] GraphQL
+- [ ] TCP
+- [ ] UDP
+- [ ] TLS
+- [ ] quic
+- [ ] h2c
+- [ ] HTTP auto-serialized bodies (protobuf, zstd, gzip, etc.)
+- [ ] Lower level protocols using something like [libpnet](https://github.com/libpnet/libpnet)
+- [ ] Non-UTF8 payloads (UTF16/32, GB 18030, etc.)
+- [ ] **Plugins**
+  - [ ] **Add custom query plan functions (with examples for bash, python, rust, go,
+  js)**
+  
+### CLI
+- [ ] **Execute queries**
+
+### Editor Support
+- [ ] LSP
+- [ ] Syntax highlighting
+  - [ ] vim
+  - [ ] VS Code
+
+### TUI
 - [ ] **Query history**
   - [ ] **Copy to plan**
   - [ ] View responses at each protocol boundary
@@ -57,8 +71,6 @@ MVP release items are in bold.
   - [ ] Emacs and vi default keymaps
   - [ ] Vim-style jumplist
 - [ ] **Plugins**
-  - [ ] **Add custom query plan functions (with examples for bash, python, rust, go,
-  js)**
   - [ ] **Endpoint scanning with rate limit detection to populate index**
   - [ ] MITM proxy to populate index for set of domains/IPs
   - [ ] Fuzz endpoints in index to generate plans for detected bugs
