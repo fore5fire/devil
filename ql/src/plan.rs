@@ -26,9 +26,7 @@ impl<'a> Plan<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::HTTPRequest;
-    use crate::Protocol;
-    use crate::Step;
+    use crate::{HTTPRequest, Protocol, Step, StepBody};
 
     #[test]
     fn plan_test() {
@@ -47,13 +45,16 @@ mod tests {
             .unwrap()
             .1
             .steps[0],
-            Step::HTTP(HTTPRequest {
-                method: "POST",
-                version: Protocol::HTTP1_1,
-                endpoint: "example.com".parse::<hyper::Uri>().unwrap(),
-                headers: vec![("Content-Type", "text/plain")],
-                body: "test body",
-            })
+            Step {
+                name: None,
+                body: StepBody::HTTP(HTTPRequest {
+                    method: "POST",
+                    version: Protocol::HTTP1_1,
+                    endpoint: "example.com".parse::<hyper::Uri>().unwrap(),
+                    headers: vec![("Content-Type", "text/plain")],
+                    body: "test body",
+                }),
+            },
         );
         assert_eq!(
             Plan::parse("http EOF\nPOSt example.com\nContent-Type:text/plain\n\ntest body\nEOFa")
@@ -64,25 +65,31 @@ mod tests {
             Plan::parse("http EOF\nPOST example.com\n\ntest body\nEOF")
                 .unwrap()
                 .steps[0],
-            Step::HTTP(HTTPRequest {
-                method: "POST",
-                version: Protocol::HTTP1_1,
-                endpoint: "example.com".parse::<hyper::Uri>().unwrap(),
-                headers: Vec::new(),
-                body: "test body",
-            })
+            Step {
+                name: None,
+                body: StepBody::HTTP(HTTPRequest {
+                    method: "POST",
+                    version: Protocol::HTTP1_1,
+                    endpoint: "example.com".parse::<hyper::Uri>().unwrap(),
+                    headers: Vec::new(),
+                    body: "test body",
+                }),
+            },
         );
         assert_eq!(
             Plan::parse("http EOF\nPOST example.com\n\nbody\nEOF")
                 .unwrap()
                 .steps[0],
-            Step::HTTP(HTTPRequest {
-                method: "POST",
-                version: Protocol::HTTP1_1,
-                endpoint: "example.com".parse::<hyper::Uri>().unwrap(),
-                headers: Vec::new(),
-                body: "body",
-            })
+            Step {
+                name: None,
+                body: StepBody::HTTP(HTTPRequest {
+                    method: "POST",
+                    version: Protocol::HTTP1_1,
+                    endpoint: "example.com".parse::<hyper::Uri>().unwrap(),
+                    headers: Vec::new(),
+                    body: "body",
+                }),
+            },
         );
     }
 }

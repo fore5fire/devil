@@ -1,8 +1,5 @@
-use std::pin::Pin;
+use std::fmt::Display;
 
-use http_body_util::{BodyExt, Empty};
-use hyper::body::Bytes;
-use hyper::Request;
 use nom::{
     branch::alt,
     bytes::complete::{is_not, tag, take_until},
@@ -11,8 +8,6 @@ use nom::{
     sequence::{pair, separated_pair, terminated},
     IResult,
 };
-use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt as _};
-use tokio::net::TcpStream;
 
 #[derive(Debug, PartialEq)]
 pub struct HTTPRequest<'a> {
@@ -55,71 +50,6 @@ impl<'a> HTTPRequest<'a> {
             },
         ))
     }
-
-    pub async fn exec(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // Get the host and the port
-        let host = self.endpoint.host().expect("uri has no host");
-        let port = self.endpoint.port_u16().unwrap_or(80);
-
-        let address = format!("{}:{}", host, port);
-
-        // Open a TCP connection to the remote host
-        let stream = TcpStream::connect(address).await?;
-        let stream = Tee::new(stream);
-
-        // Perform a TCP handshake
-        let (mut sender, conn) = hyper::client::conn::http1::handshake(stream).await?;
-
-        tokio::task::spawn(async move {
-            if let Err(err) = conn.await {
-                println!("Connection failed: {:?}", err);
-            }
-        });
-
-        let authority = self
-            .endpoint
-            .authority()
-            .ok_or("request missing host")?
-            .clone();
-        let default_headers = [
-            (hyper::header::HOST, authority.as_str()),
-            (hyper::header::USER_AGENT, "courier/0.1.0"),
-        ];
-
-        let mut req_builder = Request::builder()
-            .method(self.method)
-            .uri(self.endpoint.clone());
-
-        for (k, v) in default_headers {
-            if !self.contains_header(k.as_str()) {
-                req_builder = req_builder.header(k, v);
-            }
-        }
-        for (key, val) in self.headers.iter() {
-            req_builder = req_builder.header(*key, *val)
-        }
-        let req = req_builder.body(self.body.to_owned())?;
-
-        let mut res = sender.send_request(req).await?;
-
-        // Stream the response body, writing each chunk to stdout as we get it
-        // (instead of buffering and printing at the end).
-        while let Some(next) = res.frame().await {
-            let frame = next?;
-            if let Some(chunk) = frame.data_ref() {
-                io::stdout().write_all(&chunk).await?;
-            }
-        }
-
-        Ok(())
-    }
-
-    fn contains_header(&self, key: &str) -> bool {
-        self.headers
-            .iter()
-            .find(|(k, _)| key.eq_ignore_ascii_case(k))
-            .is_some()
-    }
 }
 
 fn header(input: &str) -> IResult<&str, (&str, &str)> {
@@ -133,64 +63,16 @@ pub fn header_key(input: &str) -> IResult<&str, &str> {
 pub fn header_val(input: &str) -> IResult<&str, &str> {
     not_line_ending(input)
 }
-
 #[derive(Debug, PartialEq, Eq)]
 pub enum Protocol {
     HTTP1_1,
 }
 
-struct Tee<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> {
-    inner: T,
-}
-
-impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> Tee<T> {
-    pub fn new(wrap: T) -> Self {
-        Tee { inner: wrap }
-    }
-}
-
-impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> AsyncRead for Tee<T> {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut io::ReadBuf<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        let old_len = buf.filled().len();
-        let poll = Pin::new(&mut self.get_mut().inner).poll_read(cx, buf);
-        let str_data = String::from_utf8(buf.filled()[old_len..].to_vec()).unwrap_or_default();
-        for line in str_data.lines() {
-            println!("< {}", line)
+impl Display for Protocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::HTTP1_1 => f.write_str("HTTP/1.1"),
         }
-        poll
-    }
-}
-
-impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> AsyncWrite for Tee<T> {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> std::task::Poll<Result<usize, std::io::Error>> {
-        let poll = Pin::new(&mut self.get_mut().inner).poll_write(cx, buf);
-        if poll.is_ready() {
-            let str_data = String::from_utf8(buf.to_vec()).unwrap_or_default();
-            for line in str_data.lines() {
-                println!("> {}", line)
-            }
-        }
-        poll
-    }
-    fn poll_flush(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), std::io::Error>> {
-        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
-    }
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), std::io::Error>> {
-        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
     }
 }
 
