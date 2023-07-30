@@ -3,18 +3,22 @@ use nom::character::streaming::line_ending;
 use nom::sequence::{separated_pair, terminated};
 use nom::{branch::alt, character::complete::space1, error::ErrorKind, sequence::Tuple, IResult};
 
+use crate::Protocol;
+
 use super::util::ident;
 use super::HTTPRequest;
 
 #[derive(Debug, PartialEq)]
 pub enum StepBody<'a> {
     HTTP(HTTPRequest<'a>),
+    TCP(super::TCPRequest<'a, &'a str>),
     //GraphQL(GraphQLRequest, GraphQLResponse, HTTPRequest, HTTPResponse),
 }
 
 #[derive(Debug, PartialEq)]
 pub struct Step<'a> {
     pub name: Option<&'a str>,
+    pub protocol: Protocol,
     pub body: StepBody<'a>,
 }
 
@@ -27,10 +31,14 @@ impl<'a> Step<'a> {
         let (input, (kind, _, name, _, eof)) =
             (ident, space1, ident, space1, not_line_ending).parse(input)?;
         let (input, body) = Self::body(input, kind, eof)?;
+        let Some(protocol) = Protocol::parse(kind) else {
+            return Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)));
+        };
         Ok((
             input,
             Self {
                 name: Some(name),
+                protocol,
                 body,
             },
         ))
@@ -40,12 +48,22 @@ impl<'a> Step<'a> {
         let (input, (kind, eof)) =
             terminated(separated_pair(ident, space1, not_line_ending), line_ending)(input)?;
         let (input, body) = Self::body(input, kind, eof)?;
-        Ok((input, Self { name: None, body }))
+        let Some(protocol) = Protocol::parse(kind) else {
+            return Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)));
+        };
+        Ok((
+            input,
+            Self {
+                name: None,
+                protocol,
+                body,
+            },
+        ))
     }
 
     fn body(input: &'a str, kind: &str, eof: &str) -> IResult<&'a str, StepBody<'a>> {
         match kind {
-            "http" => {
+            "http" | "http/0.9" | "http/1.0" | "http/1.1" => {
                 let (input, req) = HTTPRequest::parse(input, eof)?;
                 Ok((input, StepBody::HTTP(req)))
             }
@@ -71,9 +89,9 @@ mod tests {
                 "",
                 Step {
                     name: None,
+                    protocol: Protocol::HTTP1_1,
                     body: StepBody::HTTP(HTTPRequest {
                         method: "POST",
-                        version: Protocol::HTTP1_1,
                         endpoint: "example.com".parse::<hyper::Uri>().unwrap(),
                         headers: vec![("Content-Type", "text/plain")],
                         body: "test body",
@@ -94,9 +112,9 @@ mod tests {
                 "",
                 Step {
                     name: None,
+                    protocol: Protocol::HTTP1_1,
                     body: StepBody::HTTP(HTTPRequest {
                         method: "POST",
-                        version: Protocol::HTTP1_1,
                         endpoint: "example.com".parse::<hyper::Uri>().unwrap(),
                         headers: Vec::new(),
                         body: "test body",
@@ -110,9 +128,9 @@ mod tests {
                 "",
                 Step {
                     name: None,
+                    protocol: Protocol::HTTP1_1,
                     body: StepBody::HTTP(HTTPRequest {
                         method: "POST",
-                        version: Protocol::HTTP1_1,
                         endpoint: "example.com".parse::<hyper::Uri>().unwrap(),
                         headers: Vec::new(),
                         body: "body",

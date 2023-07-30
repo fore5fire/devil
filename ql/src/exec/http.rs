@@ -10,11 +10,13 @@ use hyper::{HeaderMap, Request, StatusCode, Version};
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 
-use super::{StepInputs, StepOutput, StepParsedOutput};
-use crate::HTTPRequest;
+use super::{StepInputs, StepOutput};
+use crate::{HTTPRequest, Protocol, Step, StepBody};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HTTPOutput {
+    pub raw_request: Vec<u8>,
+    pub raw_response: Vec<u8>,
     pub version: HTTPVersion,
     pub status: StatusCode,
     pub headers: HeaderMap,
@@ -58,12 +60,15 @@ impl From<Version> for HTTPVersion {
 }
 
 pub(super) async fn execute(
-    step: &HTTPRequest<'_>,
+    step: &Step<'_>,
     inputs: &StepInputs<'_>,
 ) -> Result<StepOutput, Box<dyn std::error::Error + Send + Sync>> {
+    let StepBody::HTTP(step_body) = &step.body else {
+        return Err("non-http step".into())
+    };
     // Get the host and the port
-    let host = step.endpoint.host().expect("uri has no host");
-    let port = step.endpoint.port_u16().unwrap_or(80);
+    let host = step_body.endpoint.host().expect("uri has no host");
+    let port = step_body.endpoint.port_u16().unwrap_or(80);
 
     let address = format!("{}:{}", host, port);
 
@@ -72,7 +77,7 @@ pub(super) async fn execute(
     let stream = Tee::new(stream);
 
     // Prepare the request.
-    let authority = step
+    let authority = step_body
         .endpoint
         .authority()
         .ok_or("request missing host")?
@@ -82,23 +87,30 @@ pub(super) async fn execute(
         (hyper::header::USER_AGENT, "courier/0.1.0"),
     ];
     let mut req_builder = Request::builder()
-        .method(step.method)
-        .uri(step.endpoint.clone());
+        .method(step_body.method)
+        .uri(step_body.endpoint.clone());
     for (k, v) in default_headers {
-        if !contains_header(step, k.as_str()) {
+        if !contains_header(step_body, k.as_str()) {
             req_builder = req_builder.header(k, v);
         }
     }
-    for (key, val) in step.headers.iter() {
+    for (key, val) in step_body.headers.iter() {
         req_builder = req_builder.header(*key, *val)
     }
-    let req = req_builder.body(step.body.to_owned())?;
+    let req_builder = req_builder.version(match step.protocol {
+        Protocol::HTTP0_9 => Version::HTTP_09,
+        Protocol::HTTP1_0 => Version::HTTP_10,
+        Protocol::HTTP1_1 => Version::HTTP_11,
+        Protocol::HTTP => Version::HTTP_11,
+        _ => return Err("step protocol not valid for body".into()),
+    });
+    let req = req_builder.body(step_body.body.to_owned())?;
 
     // Perform a TCP handshake
     let (mut sender, conn) = hyper::client::conn::http1::handshake(stream).await?;
 
-    // Wrap conn in an Option to convince the compiler that it's ok to move
-    // conn out of the closure even if it may be called again (it won't).
+    // Wrap conn in an Option to convince the borrow checker that it's ok to
+    // move conn out of the closure even if it may be called again (it won't).
     let mut conn = Some(conn);
     let (parts, (head, body)) = futures::try_join!(
         future::poll_fn(move |cx| {
@@ -115,16 +127,14 @@ pub(super) async fn execute(
     let mut body = Vec::with_capacity(body_bytes.remaining());
     body_bytes.copy_to_slice(&mut body);
 
-    Ok(StepOutput {
+    Ok(StepOutput::HTTP(HTTPOutput {
         raw_request: parts.io.writes,
         raw_response: parts.io.reads,
-        parsed: StepParsedOutput::HTTP(HTTPOutput {
-            status: head.status,
-            headers: head.headers,
-            version: head.version.into(),
-            body,
-        }),
-    })
+        status: head.status,
+        headers: head.headers,
+        version: head.version.into(),
+        body,
+    }))
 }
 
 fn contains_header(step: &HTTPRequest, key: &str) -> bool {
