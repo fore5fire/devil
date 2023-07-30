@@ -1,19 +1,21 @@
 # courier
-A no-magic web request language for developers and security researchers.
-Written in Rust.
+A cross-abstraction web request language for developers and security
+researchers. Written in Rust.
 
 ## Features & Roadmap
 
 MVP release items are in bold.
 
 ### Query Language
+- [ ] **Variables**
 - [ ] **HTTP/1.0**
 - [X] **HTTP/1.1**
 - [ ] HTTP/2
-- [ ] HTTP/3
-- [ ] websockets
+- [ ] Assertions
+- [ ] Websockets
 - [ ] gRPC
 - [ ] GraphQL
+- [ ] HTTP/3
 - [ ] TCP
 - [ ] UDP
 - [ ] TLS
@@ -50,7 +52,6 @@ MVP release items are in bold.
 - [ ] **Query plans**
   - [ ] **Execute and view results**
   - [ ] **Persistence**
-  - [ ] **Variables**
   - [ ] **Functions**
   - [ ] **Export to curl**
   - [ ] Import from curl

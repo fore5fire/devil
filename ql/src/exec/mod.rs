@@ -1,8 +1,11 @@
 mod http;
+mod tcp;
+
 use std::collections::HashMap;
 use std::fmt::Display;
 
 pub use http::*;
+pub use tcp::*;
 
 use crate::{Plan, StepBody};
 
@@ -26,16 +29,12 @@ impl<'a> Executor<'a> {
             return Err(Box::new(Error::Done));
         };
         let step = &self.plan.steps[*current];
+        let inputs = &StepInputs {
+            previous: &self.outputs,
+        };
         let out = match &step.body {
-            StepBody::HTTP(req) => {
-                http::execute(
-                    &req,
-                    &StepInputs {
-                        previous: &self.outputs,
-                    },
-                )
-                .await?
-            }
+            StepBody::HTTP(req) => http::execute(&step, &inputs).await?,
+            StepBody::TCP(req) => tcp::execute(&step, &inputs).await?,
         };
         let Some(name) = step.name else {
             return Ok(out);
@@ -47,14 +46,9 @@ impl<'a> Executor<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct StepOutput {
-    pub raw_request: Vec<u8>,
-    pub raw_response: Vec<u8>,
-    pub parsed: StepParsedOutput,
-}
-#[derive(Debug, Clone, PartialEq)]
-pub enum StepParsedOutput {
+pub enum StepOutput {
     HTTP(HTTPOutput),
+    TCP(TCPOutput),
 }
 
 struct StepInputs<'a> {

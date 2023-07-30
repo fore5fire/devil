@@ -1,5 +1,3 @@
-use std::fmt::Display;
-
 use nom::{
     branch::alt,
     bytes::complete::{is_not, tag, take_until},
@@ -13,7 +11,6 @@ use nom::{
 pub struct HTTPRequest<'a> {
     pub method: &'a str,
     pub endpoint: hyper::Uri,
-    pub version: Protocol,
     pub headers: Vec<(&'a str, &'a str)>,
     pub body: &'a str,
 }
@@ -44,7 +41,6 @@ impl<'a> HTTPRequest<'a> {
                         code: nom::error::ErrorKind::Tag,
                     })
                 })?,
-                version: Protocol::HTTP1_1,
                 headers,
                 body,
             },
@@ -65,13 +61,21 @@ pub fn header_val(input: &str) -> IResult<&str, &str> {
 }
 #[derive(Debug, PartialEq, Eq)]
 pub enum Protocol {
+    HTTP,
+    HTTP0_9,
+    HTTP1_0,
     HTTP1_1,
+    TCP,
 }
 
-impl Display for Protocol {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::HTTP1_1 => f.write_str("HTTP/1.1"),
+impl Protocol {
+    pub fn parse(input: &str) -> Option<Protocol> {
+        match input {
+            "http" => Some(Protocol::HTTP),
+            "http/0.9" => Some(Protocol::HTTP0_9),
+            "http/1.0" => Some(Protocol::HTTP1_0),
+            "http/1.1" => Some(Protocol::HTTP1_1),
+            _ => None,
         }
     }
 }
@@ -85,13 +89,12 @@ mod tests {
         assert_eq!(
             HTTPRequest::parse(
                 "POST example.com\nContent-Type: text/plain\n\ntest body\nEOF",
-                "EOF"
+                "EOF",
             ),
             Ok((
                 "",
                 HTTPRequest {
                     method: "POST",
-                    version: Protocol::HTTP1_1,
                     endpoint: "example.com".parse::<hyper::Uri>().unwrap(),
                     headers: vec![("Content-Type", "text/plain")],
                     body: "test body",
@@ -107,7 +110,6 @@ mod tests {
                 "",
                 HTTPRequest {
                     method: "POST",
-                    version: Protocol::HTTP1_1,
                     endpoint: "example.com".parse::<hyper::Uri>().unwrap(),
                     headers: vec![("Content-Type", "text/plain")],
                     body: "test body",

@@ -47,9 +47,9 @@ mod tests {
             .steps[0],
             Step {
                 name: None,
+                protocol: Protocol::HTTP1_1,
                 body: StepBody::HTTP(HTTPRequest {
                     method: "POST",
-                    version: Protocol::HTTP1_1,
                     endpoint: "example.com".parse::<hyper::Uri>().unwrap(),
                     headers: vec![("Content-Type", "text/plain")],
                     body: "test body",
@@ -67,9 +67,9 @@ mod tests {
                 .steps[0],
             Step {
                 name: None,
+                protocol: Protocol::HTTP1_1,
                 body: StepBody::HTTP(HTTPRequest {
                     method: "POST",
-                    version: Protocol::HTTP1_1,
                     endpoint: "example.com".parse::<hyper::Uri>().unwrap(),
                     headers: Vec::new(),
                     body: "test body",
@@ -82,9 +82,9 @@ mod tests {
                 .steps[0],
             Step {
                 name: None,
+                protocol: Protocol::HTTP1_1,
                 body: StepBody::HTTP(HTTPRequest {
                     method: "POST",
-                    version: Protocol::HTTP1_1,
                     endpoint: "example.com".parse::<hyper::Uri>().unwrap(),
                     headers: Vec::new(),
                     body: "body",
