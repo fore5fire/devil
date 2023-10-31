@@ -1,0 +1,7 @@
+# An http 1.1 request over TCP with no interpretation.
+tcp://example.com ---
+GET / HTTP/1.1
+Host: example.com
+
+---
+

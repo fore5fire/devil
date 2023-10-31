@@ -1,7 +1,7 @@
-use std::net::ToSocketAddrs;
+use std::net::{IpAddr, SocketAddr};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::net::{lookup_host, TcpStream};
 
 use crate::{Step, StepBody};
 
@@ -17,19 +17,24 @@ pub(super) async fn execute(
     inputs: &StepInputs<'_>,
 ) -> Result<StepOutput, Box<dyn std::error::Error + Send + Sync>> {
     let StepBody::TCP(step_body) = &step.body else {
-        return Err("non-http step".into())
+        return Err("non-tcp step".into());
     };
     // Get the host and the port
-    let  Some(address) = step_body.host.to_socket_addrs()?.next() else {
-        return Err("host resolved but returned no IP addresses".into());
-    };
+    let addr = ip_for_host(step_body.address).await?;
 
     // Open a TCP connection to the remote host
-    let mut stream = TcpStream::connect(address).await?;
-    stream.write_all(step_body.payload.as_bytes()).await?;
+    let mut stream = TcpStream::connect(addr).await?;
+    stream.write_all(step_body.body.as_bytes()).await?;
     let mut response = Vec::new();
     stream.read_to_end(&mut response).await?;
     //let stream = Tee::new(stream);
 
     Ok(StepOutput::TCP(TCPOutput { response }))
+}
+
+async fn ip_for_host(host: &str) -> Result<SocketAddr, Box<dyn std::error::Error + Send + Sync>> {
+    let Some(a) = lookup_host(host).await.map_err(|e| e)?.next() else {
+        return Err("host not found".into());
+    };
+    Ok(a)
 }
