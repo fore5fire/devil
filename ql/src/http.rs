@@ -59,26 +59,6 @@ pub fn header_key(input: &str) -> IResult<&str, &str> {
 pub fn header_val(input: &str) -> IResult<&str, &str> {
     not_line_ending(input)
 }
-#[derive(Debug, PartialEq, Eq)]
-pub enum Protocol {
-    HTTP,
-    HTTP0_9,
-    HTTP1_0,
-    HTTP1_1,
-    TCP,
-}
-
-impl Protocol {
-    pub fn parse(input: &str) -> Option<Protocol> {
-        match input {
-            "http" => Some(Protocol::HTTP),
-            "http/0.9" => Some(Protocol::HTTP0_9),
-            "http/1.0" => Some(Protocol::HTTP1_0),
-            "http/1.1" => Some(Protocol::HTTP1_1),
-            _ => None,
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

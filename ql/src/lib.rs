@@ -1,14 +1,12 @@
 pub mod exec;
-mod http;
+pub mod http;
 mod plan;
 mod step;
-mod tcp;
+pub mod tcp;
 mod util;
 
-pub use http::*;
 pub use plan::*;
 pub use step::*;
-pub use tcp::*;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ReadUntil<'a> {

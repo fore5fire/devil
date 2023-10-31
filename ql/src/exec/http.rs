@@ -11,7 +11,7 @@ use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 
 use super::{StepInputs, StepOutput};
-use crate::{HTTPRequest, Protocol, Step, StepBody};
+use crate::{http::HTTPRequest, Protocol, Step, StepBody};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HTTPOutput {
@@ -64,7 +64,7 @@ pub(super) async fn execute(
     inputs: &StepInputs<'_>,
 ) -> Result<StepOutput, Box<dyn std::error::Error + Send + Sync>> {
     let StepBody::HTTP(step_body) = &step.body else {
-        return Err("non-http step".into())
+        return Err("non-http step".into());
     };
     // Get the host and the port
     let host = step_body.endpoint.host().expect("uri has no host");

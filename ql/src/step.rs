@@ -1,39 +1,65 @@
 use nom::character::complete::not_line_ending;
 use nom::character::streaming::line_ending;
 use nom::sequence::{separated_pair, terminated};
-use nom::{branch::alt, character::complete::space1, error::ErrorKind, sequence::Tuple, IResult};
+use nom::{branch::alt, character::complete::space1, sequence::Tuple, IResult};
+use url::Url;
 
-use crate::Protocol;
-
+use super::http::HTTPRequest;
+use super::tcp::TCPRequest;
 use super::util::ident;
-use super::HTTPRequest;
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Protocol {
+    HTTP,
+    HTTP0_9,
+    HTTP1_0,
+    HTTP1_1,
+    TCP,
+}
+
+impl Protocol {
+    pub fn parse(input: &str) -> Option<Protocol> {
+        match input {
+            "http" => Some(Protocol::HTTP),
+            "http/0.9" => Some(Protocol::HTTP0_9),
+            "http/1.0" => Some(Protocol::HTTP1_0),
+            "http/1.1" => Some(Protocol::HTTP1_1),
+            "tcp" => Some(Protocol::TCP),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, PartialEq)]
 pub enum StepBody<'a> {
     HTTP(HTTPRequest<'a>),
-    TCP(super::TCPRequest<'a, &'a str>),
+    TCP(TCPRequest<'a>),
     //GraphQL(GraphQLRequest, GraphQLResponse, HTTPRequest, HTTPResponse),
 }
 
 #[derive(Debug, PartialEq)]
 pub struct Step<'a> {
     pub name: Option<&'a str>,
-    pub protocol: Protocol,
+    pub url: Url,
     pub body: StepBody<'a>,
 }
 
 impl<'a> Step<'a> {
     pub fn parse(input: &'a str) -> IResult<&str, Self> {
+        println!("2");
         alt((Self::named, Self::unnamed))(input)
     }
 
     fn named(input: &'a str) -> IResult<&str, Step> {
         let (input, (kind, _, name, _, eof)) =
             (ident, space1, ident, space1, not_line_ending).parse(input)?;
-        let (input, body) = Self::body(input, kind, eof)?;
         let Some(protocol) = Protocol::parse(kind) else {
-            return Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)));
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Tag,
+            )));
         };
+        let (input, body) = Self::body(input, protocol, eof)?;
         Ok((
             input,
             Self {
@@ -47,10 +73,13 @@ impl<'a> Step<'a> {
     fn unnamed(input: &'a str) -> IResult<&str, Step> {
         let (input, (kind, eof)) =
             terminated(separated_pair(ident, space1, not_line_ending), line_ending)(input)?;
-        let (input, body) = Self::body(input, kind, eof)?;
         let Some(protocol) = Protocol::parse(kind) else {
-            return Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Tag)));
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Tag,
+            )));
         };
+        let (input, body) = Self::body(input, protocol, eof)?;
         Ok((
             input,
             Self {
@@ -61,16 +90,16 @@ impl<'a> Step<'a> {
         ))
     }
 
-    fn body(input: &'a str, kind: &str, eof: &str) -> IResult<&'a str, StepBody<'a>> {
+    fn body(input: &'a str, kind: Protocol, eof: &str) -> IResult<&'a str, StepBody<'a>> {
         match kind {
-            "http" | "http/0.9" | "http/1.0" | "http/1.1" => {
+            Protocol::HTTP | Protocol::HTTP0_9 | Protocol::HTTP1_0 | Protocol::HTTP1_1 => {
                 let (input, req) = HTTPRequest::parse(input, eof)?;
                 Ok((input, StepBody::HTTP(req)))
             }
-            _ => Err(nom::Err::Error(nom::error::Error {
-                input,
-                code: ErrorKind::Switch,
-            })),
+            Protocol::TCP => {
+                let (input, req) = TCPRequest::parse(input, eof)?;
+                Ok((input, StepBody::TCP(req)))
+            }
         }
     }
 }
@@ -78,8 +107,8 @@ impl<'a> Step<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::HTTPRequest;
-    use crate::Protocol;
+    use HTTPRequest;
+    use Protocol;
 
     #[test]
     fn step_test() {
@@ -89,7 +118,7 @@ mod tests {
                 "",
                 Step {
                     name: None,
-                    protocol: Protocol::HTTP1_1,
+                    protocol: Protocol::HTTP,
                     body: StepBody::HTTP(HTTPRequest {
                         method: "POST",
                         endpoint: "example.com".parse::<hyper::Uri>().unwrap(),
@@ -112,7 +141,7 @@ mod tests {
                 "",
                 Step {
                     name: None,
-                    protocol: Protocol::HTTP1_1,
+                    protocol: Protocol::HTTP,
                     body: StepBody::HTTP(HTTPRequest {
                         method: "POST",
                         endpoint: "example.com".parse::<hyper::Uri>().unwrap(),
@@ -128,7 +157,7 @@ mod tests {
                 "",
                 Step {
                     name: None,
-                    protocol: Protocol::HTTP1_1,
+                    protocol: Protocol::HTTP,
                     body: StepBody::HTTP(HTTPRequest {
                         method: "POST",
                         endpoint: "example.com".parse::<hyper::Uri>().unwrap(),
