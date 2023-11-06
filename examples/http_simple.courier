@@ -1,7 +1,0 @@
-# A simple get request to example.com with default headers and no body.
-[abc]
-url = "http://example.com"
-body = "http://example.com/abc"
-req2 = http://example.com/abc044
-[def]
-depends_on = ["abc", "def"]

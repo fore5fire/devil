@@ -1,74 +1,30 @@
-use std::fmt::Display;
 use std::future;
+use std::io::Read;
 use std::ops::DerefMut;
 use std::pin::Pin;
 use std::task::Poll;
 
 use bytes::Buf;
 use http_body_util::BodyExt;
-use hyper::{HeaderMap, Request, StatusCode, Version};
+use hyper::header::ToStrError;
+use hyper::{Request, Version};
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 
-use super::{StepInputs, StepOutput};
-use crate::{http::HTTPRequest, Protocol, Step, StepBody};
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct HTTPOutput {
-    pub raw_request: Vec<u8>,
-    pub raw_response: Vec<u8>,
-    pub version: HTTPVersion,
-    pub status: StatusCode,
-    pub headers: HeaderMap,
-    pub body: Vec<u8>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HTTPVersion {
-    HTTP0_9,
-    HTTP1_0,
-    HTTP1_1,
-    HTTP2,
-    HTTP3,
-    Unrecognized,
-}
-
-impl Display for HTTPVersion {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::HTTP0_9 => f.write_str("HTTP/0.9"),
-            Self::HTTP1_0 => f.write_str("HTTP/1.0"),
-            Self::HTTP1_1 => f.write_str("HTTP/1.1"),
-            Self::HTTP2 => f.write_str("HTTP/2"),
-            Self::HTTP3 => f.write_str("HTTP/3"),
-            Self::Unrecognized => f.write_str("unrecognized protocol"),
-        }
-    }
-}
-
-impl From<Version> for HTTPVersion {
-    fn from(value: Version) -> Self {
-        match value {
-            Version::HTTP_09 => Self::HTTP0_9,
-            Version::HTTP_10 => Self::HTTP1_0,
-            Version::HTTP_11 => Self::HTTP1_1,
-            Version::HTTP_2 => Self::HTTP2,
-            Version::HTTP_3 => Self::HTTP3,
-            _ => Self::Unrecognized,
-        }
-    }
-}
+use super::{State, StepOutput};
+use crate::{HTTPOutput, HTTPRequest, HTTPResponse};
 
 pub(super) async fn execute(
-    step: &Step<'_>,
-    inputs: &StepInputs<'_>,
+    http: &HTTPRequest,
+    state: &State<'_>,
 ) -> Result<StepOutput, Box<dyn std::error::Error + Send + Sync>> {
-    let StepBody::HTTP(step_body) = &step.body else {
-        return Err("non-http step".into());
-    };
     // Get the host and the port
-    let host = step_body.endpoint.host().expect("uri has no host");
-    let port = step_body.endpoint.port_u16().unwrap_or(80);
+    let raw_url = http.url.evaluate(state)?;
+    let url: hyper::Uri = raw_url.parse()?;
+    let host = url
+        .host()
+        .ok_or_else(|| crate::Error::from("url has no host"))?;
+    let port = url.port_u16().unwrap_or(80);
 
     let address = format!("{}:{}", host, port);
 
@@ -77,34 +33,26 @@ pub(super) async fn execute(
     let stream = Tee::new(stream);
 
     // Prepare the request.
-    let authority = step_body
-        .endpoint
-        .authority()
-        .ok_or("request missing host")?
-        .clone();
-    let default_headers = [
-        (hyper::header::HOST, authority.as_str()),
-        (hyper::header::USER_AGENT, "courier/0.1.0"),
-    ];
-    let mut req_builder = Request::builder()
-        .method(step_body.method)
-        .uri(step_body.endpoint.clone());
+    let authority = url.authority().ok_or("request missing host")?.clone();
+    let default_headers = [(hyper::header::HOST, authority.as_str())];
+    let headers = http.headers.evaluate(state)?;
+    let method = http.method.evaluate(state)?;
+    let mut req_builder = Request::builder().method(method.as_str()).uri(url.clone());
     for (k, v) in default_headers {
-        if !contains_header(step_body, k.as_str()) {
+        if !contains_header(&headers, k.as_str()) {
             req_builder = req_builder.header(k, v);
         }
     }
-    for (key, val) in step_body.headers.iter() {
-        req_builder = req_builder.header(*key, *val)
+    for (key, val) in headers.iter() {
+        req_builder = req_builder.header(key, val)
     }
-    let req_builder = req_builder.version(match step.protocol {
-        Protocol::HTTP0_9 => Version::HTTP_09,
-        Protocol::HTTP1_0 => Version::HTTP_10,
-        Protocol::HTTP1_1 => Version::HTTP_11,
-        Protocol::HTTP => Version::HTTP_11,
-        _ => return Err("step protocol not valid for body".into()),
-    });
-    let req = req_builder.body(step_body.body.to_owned())?;
+    //let req_builder = if let Some(v) = http.http_version {
+    //    req_builder.version(v)
+    //} else {
+    //    req_builder
+    //};
+    let req_body = http.body.evaluate(state)?;
+    let req = req_builder.body(req_body.clone())?;
 
     // Perform a TCP handshake
     let (mut sender, conn) = hyper::client::conn::http1::handshake(stream).await?;
@@ -123,22 +71,46 @@ pub(super) async fn execute(
         }
     )?;
 
-    let mut body_bytes = body.collect().await?.aggregate();
+    let body_bytes = body.collect().await?.aggregate();
     let mut body = Vec::with_capacity(body_bytes.remaining());
-    body_bytes.copy_to_slice(&mut body);
+    let mut reader = body_bytes.reader();
+    reader.read_to_end(&mut body)?;
 
     Ok(StepOutput::HTTP(HTTPOutput {
+        url: url.to_string(),
+        method,
+        headers,
+        body: req_body,
+        response: HTTPResponse {
+            status_code: head.status.as_u16(),
+            status_reason: "unimplemented".to_owned(),
+            headers: head
+                .headers
+                .into_iter()
+                .map(|(name, value)| {
+                    Ok((
+                        name.map(|n| n.to_string()).unwrap_or_default(),
+                        value.to_str()?.to_string(),
+                    ))
+                })
+                .collect::<Result<_, ToStrError>>()?,
+            protocol: match head.version {
+                Version::HTTP_09 => "HTTP/0.9".to_owned(),
+                Version::HTTP_10 => "HTTP/1.0".to_owned(),
+                Version::HTTP_11 => "HTTP/1.1".to_owned(),
+                Version::HTTP_2 => "HTTP/2".to_owned(),
+                Version::HTTP_3 => "HTTP/3".to_owned(),
+                _ => "unrecognized".to_owned(),
+            },
+            body,
+        },
         raw_request: parts.io.writes,
         raw_response: parts.io.reads,
-        status: head.status,
-        headers: head.headers,
-        version: head.version.into(),
-        body,
     }))
 }
 
-fn contains_header(step: &HTTPRequest, key: &str) -> bool {
-    step.headers
+fn contains_header(headers: &[(String, String)], key: &str) -> bool {
+    headers
         .iter()
         .find(|(k, _)| key.eq_ignore_ascii_case(k))
         .is_some()
