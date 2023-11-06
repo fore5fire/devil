@@ -1,0 +1,29 @@
+# Parallel requests
+[1a.http]
+group = "1"
+[1b.http]
+group = "1"
+[2a.http]
+group = "2"
+
+# Using results from a previous step
+[templates]
+uri = "http://example.com"
+method = "POST"
+body._template = "{{ vars }}"
+body.vars.abc = "a.response.body.auto.abc"
+body.vars.def = "a.response.body.auto.abc"
+
+# import
+[[e]]
+uri = "courier://example.toml"
+
+[courier.vars]
+a = "b"
+[courier.options]
+# Defaults to alphanumeric ordering
+group_order = ["2", "1"]
+[courier.defaults]
+# Disable default User-Agent header for all requests.
+# Add a custom header to all requests.
+http.headers.X-Custom-Header = "foobar"

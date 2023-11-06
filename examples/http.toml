@@ -1,0 +1,88 @@
+# Simple HTTPS GET
+[https_get.http]
+url = "https://example.com/"
+
+# Simple HTTP GET
+[http_get.http]
+url = "http://example.com/test"
+
+# HTTPS GET with headers
+[get_with_headers.http]
+url = "https://example.com/test"
+[get_with_headers.http.headers]
+Content-Type = "application/json"
+X-Custom-Header = "foo"
+X-Repeated-Header = ["foo", "bar"]
+# Don't include default User-Agent header
+User-Agent = { unset = true }
+
+# HTTPS GET with array format for non-adjacent repeated headers
+[ordered_headers.http]
+url = "https://example.com/test"
+[[ordered_headers.http.headers]]
+key =   "Content-Type"
+value = "application/json"
+[[ordered_headers.http.headers]]
+key =   "X-Repeated-Header"
+value = "foo"
+[[ordered_headers.http.headers]]
+key =   "X-Custom-Header" 
+value = "foo"
+[[ordered_headers.http.headers]]
+key =   "X-Repeated-Header"
+value = "bar"
+[[ordered_headers.http.headers]]
+key =   "User-Agent"
+value = { unset = true }
+
+# HTTPS POST
+[simple_post.http]
+url = "https://example.com/test"
+method = "POST"
+body = 'sample body'
+
+# HTTP POST with multiline literal body
+[multiline_post.http]
+url = "http://example.com/test"
+method = "POST"
+body = '''
+Line 1
+Line 2
+Line 3'''
+
+# HTTP POST with formatted single-line body
+[singleline_post.http]
+url = "http://example.com/test"
+method = "POST" 
+body = { template = "multiline_post.http.response.body" }
+# HTTP request non-standard options
+#[non-standard.http]
+#url = "http://example.com/test"
+#method = "invalid-method"
+#headers."IllegalHeaderName" = "foo"
+##headers."" = "empty name"
+#headers.Content-Length = "1"
+#body = "A body longer than 1 \r\n\r\n"
+#
+# Force HTTP/1.1
+#[http1_example.http11]
+#url = "https://example.com/test"
+#version_string = "HTTP/1.1"
+#
+## Force HTTP/2
+#[http2_example.http2]
+#url = "https://example.com/test"
+#preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+#
+## HTTP2 without TLS
+#[h2c_example.http2]
+#url = "h2c://example.com/test"
+#
+## HTTP3
+#[http3_example.http3]
+#url = "https://example.com/test"
+
+[courier.defaults]
+# Add a header to all requests.
+http.headers.User-Agent = "foobar"
+

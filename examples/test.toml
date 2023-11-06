@@ -1,0 +1,19 @@
+# Simple HTTPS GET
+[a.http]
+url = "https://example.com/test"
+
+[b.http]
+url = "https://example.com/test"
+[b.http.headers]
+Content-Type = { _template = "application/{{ if a.http.response.json.foo else bar }}/{{ foo }}" }
+[b.http.Content-Type]
+template = "application/${type}/$other"
+open_delimiter = "${"
+close_delimiter = "}"
+[b.http.Content-Type.vars]
+type = "foo"
+[b.http.Content-Type.vars.other]
+if = "a.http.out.body.json.foo >= ${type}"
+if = "a.http.out.body.json.foo >= ${type}"
+then = "a.out.http.response.json.foo"
+else = ""

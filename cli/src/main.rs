@@ -1,8 +1,7 @@
-use std::borrow::Cow;
 use std::io::Read;
 
-use courier_ql::exec::{Executor, StepOutput};
-use courier_ql::{Plan, StepBody};
+use courier_ql::exec::Executor;
+use courier_ql::{Plan, StepOutput};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -18,12 +17,14 @@ async fn main() -> Result<()> {
     {
         let plan = Plan::parse(&text)?;
         let mut executor = Executor::new(&plan);
-        for (i, step) in plan.steps.iter().enumerate() {
-            let i_str = i.to_string();
-            println!("executing step {}...", step.name.unwrap_or(&i_str));
+        for (name, _) in plan.steps.iter() {
+            println!("executing step {}...", name);
             let output = executor.next().await?;
             match output {
-                StepOutput::HTTP(http) => {
+                StepOutput::HTTP(http)
+                | StepOutput::HTTP11(http)
+                | StepOutput::HTTP2(http)
+                | StepOutput::HTTP3(http) => {
                     println!(
                         "> {}",
                         String::from_utf8_lossy(&http.raw_request).replace("\n", "\n> ")
@@ -32,16 +33,11 @@ async fn main() -> Result<()> {
                         "< {}",
                         String::from_utf8_lossy(&http.raw_response).replace("\n", "\n< ")
                     );
-                    println!("version: {}", http.version);
-                    println!("status: {}", http.status);
+                    println!("protocol: {:?}", http.response.protocol);
+                    println!("status: {}", http.response.status_code);
                     println!("headers:");
                     for (k, v) in http.headers {
-                        println!(
-                            "    {}: {}",
-                            k.map(|h| h.as_str().to_owned())
-                                .unwrap_or("<missing>".to_string()),
-                            v.to_str().unwrap()
-                        );
+                        println!("    {}: {}", k, v);
                     }
                 }
                 StepOutput::TCP(tcp) => {}
