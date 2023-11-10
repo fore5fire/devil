@@ -7,9 +7,9 @@ researchers. Written in Rust.
 MVP release items are in bold.
 
 ### Query Language
-- [ ] **Variables and References**
+- [X] **Variables and References**
 - [ ] **Conditionals**
-- [ ] **Global Defaults**
+- [X] **Global Defaults**
 - [ ] **Modules**
 - [ ] **Parallel Execution**
 - [ ] Assertions
