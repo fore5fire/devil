@@ -1,0 +1,10 @@
+
+[simple.graphql]
+url = "https://swapi-graphql.netlify.app/.netlify/functions/index"
+query = '''query {
+            allFilms {
+                films {
+                title
+                }
+            }
+        }'''

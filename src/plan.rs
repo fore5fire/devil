@@ -29,18 +29,31 @@ impl<'a> Plan {
         merge_toml(
             &mut defaults,
             &toml::Value::Table(
-                Table::try_from(HashMap::from([(
-                    "http",
-                    HashMap::from([("method", toml::Value::from("GET"))]),
-                )]))
+                Table::try_from(HashMap::from([
+                    (
+                        "http",
+                        toml::Value::from(HashMap::from([("method", toml::Value::from("GET"))])),
+                    ),
+                    (
+                        "graphql",
+                        toml::Value::from(HashMap::from([(
+                            "http",
+                            HashMap::from([
+                                ("method", toml::Value::from("POST")),
+                                (
+                                    "headers",
+                                    toml::Value::from(HashMap::from([(
+                                        "Content-Type",
+                                        "application/json",
+                                    )])),
+                                ),
+                            ]),
+                        )])),
+                    ),
+                ]))
                 .map_err(|e| Error(e.to_string()))?,
             ),
         );
-
-        // Apply the defaults to each step.
-        table
-            .iter_mut()
-            .for_each(|(_, step)| merge_toml(step, &defaults));
 
         // Parse all remaining tables as steps.
         let steps: IndexMap<String, Step> = table
@@ -49,7 +62,10 @@ impl<'a> Plan {
                 let toml::Value::Table(t) = value else {
                     return Err(Error(format!("invalid type for {}", name)));
                 };
-                Ok(Some((name, Step::from_table(t)?)))
+                Ok(Some((
+                    name,
+                    Step::from_table(t, &defaults.as_table().unwrap())?,
+                )))
             })
             .filter_map(Result::transpose)
             .collect::<Result<_>>()?;
@@ -119,9 +135,8 @@ pub struct Header {
 #[derive(Debug, Default)]
 pub struct HTTPRequest {
     pub url: PlanValue<Infallible, String>,
-    pub method: PlanValue<Infallible, String>,
-    pub headers: PlanValueTable,
     pub body: PlanValue<Infallible, String>,
+    pub options: HTTPOptions,
     pub tls: TLSOptions,
     pub ip: IPOptions,
 }
@@ -139,17 +154,6 @@ impl TryFrom<toml::Value> for HTTPRequest {
                 .transpose()?
                 .flatten()
                 .ok_or_else(|| Error::from("http.url is required"))?,
-            method: protocol
-                .remove("method")
-                .map(PlanValue::try_from_value)
-                .transpose()?
-                .flatten()
-                .ok_or_else(|| Error::from("http.method is required"))?,
-            headers: protocol
-                .remove("headers")
-                .map(PlanValueTable::try_from)
-                .transpose()?
-                .unwrap_or_default(),
             body: protocol
                 .remove("body")
                 .map(PlanValue::try_from_value)
@@ -166,6 +170,8 @@ impl TryFrom<toml::Value> for HTTPRequest {
                 .map(IPOptions::try_from)
                 .transpose()?
                 .unwrap_or_default(),
+            // The protocol's own options are sourced from the same level as the request.
+            options: HTTPOptions::try_from(toml::Value::Table(protocol))?,
         })
     }
 }
@@ -196,6 +202,113 @@ pub struct HTTP3Request {
 }
 
 #[derive(Debug, Default)]
+pub struct GraphQLRequest {
+    pub url: PlanValue<Infallible, String>,
+    pub query: PlanValue<Infallible, String>,
+    pub params: PlanValueTable,
+    pub operation: Option<PlanValue<Infallible, String>>,
+    //pub use_body: PlanValue<Infallible, bool>,
+    pub websocket: WebsocketOptions,
+    pub http: HTTPOptions,
+    pub tls: TLSOptions,
+    pub ip: IPOptions,
+}
+
+impl TryFrom<toml::Value> for GraphQLRequest {
+    type Error = Error;
+    fn try_from(value: toml::Value) -> Result<Self> {
+        let toml::Value::Table(mut protocol) = value else {
+            return Err(Error("invalid type".to_owned()));
+        };
+        Ok(GraphQLRequest {
+            url: protocol
+                .remove("url")
+                .map(PlanValue::try_from_value)
+                .transpose()?
+                .flatten()
+                .ok_or_else(|| Error::from("graphql.url is required"))?,
+            query: protocol
+                .remove("query")
+                .map(PlanValue::try_from_value)
+                .transpose()?
+                .flatten()
+                .ok_or_else(|| Error::from("graphql.query is required"))?,
+            params: protocol
+                .remove("params")
+                .map(PlanValueTable::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+            operation: protocol
+                .remove("operation")
+                .map(PlanValue::try_from_value)
+                .transpose()?
+                .flatten(),
+            websocket: protocol
+                .remove("websocket")
+                .map(WebsocketOptions::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+            http: protocol
+                .remove("http")
+                .map(HTTPOptions::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+            tls: protocol
+                .remove("tls")
+                .map(TLSOptions::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+            ip: protocol
+                .remove("ip")
+                .map(IPOptions::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+        })
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct HTTPOptions {
+    pub method: PlanValue<Infallible, String>,
+    pub headers: PlanValueTable,
+}
+
+impl TryFrom<toml::Value> for HTTPOptions {
+    type Error = Error;
+    fn try_from(value: toml::Value) -> Result<Self> {
+        let toml::Value::Table(mut protocol) = value else {
+            return Err(Error("invalid type".to_owned()));
+        };
+        Ok(HTTPOptions {
+            method: protocol
+                .remove("method")
+                .map(PlanValue::try_from_value)
+                .transpose()?
+                .flatten()
+                .ok_or_else(|| Error::from("http.method is required"))?,
+            headers: protocol
+                .remove("headers")
+                .map(PlanValueTable::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+        })
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct WebsocketOptions {}
+
+impl TryFrom<toml::Value> for WebsocketOptions {
+    type Error = Error;
+    fn try_from(value: toml::Value) -> Result<Self> {
+        let toml::Value::Table(mut protocol) = value else {
+            return Err(Error("invalid type".to_owned()));
+        };
+        Ok(WebsocketOptions {})
+    }
+}
+
+#[derive(Debug, Default, Clone)]
 pub struct TLSOptions {
     pub version: Option<PlanValue<Error, TLSVersion>>,
 }
@@ -216,7 +329,7 @@ impl TryFrom<toml::Value> for TLSOptions {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct TCPRequest {
     pub body: PlanValue<Infallible, Vec<u8>>,
     pub host: PlanValue<Infallible, String>,
@@ -251,7 +364,7 @@ impl TryFrom<toml::Value> for TCPRequest {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct TCPOptions {}
 
 impl TryFrom<toml::Value> for TCPOptions {
@@ -264,7 +377,7 @@ impl TryFrom<toml::Value> for TCPOptions {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct QUICOptions {}
 
 impl TryFrom<toml::Value> for QUICOptions {
@@ -277,7 +390,7 @@ impl TryFrom<toml::Value> for QUICOptions {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct UDPOptions {}
 
 impl TryFrom<toml::Value> for UDPOptions {
@@ -290,7 +403,7 @@ impl TryFrom<toml::Value> for UDPOptions {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct IPOptions {}
 
 impl TryFrom<toml::Value> for IPOptions {
@@ -315,10 +428,7 @@ pub enum Step {
     //UDP {
     //    udp: UDPRequest,
     //},
-    //GraphQL {
-    //    graphql: GraphQLRequest,
-    //    http: HTTPRequest,
-    //},
+    GraphQL(GraphQLRequest),
     //GRPC {
     //    grpc: GRPCRequest,
     //    http2: HTTP2Request,
@@ -326,11 +436,17 @@ pub enum Step {
 }
 
 impl Step {
-    pub fn from_table(mut table: Table) -> Result<Self> {
+    pub fn from_table(mut table: Table, mut defaults: &Table) -> Result<Self> {
         // Determine the step to use for the protocols specified.
-        Ok(if let Some(http) = table.remove("http") {
+        Ok(if let Some(mut http) = table.remove("http") {
+            if let Some(d) = defaults.get("http") {
+                merge_toml(&mut http, &d);
+            }
             Step::HTTP(HTTPRequest::try_from(http)?)
-        } else if let Some(http) = table.remove("http11") {
+        } else if let Some(mut http) = table.remove("http11") {
+            if let Some(d) = defaults.get("http11") {
+                merge_toml(&mut http, &d);
+            }
             Step::HTTP11(HTTP11Request {
                 http: HTTPRequest::try_from(http)?,
                 tls: table
@@ -349,7 +465,10 @@ impl Step {
                     .transpose()?
                     .unwrap_or_default(),
             })
-        } else if let Some(http) = table.remove("http2") {
+        } else if let Some(mut http) = table.remove("http2") {
+            if let Some(d) = defaults.get("http2") {
+                merge_toml(&mut http, &d);
+            }
             Step::HTTP2(HTTP2Request {
                 http: HTTPRequest::try_from(http)?,
                 tls: table
@@ -368,7 +487,10 @@ impl Step {
                     .transpose()?
                     .unwrap_or_default(),
             })
-        } else if let Some(http) = table.remove("http3") {
+        } else if let Some(mut http) = table.remove("http3") {
+            if let Some(d) = defaults.get("http3") {
+                merge_toml(&mut http, &d);
+            }
             Step::HTTP3(HTTP3Request {
                 http: HTTPRequest::try_from(http)?,
                 tls: table
@@ -392,6 +514,11 @@ impl Step {
                     .transpose()?
                     .unwrap_or_default(),
             })
+        } else if let Some(mut gql) = table.remove("graphql") {
+            if let Some(d) = defaults.get("graphql") {
+                merge_toml(&mut gql, &d);
+            }
+            Step::GraphQL(GraphQLRequest::try_from(gql)?)
         } else {
             return Err(Error::from("no matching protocols"));
         })
@@ -506,7 +633,7 @@ impl<E: StdError, T: TryFrom<String, Error = E> + Clone> PlanValue<E, T> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default, Clone)]
 pub struct PlanValueTable(pub Vec<(PlanValue<Infallible, String>, PlanValue<Infallible, String>)>);
 
 impl PlanValueTable {
@@ -520,12 +647,6 @@ impl PlanValueTable {
             .iter()
             .map(|(key, val)| Ok((key.evaluate(state)?, val.evaluate(state)?)))
             .collect()
-    }
-}
-
-impl Default for PlanValueTable {
-    fn default() -> Self {
-        PlanValueTable(Vec::new())
     }
 }
 
