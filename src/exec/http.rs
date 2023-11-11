@@ -2,41 +2,49 @@ use std::future;
 use std::io::Read;
 use std::ops::DerefMut;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::Poll;
 
 use bytes::Buf;
 use http_body_util::BodyExt;
+use hyper::body::Incoming;
 use hyper::header::ToStrError;
+use hyper::http::response::Parts;
+use hyper::http::uri::Scheme;
 use hyper::{Request, Version};
+use hyper_util::rt::TokioIo;
+use rustls::OwnedTrustAnchor;
 use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 
-use super::{State, StepOutput};
+use super::State;
 use crate::{HTTPOutput, HTTPRequest, HTTPResponse};
 
 pub(super) async fn execute(
     http: &HTTPRequest,
     state: &State<'_>,
-) -> Result<StepOutput, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<HTTPOutput, Box<dyn std::error::Error + Send + Sync>> {
     // Get the host and the port
     let raw_url = http.url.evaluate(state)?;
     let url: hyper::Uri = raw_url.parse()?;
     let host = url
         .host()
         .ok_or_else(|| crate::Error::from("url has no host"))?;
-    let port = url.port_u16().unwrap_or(80);
+    let port = url.port_u16().unwrap_or_else(|| {
+        if url.scheme() == Some(&Scheme::HTTP) {
+            80
+        } else {
+            443
+        }
+    });
 
     let address = format!("{}:{}", host, port);
-
-    // Open a TCP connection to the remote host
-    let stream = TcpStream::connect(address).await?;
-    let stream = Tee::new(stream);
 
     // Prepare the request.
     let authority = url.authority().ok_or("request missing host")?.clone();
     let default_headers = [(hyper::header::HOST, authority.as_str())];
-    let headers = http.headers.evaluate(state)?;
-    let method = http.method.evaluate(state)?;
+    let headers = http.options.headers.evaluate(state)?;
+    let method = http.options.method.evaluate(state)?;
     let mut req_builder = Request::builder().method(method.as_str()).uri(url.clone());
     for (k, v) in default_headers {
         if !contains_header(&headers, k.as_str()) {
@@ -51,32 +59,41 @@ pub(super) async fn execute(
     //} else {
     //    req_builder
     //};
+
     let req_body = http.body.evaluate(state)?;
     let req = req_builder.body(req_body.clone())?;
 
-    // Perform a TCP handshake
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(stream).await?;
-
-    // Wrap conn in an Option to convince the borrow checker that it's ok to
-    // move conn out of the closure even if it may be called again (it won't).
-    let mut conn = Some(conn);
-    let (parts, (head, body)) = futures::try_join!(
-        future::poll_fn(move |cx| {
-            futures::ready!(conn.as_mut().unwrap().poll_without_shutdown(cx))?;
-            Poll::Ready(Ok::<_, hyper::Error>(conn.take().unwrap().into_parts()))
-        }),
-        async move {
-            let res = sender.send_request(req).await?;
-            Ok(res.into_parts())
-        }
-    )?;
+    // Open a TCP connection to the remote host
+    let stream = TcpStream::connect(address).await?;
+    let (writes, reads, head, body) = if url.scheme() == Some(&Scheme::HTTP) {
+        run(Tee::new(stream), req).await?
+    } else {
+        //println!("using TLS with name {}", host);
+        let mut root_cert_store = rustls::RootCertStore::empty();
+        root_cert_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().map(|ta| {
+            OwnedTrustAnchor::from_subject_spki_name_constraints(
+                ta.subject.to_vec(),
+                ta.subject_public_key_info.to_vec(),
+                ta.name_constraints.clone().map(|nc| nc.to_vec()),
+            )
+        }));
+        let tls_config = rustls::ClientConfig::builder()
+            .with_safe_defaults()
+            .with_root_certificates(root_cert_store)
+            .with_no_client_auth();
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(tls_config));
+        let domain = rustls::ServerName::try_from(host).map_err(|e| crate::Error(e.to_string()))?;
+        let connection = connector.connect(domain, stream).await?;
+        //println!("connected: {:?}", connection);
+        run(Tee::new(connection), req).await?
+    };
 
     let body_bytes = body.collect().await?.aggregate();
     let mut body = Vec::with_capacity(body_bytes.remaining());
     let mut reader = body_bytes.reader();
     reader.read_to_end(&mut body)?;
 
-    Ok(StepOutput::HTTP(HTTPOutput {
+    Ok(HTTPOutput {
         url: url.to_string(),
         method,
         headers,
@@ -104,9 +121,34 @@ pub(super) async fn execute(
             },
             body,
         },
-        raw_request: parts.io.writes,
-        raw_response: parts.io.reads,
-    }))
+        raw_request: writes,
+        raw_response: reads,
+    })
+}
+async fn run<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    stream: Tee<T>,
+    req: hyper::Request<String>,
+) -> Result<(Vec<u8>, Vec<u8>, Parts, Incoming), Box<dyn std::error::Error + Send + Sync>> {
+    // Wrap the AsyncRead/AsyncWrite stream for tokio's Read/Write traits.
+    let io = TokioIo::new(stream);
+    // Perform a TCP handshake
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
+
+    // Wrap conn in an Option to convince the borrow checker that it's ok to
+    // move conn out of the closure even if it may be called again (it won't).
+    let mut conn = Some(conn);
+    let (parts, (head, body)) = futures::try_join!(
+        future::poll_fn(move |cx| {
+            futures::ready!(conn.as_mut().unwrap().poll_without_shutdown(cx))?;
+            Poll::Ready(Ok::<_, hyper::Error>(conn.take().unwrap().into_parts()))
+        }),
+        async move {
+            let res = sender.send_request(req).await?;
+            Ok(res.into_parts())
+        }
+    )?;
+    let parts = parts.io.into_inner();
+    Ok((parts.writes, parts.reads, head, body))
 }
 
 fn contains_header(headers: &[(String, String)], key: &str) -> bool {
