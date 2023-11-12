@@ -4,6 +4,7 @@ use std::ops::DerefMut;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Poll;
+use std::time::Instant;
 
 use bytes::Buf;
 use http_body_util::BodyExt;
@@ -18,12 +19,15 @@ use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 
 use super::State;
-use crate::{HTTPOutput, HTTPRequest, HTTPResponse};
+use crate::{
+    HTTPOutput, HTTPRequest, HTTPResponse, StepOutput, TCPOutput, TCPResponse, TLSOutput,
+    TLSResponse,
+};
 
 pub(super) async fn execute(
     http: &HTTPRequest,
     state: &State<'_>,
-) -> Result<HTTPOutput, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<StepOutput, Box<dyn std::error::Error + Send + Sync>> {
     // Get the host and the port
     let raw_url = http.url.evaluate(state)?;
     let url: hyper::Uri = raw_url.parse()?;
@@ -63,10 +67,22 @@ pub(super) async fn execute(
     let req_body = http.body.evaluate(state)?;
     let req = req_builder.body(req_body.clone())?;
 
+    // Start the TCP timer.
+    let tcp_start = std::time::Instant::now();
     // Open a TCP connection to the remote host
+    // TODO: Allow reusing the connection for future requests.
     let stream = TcpStream::connect(address).await?;
-    let (writes, reads, head, body) = if url.scheme() == Some(&Scheme::HTTP) {
-        run(Tee::new(stream), req).await?
+    let tee = Tee::new(stream);
+    let tls_writes: Vec<u8>;
+    let tls_reads: Vec<u8>;
+    let tls_start: Option<Instant>;
+    let http_start: std::time::Instant;
+    let (tcp_tee, head, body) = if url.scheme() == Some(&Scheme::HTTP) {
+        tls_writes = Vec::new();
+        tls_reads = Vec::new();
+        tls_start = None;
+        http_start = std::time::Instant::now();
+        run(tee, req).await?
     } else {
         //println!("using TLS with name {}", host);
         let mut root_cert_store = rustls::RootCertStore::empty();
@@ -83,52 +99,92 @@ pub(super) async fn execute(
             .with_no_client_auth();
         let connector = tokio_rustls::TlsConnector::from(Arc::new(tls_config));
         let domain = rustls::ServerName::try_from(host).map_err(|e| crate::Error(e.to_string()))?;
-        let connection = connector.connect(domain, stream).await?;
+        tls_start = Some(std::time::Instant::now());
+        let connection = connector.connect(domain, tee).await?;
+        let tee = Tee::new(connection);
+
         //println!("connected: {:?}", connection);
-        run(Tee::new(connection), req).await?
+        http_start = std::time::Instant::now();
+        let (tee, head, body) = run(tee, req).await?;
+        // Record tls request and response body before unwrapping back to the tcp tee.
+        tls_writes = tee.writes;
+        tls_reads = tee.reads;
+        (tee.inner.into_inner().0, head, body)
     };
 
-    let body_bytes = body.collect().await?.aggregate();
+    // Collect the remaining bytes in the response body.
+    let body_bytes = body.collect().await?;
+    // Finalize times.
+    let http_duration = http_start.elapsed();
+    let tls_duration = if let Some(tls_start) = tls_start {
+        Some(tls_start.elapsed())
+    } else {
+        None
+    };
+    let tcp_duration = tcp_start.elapsed();
+
+    // Get the response body into a Vec.
+    let body_bytes = body_bytes.aggregate();
     let mut body = Vec::with_capacity(body_bytes.remaining());
     let mut reader = body_bytes.reader();
     reader.read_to_end(&mut body)?;
 
-    Ok(HTTPOutput {
-        url: url.to_string(),
-        method,
-        headers,
-        body: req_body,
-        response: HTTPResponse {
-            status_code: head.status.as_u16(),
-            status_reason: "unimplemented".to_owned(),
-            headers: head
-                .headers
-                .into_iter()
-                .map(|(name, value)| {
-                    Ok((
-                        name.map(|n| n.to_string()).unwrap_or_default(),
-                        value.to_str()?.to_string(),
-                    ))
-                })
-                .collect::<Result<_, ToStrError>>()?,
-            protocol: match head.version {
-                Version::HTTP_09 => "HTTP/0.9".to_owned(),
-                Version::HTTP_10 => "HTTP/1.0".to_owned(),
-                Version::HTTP_11 => "HTTP/1.1".to_owned(),
-                Version::HTTP_2 => "HTTP/2".to_owned(),
-                Version::HTTP_3 => "HTTP/3".to_owned(),
-                _ => "unrecognized".to_owned(),
+    Ok(StepOutput {
+        http: Some(HTTPOutput {
+            url: url.to_string(),
+            method,
+            headers,
+            body: req_body,
+            response: HTTPResponse {
+                status_code: head.status.as_u16(),
+                status_reason: "unimplemented".to_owned(),
+                headers: head
+                    .headers
+                    .into_iter()
+                    .map(|(name, value)| {
+                        Ok((
+                            name.map(|n| n.to_string()).unwrap_or_default(),
+                            value.to_str()?.to_string(),
+                        ))
+                    })
+                    .collect::<Result<_, ToStrError>>()?,
+                protocol: match head.version {
+                    Version::HTTP_09 => "HTTP/0.9".to_owned(),
+                    Version::HTTP_10 => "HTTP/1.0".to_owned(),
+                    Version::HTTP_11 => "HTTP/1.1".to_owned(),
+                    Version::HTTP_2 => "HTTP/2".to_owned(),
+                    Version::HTTP_3 => "HTTP/3".to_owned(),
+                    _ => "unrecognized".to_owned(),
+                },
+                body,
+                duration: http_duration,
             },
-            body,
+        }),
+        tls: if let Some(tls_duration) = tls_duration {
+            Some(TLSOutput {
+                body: tls_writes,
+                response: TLSResponse {
+                    body: tls_reads,
+                    duration: tls_duration,
+                },
+            })
+        } else {
+            None
         },
-        raw_request: writes,
-        raw_response: reads,
+        tcp: Some(TCPOutput {
+            body: tcp_tee.writes,
+            response: TCPResponse {
+                body: tcp_tee.reads,
+                duration: tcp_duration,
+            },
+        }),
+        ..Default::default()
     })
 }
 async fn run<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     stream: Tee<T>,
     req: hyper::Request<String>,
-) -> Result<(Vec<u8>, Vec<u8>, Parts, Incoming), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(Tee<T>, Parts, Incoming), Box<dyn std::error::Error + Send + Sync>> {
     // Wrap the AsyncRead/AsyncWrite stream for tokio's Read/Write traits.
     let io = TokioIo::new(stream);
     // Perform a TCP handshake
@@ -148,7 +204,7 @@ async fn run<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         }
     )?;
     let parts = parts.io.into_inner();
-    Ok((parts.writes, parts.reads, head, body))
+    Ok((parts, head, body))
 }
 
 fn contains_header(headers: &[(String, String)], key: &str) -> bool {
