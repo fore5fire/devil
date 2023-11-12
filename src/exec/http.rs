@@ -1,13 +1,11 @@
 use std::future;
 use std::io::Read;
-use std::ops::DerefMut;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::task::Poll;
 use std::time::Instant;
 
-use bytes::Buf;
 use http_body_util::BodyExt;
+use hyper::body::Buf;
 use hyper::body::Incoming;
 use hyper::header::ToStrError;
 use hyper::http::response::Parts;
@@ -15,9 +13,10 @@ use hyper::http::uri::Scheme;
 use hyper::{Request, Version};
 use hyper_util::rt::TokioIo;
 use rustls::OwnedTrustAnchor;
-use tokio::io::{self, AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 
+use super::tee::Tee;
 use super::State;
 use crate::{
     HTTPOutput, HTTPRequest, HTTPResponse, StepOutput, TCPOutput, TCPResponse, TLSOutput,
@@ -105,11 +104,11 @@ pub(super) async fn execute(
 
         //println!("connected: {:?}", connection);
         http_start = std::time::Instant::now();
-        let (tee, head, body) = run(tee, req).await?;
+        let (mut tee, head, body) = run(tee, req).await?;
         // Record tls request and response body before unwrapping back to the tcp tee.
-        tls_writes = tee.writes;
-        tls_reads = tee.reads;
-        (tee.inner.into_inner().0, head, body)
+        tls_writes = std::mem::replace(&mut tee.writes, Vec::new());
+        tls_reads = std::mem::replace(&mut tee.reads, Vec::new());
+        (tee.into_inner().into_inner().0, head, body)
     };
 
     // Collect the remaining bytes in the response body.
@@ -162,6 +161,8 @@ pub(super) async fn execute(
         }),
         tls: if let Some(tls_duration) = tls_duration {
             Some(TLSOutput {
+                host: host.to_owned(),
+                port,
                 body: tls_writes,
                 response: TLSResponse {
                     body: tls_reads,
@@ -172,6 +173,8 @@ pub(super) async fn execute(
             None
         },
         tcp: Some(TCPOutput {
+            host: host.to_owned(),
+            port,
             body: tcp_tee.writes,
             response: TCPResponse {
                 body: tcp_tee.reads,
@@ -181,6 +184,14 @@ pub(super) async fn execute(
         ..Default::default()
     })
 }
+
+fn contains_header(headers: &[(String, String)], key: &str) -> bool {
+    headers
+        .iter()
+        .find(|(k, _)| key.eq_ignore_ascii_case(k))
+        .is_some()
+}
+
 async fn run<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     stream: Tee<T>,
     req: hyper::Request<String>,
@@ -205,66 +216,4 @@ async fn run<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     )?;
     let parts = parts.io.into_inner();
     Ok((parts, head, body))
-}
-
-fn contains_header(headers: &[(String, String)], key: &str) -> bool {
-    headers
-        .iter()
-        .find(|(k, _)| key.eq_ignore_ascii_case(k))
-        .is_some()
-}
-
-struct Tee<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> {
-    inner: T,
-    pub reads: Vec<u8>,
-    pub writes: Vec<u8>,
-}
-
-impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> Tee<T> {
-    pub fn new(wrap: T) -> Self {
-        Tee {
-            inner: wrap,
-            reads: Vec::new(),
-            writes: Vec::new(),
-        }
-    }
-}
-
-impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> AsyncRead for Tee<T> {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut io::ReadBuf<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        let old_len = buf.filled().len();
-        let poll = Pin::new(&mut self.deref_mut().inner).poll_read(cx, buf);
-        self.reads.extend_from_slice(&buf.filled()[old_len..]);
-        poll
-    }
-}
-
-impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> AsyncWrite for Tee<T> {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> std::task::Poll<Result<usize, std::io::Error>> {
-        let poll = Pin::new(&mut self.deref_mut().inner).poll_write(cx, buf);
-        if poll.is_ready() {
-            self.get_mut().writes.extend_from_slice(&buf);
-        }
-        poll
-    }
-    fn poll_flush(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), std::io::Error>> {
-        Pin::new(&mut self.deref_mut().inner).poll_flush(cx)
-    }
-    fn poll_shutdown(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), std::io::Error>> {
-        Pin::new(&mut self.deref_mut().inner).poll_shutdown(cx)
-    }
 }

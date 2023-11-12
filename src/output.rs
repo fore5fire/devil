@@ -180,13 +180,17 @@ impl From<&GraphQLResponse> for Value {
 
 #[derive(Debug, Clone)]
 pub struct TLSOutput {
+    pub host: String,
+    pub port: u16,
     pub body: Vec<u8>,
     pub response: TLSResponse,
 }
 
 impl From<&TLSOutput> for Value {
     fn from(value: &TLSOutput) -> Self {
-        let mut map = HashMap::with_capacity(2);
+        let mut map = HashMap::with_capacity(4);
+        map.insert("host".into(), value.host.clone().into());
+        map.insert("port".into(), (value.port as u32).into());
         map.insert("body".into(), value.body.clone().into());
         map.insert("response".into(), (&value.response).into());
         Value::Map(Map { map: Rc::new(map) })
@@ -214,13 +218,17 @@ impl From<&TLSResponse> for Value {
 
 #[derive(Debug, Clone)]
 pub struct TCPOutput {
+    pub host: String,
+    pub port: u16,
     pub body: Vec<u8>,
     pub response: TCPResponse,
 }
 
 impl From<&TCPOutput> for Value {
     fn from(value: &TCPOutput) -> Self {
-        let mut map = HashMap::with_capacity(2);
+        let mut map = HashMap::with_capacity(4);
+        map.insert("host".into(), Value::Bytes(Rc::new(value.body.clone())));
+        map.insert("port".into(), (value.port as u32).into());
         map.insert("body".into(), Value::Bytes(Rc::new(value.body.clone())));
         map.insert("response".into(), (&value.response).into());
         Value::Map(Map { map: Rc::new(map) })

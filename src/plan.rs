@@ -177,7 +177,7 @@ impl TryFrom<toml::Value> for HTTPRequest {
 }
 
 #[derive(Debug, Default)]
-pub struct HTTP11Request {
+pub struct HTTP1Request {
     pub http: HTTPRequest,
     pub tls: TLSOptions,
     pub tcp: TCPOptions,
@@ -333,6 +333,7 @@ impl TryFrom<toml::Value> for TLSOptions {
 pub struct TCPRequest {
     pub body: PlanValue<Infallible, Vec<u8>>,
     pub host: PlanValue<Infallible, String>,
+    pub port: PlanValue<Infallible, String>,
     pub options: TCPOptions,
 }
 
@@ -349,6 +350,12 @@ impl TryFrom<toml::Value> for TCPRequest {
                 .transpose()?
                 .flatten()
                 .ok_or_else(|| Error::from("tcp.host is required"))?,
+            port: protocol
+                .remove("port")
+                .map(PlanValue::try_from_value)
+                .transpose()?
+                .flatten()
+                .ok_or_else(|| Error::from("tcp.port is required"))?,
             body: protocol
                 .remove("body")
                 .map(PlanValue::try_from_value)
@@ -356,7 +363,49 @@ impl TryFrom<toml::Value> for TCPRequest {
                 .flatten()
                 .unwrap_or_default(),
             options: protocol
+                .remove("options")
+                .map(TCPOptions::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+        })
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct TLSRequest {
+    pub port: PlanValue<Infallible, String>,
+    pub body: PlanValue<Infallible, Vec<u8>>,
+    pub host: PlanValue<Infallible, String>,
+    pub options: TCPOptions,
+}
+
+impl TryFrom<toml::Value> for TLSRequest {
+    type Error = Error;
+    fn try_from(value: toml::Value) -> Result<Self> {
+        let toml::Value::Table(mut protocol) = value else {
+            return Err(Error("invalid type".to_owned()));
+        };
+        Ok(Self {
+            host: protocol
+                .remove("host")
+                .map(PlanValue::try_from_value)
+                .transpose()?
+                .flatten()
+                .ok_or_else(|| Error::from("tls.host is required"))?,
+            port: protocol
+                .remove("port")
+                .map(PlanValue::try_from_value)
+                .transpose()?
+                .flatten()
+                .ok_or_else(|| Error::from("tls.port is required"))?,
+            body: protocol
                 .remove("body")
+                .map(PlanValue::try_from_value)
+                .transpose()?
+                .flatten()
+                .unwrap_or_default(),
+            options: protocol
+                .remove("options")
                 .map(TCPOptions::try_from)
                 .transpose()?
                 .unwrap_or_default(),
@@ -419,12 +468,11 @@ impl TryFrom<toml::Value> for IPOptions {
 #[derive(Debug)]
 pub enum Step {
     HTTP(HTTPRequest),
-    HTTP11(HTTP11Request),
+    HTTP1(HTTP1Request),
     HTTP2(HTTP2Request),
     HTTP3(HTTP3Request),
-    //TCP {
-    //    tcp: TCPRequest,
-    //},
+    TLS(TLSRequest),
+    TCP(TCPRequest),
     //UDP {
     //    udp: UDPRequest,
     //},
@@ -447,7 +495,7 @@ impl Step {
             if let Some(d) = defaults.get("http11") {
                 merge_toml(&mut http, &d);
             }
-            Step::HTTP11(HTTP11Request {
+            Step::HTTP1(HTTP1Request {
                 http: HTTPRequest::try_from(http)?,
                 tls: table
                     .remove("tls")
@@ -514,6 +562,21 @@ impl Step {
                     .transpose()?
                     .unwrap_or_default(),
             })
+        } else if let Some(mut gql) = table.remove("graphql") {
+            if let Some(d) = defaults.get("graphql") {
+                merge_toml(&mut gql, &d);
+            }
+            Step::GraphQL(GraphQLRequest::try_from(gql)?)
+        } else if let Some(mut tcp) = table.remove("tcp") {
+            if let Some(d) = defaults.get("tcp") {
+                merge_toml(&mut tcp, &d);
+            }
+            Step::TCP(TCPRequest::try_from(tcp)?)
+        } else if let Some(mut tls) = table.remove("tls") {
+            if let Some(d) = defaults.get("tls") {
+                merge_toml(&mut tls, &d);
+            }
+            Step::TLS(TLSRequest::try_from(tls)?)
         } else if let Some(mut gql) = table.remove("graphql") {
             if let Some(d) = defaults.get("graphql") {
                 merge_toml(&mut gql, &d);

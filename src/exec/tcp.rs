@@ -14,7 +14,9 @@ pub(super) async fn execute(
 ) -> Result<StepOutput, Box<dyn std::error::Error + Send + Sync>> {
     // Get the host and the port
     let host = tcp.host.evaluate(state)?;
-    let addr = ip_for_host(&host).await?;
+    let port = tcp.port.evaluate(state)?;
+    //let addr = ip_for_host(&host).await?;
+    let addr = format!("{}:{}", host, port);
 
     // Open a TCP connection to the remote host
     let start = Instant::now();
@@ -27,6 +29,8 @@ pub(super) async fn execute(
 
     Ok(StepOutput {
         tcp: Some(TCPOutput {
+            host,
+            port: port.parse()?,
             body,
             response: TCPResponse {
                 body: response,
