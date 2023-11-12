@@ -28,11 +28,11 @@ impl<'a> Executor<'a> {
             data: &self.outputs,
         };
         let out = match step {
-            Step::HTTP(http) => StepOutput::HTTP(http::execute(http, &inputs).await?),
-            Step::HTTP11(http11) => StepOutput::HTTP(http::execute(&http11.http, &inputs).await?),
-            Step::HTTP2(http2) => StepOutput::HTTP(http::execute(&http2.http, &inputs).await?),
-            Step::HTTP3(http3) => StepOutput::HTTP(http::execute(&http3.http, &inputs).await?),
-            Step::GraphQL(req) => StepOutput::GraphQL(graphql::execute(&req, &inputs).await?),
+            Step::HTTP(http) => http::execute(http, &inputs).await?,
+            Step::HTTP11(http11) => http::execute(&http11.http, &inputs).await?,
+            Step::HTTP2(http2) => http::execute(&http2.http, &inputs).await?,
+            Step::HTTP3(http3) => http::execute(&http3.http, &inputs).await?,
+            Step::GraphQL(req) => graphql::execute(&req, &inputs).await?,
         };
 
         self.outputs.insert(name, out.clone());

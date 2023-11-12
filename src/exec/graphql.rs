@@ -3,12 +3,12 @@ use std::collections::HashMap;
 use serde::Serialize;
 
 use super::State;
-use crate::{GraphQLOutput, GraphQLRequest, GraphQLResponse, HTTPRequest};
+use crate::{GraphQLOutput, GraphQLRequest, GraphQLResponse, HTTPRequest, StepOutput};
 
 pub(super) async fn execute(
     req: &GraphQLRequest,
     state: &State<'_>,
-) -> Result<GraphQLOutput, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<StepOutput, Box<dyn std::error::Error + Send + Sync>> {
     let body = GraphQLRequestPayload {
         query: req.query.evaluate(state)?,
         operation_name: req
@@ -19,7 +19,7 @@ pub(super) async fn execute(
         variables: req.params.evaluate(state)?.into_iter().collect(),
     };
     let http_body = serde_json::to_string(&body)?;
-    let http_out = super::http::execute(
+    let mut out = super::http::execute(
         &HTTPRequest {
             url: req.url.clone(),
             body: crate::PlanValue::Literal(http_body),
@@ -31,10 +31,11 @@ pub(super) async fn execute(
     )
     .await?;
 
-    let resp: serde_json::Value = serde_json::from_slice(&http_out.response.body)?;
+    let http = out.http.as_ref().unwrap();
+    let resp: serde_json::Value = serde_json::from_slice(&http.response.body)?;
 
-    Ok(GraphQLOutput {
-        url: http_out.url.clone(),
+    out.graphql = Some(GraphQLOutput {
+        url: http.url.clone(),
         query: body.query,
         operation: body.operation_name,
         params: body.variables,
@@ -50,11 +51,13 @@ pub(super) async fn execute(
                 .clone()
                 .into(),
             full: resp.clone().into(),
-            formatted: resp,
-            raw: http_out.response.body.clone(),
+            json: resp,
+            // TODO: give just the time starting after headers are sent.
+            duration: http.response.duration,
         },
-        http: http_out,
-    })
+    });
+
+    Ok(out)
 }
 
 #[derive(Debug, Serialize)]

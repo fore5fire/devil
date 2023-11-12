@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::time::Instant;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{lookup_host, TcpStream};
@@ -16,6 +17,7 @@ pub(super) async fn execute(
     let addr = ip_for_host(&host).await?;
 
     // Open a TCP connection to the remote host
+    let start = Instant::now();
     let mut stream = TcpStream::connect(addr).await?;
     let body = tcp.body.evaluate(state)?;
     stream.write_all(&body).await?;
@@ -23,9 +25,16 @@ pub(super) async fn execute(
     stream.read_to_end(&mut response).await?;
     //let stream = Tee::new(stream);
 
-    Ok(StepOutput::TCP(TCPOutput {
-        response: TCPResponse { body: response },
-    }))
+    Ok(StepOutput {
+        tcp: Some(TCPOutput {
+            body,
+            response: TCPResponse {
+                body: response,
+                duration: start.elapsed(),
+            },
+        }),
+        ..Default::default()
+    })
 }
 
 async fn ip_for_host(host: &str) -> Result<SocketAddr, Box<dyn std::error::Error + Send + Sync>> {

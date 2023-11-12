@@ -269,6 +269,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "cel-interpreter",
+ "chrono",
  "clap",
  "frunk",
  "frunk_core",
