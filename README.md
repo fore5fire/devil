@@ -17,12 +17,12 @@ MVP release items are in bold.
 - [X] **HTTP/1.1**
 - [ ] Websockets
 - [ ] gRPC
-- [ ] GraphQL
+- [X] GraphQL
 - [ ] HTTP/2
 - [ ] HTTP/3
-- [ ] TCP
+- [X] TCP
 - [ ] UDP
-- [ ] TLS
+- [X] TLS
 - [ ] quic
 - [ ] h2c
 - [ ] HTTP auto-serialized bodies (protobuf, zstd, gzip, etc.)

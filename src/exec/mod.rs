@@ -1,6 +1,8 @@
 pub mod graphql;
 pub mod http;
 pub mod tcp;
+mod tee;
+pub mod tls;
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
@@ -28,10 +30,12 @@ impl<'a> Executor<'a> {
             data: &self.outputs,
         };
         let out = match step {
-            Step::HTTP(http) => http::execute(http, &inputs).await?,
-            Step::HTTP11(http11) => http::execute(&http11.http, &inputs).await?,
-            Step::HTTP2(http2) => http::execute(&http2.http, &inputs).await?,
-            Step::HTTP3(http3) => http::execute(&http3.http, &inputs).await?,
+            Step::TCP(req) => tcp::execute(req, &inputs).await?,
+            Step::TLS(req) => tls::execute(req, &inputs).await?,
+            Step::HTTP(req) => http::execute(req, &inputs).await?,
+            Step::HTTP1(req) => http::execute(&req.http, &inputs).await?,
+            Step::HTTP2(req) => http::execute(&req.http, &inputs).await?,
+            Step::HTTP3(req) => http::execute(&req.http, &inputs).await?,
             Step::GraphQL(req) => graphql::execute(&req, &inputs).await?,
         };
 

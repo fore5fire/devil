@@ -61,6 +61,7 @@ async fn main() -> Result<()> {
 }
 
 fn print_proto(args: &Args, proto: &StepOutput) {
+    // TODO: escape or refuse to print dangerous term characters in output.
     match args.request_level {
         Protocol::TCP => {
             if let Some(tcp) = &proto.tcp {
