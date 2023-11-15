@@ -1,7 +1,7 @@
 use crate::{Error, Result, State};
 use cel_interpreter::{Context, Program};
 use indexmap::IndexMap;
-use std::{collections::HashMap, convert::Infallible, error::Error as StdError, iter::repeat};
+use std::{collections::HashMap, iter::repeat, ops::Deref, rc::Rc, time::Duration};
 use toml::Table;
 
 #[derive(Debug)]
@@ -101,22 +101,6 @@ pub enum TLSVersion {
     TLS1_3,
 }
 
-impl TryFrom<String> for TLSVersion {
-    type Error = Error;
-    fn try_from(value: String) -> Result<Self> {
-        match value.as_str() {
-            "SSL1" => Ok(TLSVersion::SSL1),
-            "SSL2" => Ok(TLSVersion::SSL2),
-            "SSL3" => Ok(TLSVersion::SSL3),
-            "TLS1_0" => Ok(TLSVersion::TLS1_0),
-            "TLS1_1" => Ok(TLSVersion::TLS1_1),
-            "TLS1_2" => Ok(TLSVersion::TLS1_2),
-            "TLS1_3" => Ok(TLSVersion::TLS1_3),
-            _ => Err(Error("invalid TLS version".to_owned())),
-        }
-    }
-}
-
 #[derive(Debug)]
 pub enum HTTPVersion {
     HTTP0_9,
@@ -126,19 +110,51 @@ pub enum HTTPVersion {
     HTTP3,
 }
 
-#[derive(Debug)]
-pub struct Header {
-    key: String,
-    value: String,
+#[derive(Debug, Clone, Default)]
+pub struct Pause {
+    pub after: PlanValue<String>,
+    pub duration: PlanValue<Duration>,
+}
+
+impl Pause {
+    fn process_toml(value: toml::Value) -> Result<Vec<Pause>> {
+        let toml::Value::Array(list) = value else {
+            return Err(Error::from("wrong type for pause"));
+        };
+        list.into_iter()
+            .enumerate()
+            .map(|(i, pause)| {
+                let toml::Value::Table(mut table) = pause else {
+                    return Err(Error::from(format!("wrong type for pause[{i}]")));
+                };
+                Ok(Pause {
+                    after: table
+                        .remove("after")
+                        .map(PlanValue::process_toml)
+                        .transpose()?
+                        .flatten()
+                        .ok_or_else(|| Error::from("pause.after is required"))?,
+                    duration: table
+                        .remove("duration")
+                        .map(PlanValue::process_toml)
+                        .transpose()?
+                        .flatten()
+                        .ok_or_else(|| Error::from("pause.duration is required"))?,
+                })
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Default)]
 pub struct HTTPRequest {
-    pub url: PlanValue<Infallible, String>,
-    pub body: PlanValue<Infallible, String>,
+    pub url: PlanValue<String>,
+    pub body: Option<PlanValue<String>>,
     pub options: HTTPOptions,
     pub tls: TLSOptions,
     pub ip: IPOptions,
+
+    pub pause: Vec<Pause>,
 }
 
 impl TryFrom<toml::Value> for HTTPRequest {
@@ -148,18 +164,22 @@ impl TryFrom<toml::Value> for HTTPRequest {
             return Err(Error("invalid type".to_owned()));
         };
         Ok(HTTPRequest {
+            pause: protocol
+                .remove("pause")
+                .map(Pause::process_toml)
+                .transpose()?
+                .ok_or_else(|| Error::from("http.url is required"))?,
             url: protocol
                 .remove("url")
-                .map(PlanValue::try_from_value)
+                .map(PlanValue::process_toml)
                 .transpose()?
                 .flatten()
                 .ok_or_else(|| Error::from("http.url is required"))?,
             body: protocol
                 .remove("body")
-                .map(PlanValue::try_from_value)
+                .map(PlanValue::process_toml)
                 .transpose()?
-                .flatten()
-                .unwrap_or_default(),
+                .flatten(),
             tls: protocol
                 .remove("tls")
                 .map(TLSOptions::try_from)
@@ -203,11 +223,12 @@ pub struct HTTP3Request {
 
 #[derive(Debug, Default)]
 pub struct GraphQLRequest {
-    pub url: PlanValue<Infallible, String>,
-    pub query: PlanValue<Infallible, String>,
+    pub url: PlanValue<String>,
+    pub query: PlanValue<String>,
     pub params: PlanValueTable,
-    pub operation: Option<PlanValue<Infallible, String>>,
-    //pub use_body: PlanValue<Infallible, bool>,
+    pub operation: Option<PlanValue<String>>,
+    pub use_query_string: PlanValue<bool>,
+    pub pause: Vec<Pause>,
     pub websocket: WebsocketOptions,
     pub http: HTTPOptions,
     pub tls: TLSOptions,
@@ -223,13 +244,13 @@ impl TryFrom<toml::Value> for GraphQLRequest {
         Ok(GraphQLRequest {
             url: protocol
                 .remove("url")
-                .map(PlanValue::try_from_value)
+                .map(PlanValue::process_toml)
                 .transpose()?
                 .flatten()
                 .ok_or_else(|| Error::from("graphql.url is required"))?,
             query: protocol
                 .remove("query")
-                .map(PlanValue::try_from_value)
+                .map(PlanValue::process_toml)
                 .transpose()?
                 .flatten()
                 .ok_or_else(|| Error::from("graphql.query is required"))?,
@@ -240,9 +261,20 @@ impl TryFrom<toml::Value> for GraphQLRequest {
                 .unwrap_or_default(),
             operation: protocol
                 .remove("operation")
-                .map(PlanValue::try_from_value)
+                .map(PlanValue::process_toml)
                 .transpose()?
                 .flatten(),
+            use_query_string: protocol
+                .remove("use_query_string")
+                .map(PlanValue::process_toml)
+                .transpose()?
+                .flatten()
+                .unwrap_or_default(),
+            pause: protocol
+                .remove("pause")
+                .map(Pause::process_toml)
+                .transpose()?
+                .unwrap_or_default(),
             websocket: protocol
                 .remove("websocket")
                 .map(WebsocketOptions::try_from)
@@ -269,7 +301,7 @@ impl TryFrom<toml::Value> for GraphQLRequest {
 
 #[derive(Debug, Default, Clone)]
 pub struct HTTPOptions {
-    pub method: PlanValue<Infallible, String>,
+    pub method: PlanValue<String>,
     pub headers: PlanValueTable,
 }
 
@@ -282,7 +314,7 @@ impl TryFrom<toml::Value> for HTTPOptions {
         Ok(HTTPOptions {
             method: protocol
                 .remove("method")
-                .map(PlanValue::try_from_value)
+                .map(PlanValue::process_toml)
                 .transpose()?
                 .flatten()
                 .ok_or_else(|| Error::from("http.method is required"))?,
@@ -310,7 +342,7 @@ impl TryFrom<toml::Value> for WebsocketOptions {
 
 #[derive(Debug, Default, Clone)]
 pub struct TLSOptions {
-    pub version: Option<PlanValue<Error, TLSVersion>>,
+    pub version: Option<PlanValue<TLSVersion>>,
 }
 
 impl TryFrom<toml::Value> for TLSOptions {
@@ -322,7 +354,7 @@ impl TryFrom<toml::Value> for TLSOptions {
         Ok(Self {
             version: protocol
                 .remove("version")
-                .map(|v| PlanValue::try_from_value(v))
+                .map(PlanValue::process_toml)
                 .transpose()?
                 .flatten(),
         })
@@ -331,9 +363,10 @@ impl TryFrom<toml::Value> for TLSOptions {
 
 #[derive(Debug, Default, Clone)]
 pub struct TCPRequest {
-    pub body: PlanValue<Infallible, Vec<u8>>,
-    pub host: PlanValue<Infallible, String>,
-    pub port: PlanValue<Infallible, String>,
+    pub body: PlanValue<Vec<u8>>,
+    pub host: PlanValue<String>,
+    pub port: PlanValue<String>,
+    pub pause: Vec<Pause>,
     pub options: TCPOptions,
 }
 
@@ -346,19 +379,19 @@ impl TryFrom<toml::Value> for TCPRequest {
         Ok(Self {
             host: protocol
                 .remove("host")
-                .map(PlanValue::try_from_value)
+                .map(PlanValue::process_toml)
                 .transpose()?
                 .flatten()
                 .ok_or_else(|| Error::from("tcp.host is required"))?,
             port: protocol
                 .remove("port")
-                .map(PlanValue::try_from_value)
+                .map(PlanValue::process_toml)
                 .transpose()?
                 .flatten()
                 .ok_or_else(|| Error::from("tcp.port is required"))?,
             body: protocol
                 .remove("body")
-                .map(PlanValue::try_from_value)
+                .map(PlanValue::process_toml)
                 .transpose()?
                 .flatten()
                 .unwrap_or_default(),
@@ -367,15 +400,126 @@ impl TryFrom<toml::Value> for TCPRequest {
                 .map(TCPOptions::try_from)
                 .transpose()?
                 .unwrap_or_default(),
+            pause: protocol
+                .remove("pause")
+                .map(Pause::process_toml)
+                .transpose()?
+                .unwrap_or_default(),
         })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PlanData(pub cel_interpreter::Value);
+
+impl TryFrom<PlanData> for String {
+    type Error = Error;
+    fn try_from(value: PlanData) -> std::result::Result<Self, Self::Error> {
+        match value.0 {
+            cel_interpreter::Value::String(x) => Ok(x.deref().clone()),
+            cel_interpreter::Value::Bytes(x) => Ok(String::from_utf8_lossy(&x).to_string()),
+            _ => Err(Error::from("invalid type for string value")),
+        }
+    }
+}
+
+impl TryFrom<PlanData> for bool {
+    type Error = Error;
+    fn try_from(value: PlanData) -> std::result::Result<Self, Self::Error> {
+        match value.0 {
+            cel_interpreter::Value::Bool(x) => Ok(x),
+            _ => Err(Error::from("invalid type for bool value")),
+        }
+    }
+}
+
+impl TryFrom<PlanData> for Vec<u8> {
+    type Error = Error;
+    fn try_from(value: PlanData) -> std::result::Result<Self, Self::Error> {
+        match value.0 {
+            cel_interpreter::Value::Bytes(x) => Ok(x.deref().clone()),
+            cel_interpreter::Value::String(x) => Ok(x.deref().clone().into_bytes()),
+            _ => Err(Error::from("invalid type for bytes value")),
+        }
+    }
+}
+
+impl TryFrom<PlanData> for Duration {
+    type Error = Error;
+    fn try_from(value: PlanData) -> std::result::Result<Self, Self::Error> {
+        match value.0 {
+            cel_interpreter::Value::String(x) => {
+                parse_duration::parse(&x).map_err(|e| Error(e.to_string()))
+            }
+            _ => Err(Error::from("invalid type for duration value")),
+        }
+    }
+}
+
+impl TryFrom<PlanData> for TLSVersion {
+    type Error = Error;
+    fn try_from(value: PlanData) -> Result<Self> {
+        match value.0 {
+            cel_interpreter::Value::String(x) if *x == "SSL1" => Ok(TLSVersion::SSL1),
+            cel_interpreter::Value::String(x) if *x == "SSL2" => Ok(TLSVersion::SSL2),
+            cel_interpreter::Value::String(x) if *x == "SSL3" => Ok(TLSVersion::SSL3),
+            cel_interpreter::Value::String(x) if *x == "TLS1_0" => Ok(TLSVersion::TLS1_0),
+            cel_interpreter::Value::String(x) if *x == "TLS1_1" => Ok(TLSVersion::TLS1_1),
+            cel_interpreter::Value::String(x) if *x == "TLS1_2" => Ok(TLSVersion::TLS1_2),
+            cel_interpreter::Value::String(x) if *x == "TLS1_3" => Ok(TLSVersion::TLS1_3),
+            _ => Err(Error("invalid TLS version".to_owned())),
+        }
+    }
+}
+
+impl TryFrom<toml::Value> for PlanData {
+    type Error = Error;
+    fn try_from(value: toml::Value) -> std::result::Result<Self, Self::Error> {
+        Ok(PlanData(match value {
+            toml::Value::String(x) => cel_interpreter::Value::String(Rc::new(x)),
+            toml::Value::Integer(x) => cel_interpreter::Value::Int(
+                i32::try_from(x).map_err(|e| Error::from(e.to_string()))?,
+            ),
+            toml::Value::Float(x) => cel_interpreter::Value::Float(x),
+            toml::Value::Boolean(x) => cel_interpreter::Value::Bool(x),
+            toml::Value::Datetime(x) => cel_interpreter::Value::Timestamp(
+                chrono::DateTime::parse_from_rfc3339(&x.to_string())
+                    .map_err(|e| Error(e.to_string()))?,
+            ),
+            toml::Value::Array(x) => cel_interpreter::Value::List(Rc::new(
+                x.into_iter()
+                    .map(|x| Ok(PlanData::try_from(x)?.0))
+                    .collect::<Result<_>>()?,
+            )),
+            toml::Value::Table(x) => cel_interpreter::Value::Map(cel_interpreter::objects::Map {
+                map: Rc::new(
+                    x.into_iter()
+                        .map(|(k, v)| Ok((k.into(), PlanData::try_from(v)?.0)))
+                        .collect::<Result<_>>()?,
+                ),
+            }),
+        }))
+    }
+}
+
+impl From<cel_interpreter::Value> for PlanData {
+    fn from(value: cel_interpreter::Value) -> Self {
+        PlanData(value)
+    }
+}
+
+impl From<PlanData> for cel_interpreter::Value {
+    fn from(value: PlanData) -> Self {
+        value.0
     }
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct TLSRequest {
-    pub port: PlanValue<Infallible, String>,
-    pub body: PlanValue<Infallible, Vec<u8>>,
-    pub host: PlanValue<Infallible, String>,
+    pub port: PlanValue<String>,
+    pub body: PlanValue<Vec<u8>>,
+    pub host: PlanValue<String>,
+    pub pause: Vec<Pause>,
     pub options: TCPOptions,
 }
 
@@ -388,25 +532,30 @@ impl TryFrom<toml::Value> for TLSRequest {
         Ok(Self {
             host: protocol
                 .remove("host")
-                .map(PlanValue::try_from_value)
+                .map(PlanValue::process_toml)
                 .transpose()?
                 .flatten()
                 .ok_or_else(|| Error::from("tls.host is required"))?,
             port: protocol
                 .remove("port")
-                .map(PlanValue::try_from_value)
+                .map(PlanValue::process_toml)
                 .transpose()?
                 .flatten()
                 .ok_or_else(|| Error::from("tls.port is required"))?,
             body: protocol
                 .remove("body")
-                .map(PlanValue::try_from_value)
+                .map(PlanValue::process_toml)
                 .transpose()?
                 .flatten()
                 .unwrap_or_default(),
             options: protocol
                 .remove("options")
                 .map(TCPOptions::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+            pause: protocol
+                .remove("pause")
+                .map(Pause::process_toml)
                 .transpose()?
                 .unwrap_or_default(),
         })
@@ -484,112 +633,123 @@ pub enum Step {
 }
 
 impl Step {
-    pub fn from_table(mut table: Table, mut defaults: &Table) -> Result<Self> {
-        // Determine the step to use for the protocols specified.
-        Ok(if let Some(mut http) = table.remove("http") {
-            if let Some(d) = defaults.get("http") {
-                merge_toml(&mut http, &d);
+    pub fn from_table(mut table: Table, defaults: &Table) -> Result<Self> {
+        // The first step specified is the top-most protocol we're executing. All others must be
+        // protocols that can run under the speicified protocol.
+        let mut iter = table.keys();
+        let name = iter
+            .next()
+            .ok_or_else(|| Error::from("step must contain at least one protocol"))?
+            .clone();
+        let mut proto = table.remove(&name).unwrap();
+        Ok(match name.as_str() {
+            "http" => {
+                if let Some(d) = defaults.get("http") {
+                    merge_toml(&mut proto, &d);
+                }
+                Step::HTTP(HTTPRequest::try_from(proto)?)
             }
-            Step::HTTP(HTTPRequest::try_from(http)?)
-        } else if let Some(mut http) = table.remove("http11") {
-            if let Some(d) = defaults.get("http11") {
-                merge_toml(&mut http, &d);
+            "http11" => {
+                if let Some(d) = defaults.get("http11") {
+                    merge_toml(&mut proto, &d);
+                }
+                Step::HTTP1(HTTP1Request {
+                    http: HTTPRequest::try_from(proto)?,
+                    tls: table
+                        .remove("tls")
+                        .map(|t| TLSOptions::try_from(t))
+                        .transpose()?
+                        .unwrap_or_default(),
+                    tcp: table
+                        .remove("tcp")
+                        .map(|t| TCPOptions::try_from(t))
+                        .transpose()?
+                        .unwrap_or_default(),
+                    ip: table
+                        .remove("ip")
+                        .map(|t| IPOptions::try_from(t))
+                        .transpose()?
+                        .unwrap_or_default(),
+                })
             }
-            Step::HTTP1(HTTP1Request {
-                http: HTTPRequest::try_from(http)?,
-                tls: table
-                    .remove("tls")
-                    .map(|t| TLSOptions::try_from(t))
-                    .transpose()?
-                    .unwrap_or_default(),
-                tcp: table
-                    .remove("tcp")
-                    .map(|t| TCPOptions::try_from(t))
-                    .transpose()?
-                    .unwrap_or_default(),
-                ip: table
-                    .remove("ip")
-                    .map(|t| IPOptions::try_from(t))
-                    .transpose()?
-                    .unwrap_or_default(),
-            })
-        } else if let Some(mut http) = table.remove("http2") {
-            if let Some(d) = defaults.get("http2") {
-                merge_toml(&mut http, &d);
+            "http2" => {
+                if let Some(d) = defaults.get("http2") {
+                    merge_toml(&mut proto, &d);
+                }
+                Step::HTTP2(HTTP2Request {
+                    http: HTTPRequest::try_from(proto)?,
+                    tls: table
+                        .remove("tls")
+                        .map(|t| TLSOptions::try_from(t))
+                        .transpose()?
+                        .unwrap_or_default(),
+                    tcp: table
+                        .remove("tcp")
+                        .map(|t| TCPOptions::try_from(t))
+                        .transpose()?
+                        .unwrap_or_default(),
+                    ip: table
+                        .remove("ip")
+                        .map(|t| IPOptions::try_from(t))
+                        .transpose()?
+                        .unwrap_or_default(),
+                })
             }
-            Step::HTTP2(HTTP2Request {
-                http: HTTPRequest::try_from(http)?,
-                tls: table
-                    .remove("tls")
-                    .map(|t| TLSOptions::try_from(t))
-                    .transpose()?
-                    .unwrap_or_default(),
-                tcp: table
-                    .remove("tcp")
-                    .map(|t| TCPOptions::try_from(t))
-                    .transpose()?
-                    .unwrap_or_default(),
-                ip: table
-                    .remove("ip")
-                    .map(|t| IPOptions::try_from(t))
-                    .transpose()?
-                    .unwrap_or_default(),
-            })
-        } else if let Some(mut http) = table.remove("http3") {
-            if let Some(d) = defaults.get("http3") {
-                merge_toml(&mut http, &d);
+            "http3" => {
+                if let Some(d) = defaults.get("http3") {
+                    merge_toml(&mut proto, &d);
+                }
+                Step::HTTP3(HTTP3Request {
+                    http: HTTPRequest::try_from(proto)?,
+                    tls: table
+                        .remove("tls")
+                        .map(|t| TLSOptions::try_from(t))
+                        .transpose()?
+                        .unwrap_or_default(),
+                    quic: table
+                        .remove("quic")
+                        .map(|t| QUICOptions::try_from(t))
+                        .transpose()?
+                        .unwrap_or_default(),
+                    udp: table
+                        .remove("udp")
+                        .map(|t| UDPOptions::try_from(t))
+                        .transpose()?
+                        .unwrap_or_default(),
+                    ip: table
+                        .remove("ip")
+                        .map(|t| IPOptions::try_from(t))
+                        .transpose()?
+                        .unwrap_or_default(),
+                })
             }
-            Step::HTTP3(HTTP3Request {
-                http: HTTPRequest::try_from(http)?,
-                tls: table
-                    .remove("tls")
-                    .map(|t| TLSOptions::try_from(t))
-                    .transpose()?
-                    .unwrap_or_default(),
-                quic: table
-                    .remove("quic")
-                    .map(|t| QUICOptions::try_from(t))
-                    .transpose()?
-                    .unwrap_or_default(),
-                udp: table
-                    .remove("udp")
-                    .map(|t| UDPOptions::try_from(t))
-                    .transpose()?
-                    .unwrap_or_default(),
-                ip: table
-                    .remove("ip")
-                    .map(|t| IPOptions::try_from(t))
-                    .transpose()?
-                    .unwrap_or_default(),
-            })
-        } else if let Some(mut gql) = table.remove("graphql") {
-            if let Some(d) = defaults.get("graphql") {
-                merge_toml(&mut gql, &d);
+            "graphql" => {
+                if let Some(d) = defaults.get("graphql") {
+                    merge_toml(&mut proto, &d);
+                }
+                Step::GraphQL(GraphQLRequest::try_from(proto)?)
             }
-            Step::GraphQL(GraphQLRequest::try_from(gql)?)
-        } else if let Some(mut tcp) = table.remove("tcp") {
-            if let Some(d) = defaults.get("tcp") {
-                merge_toml(&mut tcp, &d);
+            "tcp" => {
+                if let Some(d) = defaults.get("tcp") {
+                    merge_toml(&mut proto, &d);
+                }
+                Step::TCP(TCPRequest::try_from(proto)?)
             }
-            Step::TCP(TCPRequest::try_from(tcp)?)
-        } else if let Some(mut tls) = table.remove("tls") {
-            if let Some(d) = defaults.get("tls") {
-                merge_toml(&mut tls, &d);
+            "tls" => {
+                if let Some(d) = defaults.get("tls") {
+                    merge_toml(&mut proto, &d);
+                }
+                Step::TLS(TLSRequest::try_from(proto)?)
             }
-            Step::TLS(TLSRequest::try_from(tls)?)
-        } else if let Some(mut gql) = table.remove("graphql") {
-            if let Some(d) = defaults.get("graphql") {
-                merge_toml(&mut gql, &d);
+            _ => {
+                return Err(Error::from("no matching protocols"));
             }
-            Step::GraphQL(GraphQLRequest::try_from(gql)?)
-        } else {
-            return Err(Error::from("no matching protocols"));
         })
     }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub enum PlanValue<E: StdError, T: TryFrom<String, Error = E> + Clone> {
+pub enum PlanValue<T: TryFrom<PlanData, Error = Error> + Clone> {
     Literal(T),
     Dynamic {
         template: String,
@@ -597,13 +757,13 @@ pub enum PlanValue<E: StdError, T: TryFrom<String, Error = E> + Clone> {
     },
 }
 
-impl<E: StdError, T: TryFrom<String, Error = E> + Clone + Default> Default for PlanValue<E, T> {
+impl<T: TryFrom<PlanData, Error = Error> + Clone + Default> Default for PlanValue<T> {
     fn default() -> Self {
         PlanValue::Literal(T::default())
     }
 }
 
-impl<E: StdError, T: TryFrom<String, Error = E> + Clone> PlanValue<E, T> {
+impl<T: TryFrom<PlanData, Error = Error> + Clone> PlanValue<T> {
     pub fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<T>
     where
         O: Into<&'a str>,
@@ -613,7 +773,8 @@ impl<E: StdError, T: TryFrom<String, Error = E> + Clone> PlanValue<E, T> {
         match self.to_owned() {
             PlanValue::Literal(s) => Ok(s.clone()),
             Self::Dynamic { template, vars } => {
-                let program = Program::compile(template).map_err(|e| Error(e.to_string()))?;
+                let program =
+                    Program::compile(template.as_str()).map_err(|e| Error(e.to_string()))?;
                 let mut context = Context::default();
                 context.add_variable(
                     "vars",
@@ -623,19 +784,12 @@ impl<E: StdError, T: TryFrom<String, Error = E> + Clone> PlanValue<E, T> {
                         ),
                 );
                 add_state_to_context(state, &mut context);
-                match program.execute(&context) {
-                    Ok(cel_interpreter::Value::String(s)) => {
-                        Ok(T::try_from(s.to_string()).map_err(|e| Error(e.to_string()))?)
-                    }
-                    // TODO: allow arbitary bytes in all string fields instead of converting to
-                    // utf8 strings?
-                    Ok(cel_interpreter::Value::Bytes(b)) => Ok(T::try_from(
-                        String::from_utf8(b.to_vec()).map_err(|e| Error(e.to_string()))?,
-                    )
-                    .map_err(|e| Error(e.to_string()))?),
-                    Ok(value) => Err(Error(format!("invalid result type {:?}", value))),
-                    Err(e) => Err(Error(e.to_string())),
-                }
+                PlanData(
+                    program
+                        .execute(&context)
+                        .map_err(|e| Error(e.to_string()))?,
+                )
+                .try_into()
             }
         }
     }
@@ -658,11 +812,18 @@ impl<E: StdError, T: TryFrom<String, Error = E> + Clone> PlanValue<E, T> {
     }
 }
 
-impl<E: StdError, T: TryFrom<String, Error = E> + Clone> PlanValue<E, T> {
-    fn try_from_value(val: toml::Value) -> Result<Option<Self>> {
+impl<T: TryFrom<PlanData, Error = Error> + Clone> PlanValue<T> {
+    fn process_toml(val: toml::Value) -> Result<Option<Self>> {
         match val {
             toml::Value::String(s) => Ok(Some(Self::Literal(
-                s.try_into().map_err(|e: E| Error(e.to_string()))?,
+                PlanData::from(cel_interpreter::Value::from(s))
+                    .try_into()
+                    .map_err(|e: Error| Error(e.to_string()))?,
+            ))),
+            toml::Value::Boolean(b) => Ok(Some(Self::Literal(
+                PlanData::from(cel_interpreter::Value::from(b))
+                    .try_into()
+                    .map_err(|e: Error| Error(e.to_string()))?,
             ))),
             toml::Value::Table(mut t) => {
                 if let Some(toml::Value::Boolean(unset)) = t.remove("unset") {
@@ -681,7 +842,7 @@ impl<E: StdError, T: TryFrom<String, Error = E> + Clone> PlanValue<E, T> {
                     }))
                 } else if let Some(toml::Value::String(s)) = t.remove("value") {
                     Ok(Some(Self::Literal(
-                        s.try_into().map_err(|e: E| Error(e.to_string()))?,
+                        PlanData(cel_interpreter::Value::from(s)).try_into()?,
                     )))
                 } else {
                     Err(format!(
@@ -697,7 +858,7 @@ impl<E: StdError, T: TryFrom<String, Error = E> + Clone> PlanValue<E, T> {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct PlanValueTable(pub Vec<(PlanValue<Infallible, String>, PlanValue<Infallible, String>)>);
+pub struct PlanValueTable(pub Vec<(PlanValue<String>, PlanValue<String>)>);
 
 impl PlanValueTable {
     pub fn evaluate<'a, O, S, I>(&self, state: &S) -> Result<Vec<(String, String)>>
@@ -726,7 +887,7 @@ impl TryFrom<toml::Value> for PlanValueTable {
                     };
                     let key = t
                         .remove("key")
-                        .map(PlanValue::try_from_value)
+                        .map(PlanValue::process_toml)
                         .transpose()?
                         .flatten()
                         .ok_or_else(|| Error::from("key is required"))?;
@@ -735,7 +896,7 @@ impl TryFrom<toml::Value> for PlanValueTable {
                     let value = t
                         .remove("value")
                         .ok_or_else(|| Error::from("value is required"))?;
-                    let Some(value) = PlanValue::try_from_value(value)? else {
+                    let Some(value) = PlanValue::process_toml(value)? else {
                         return Ok(None);
                     };
 
@@ -756,7 +917,7 @@ impl TryFrom<toml::Value> for PlanValueTable {
                             toml::Value::Array(list) => {
                                 let result: Result<Vec<_>> = list
                                     .into_iter()
-                                    .map(PlanValue::try_from_value)
+                                    .map(PlanValue::process_toml)
                                     .filter_map(Result::transpose)
                                     .collect();
                                 match result {
@@ -764,7 +925,7 @@ impl TryFrom<toml::Value> for PlanValueTable {
                                     Err(e) => return Some(Err(e)),
                                 }
                             }
-                            value => vec![match PlanValue::try_from_value(value) {
+                            value => vec![match PlanValue::process_toml(value) {
                                 Ok(Some(pv)) => pv,
                                 // If there's no value then it was omitted with { unset = true },
                                 // so filter the whole entry out.
@@ -785,10 +946,7 @@ impl TryFrom<toml::Value> for PlanValueTable {
 }
 
 impl PlanValueTable {
-    fn leaf_to_key_value(
-        key: String,
-        value: &mut toml::Value,
-    ) -> Result<PlanValue<Infallible, String>> {
+    fn leaf_to_key_value(key: String, value: &mut toml::Value) -> Result<PlanValue<String>> {
         match value {
             // Strings or array values mean the key is not templated.
             toml::Value::String(_) | toml::Value::Array(_) => Ok(PlanValue::Literal(key)),
@@ -800,7 +958,7 @@ impl PlanValueTable {
                     vars: t
                         .get("vars")
                         .map(toml::Value::to_owned)
-                        .map(PlanValue::<Infallible, String>::vars_from_toml)
+                        .map(PlanValue::<String>::vars_from_toml)
                         .transpose()?
                         .unwrap_or_default(),
                 }),

@@ -17,3 +17,14 @@ if = "a.http.out.body.json.foo >= ${type}"
 if = "a.http.out.body.json.foo >= ${type}"
 then = "a.out.http.response.json.foo"
 else = ""
+
+[c.http]
+url = "https://example.com/test"
+[c.http.pause] = [{after = "head", duration = "5ms"}, {}]
+after_headers = "50ms"
+after_handshake = "10ms"
+after_done = "100ms"
+[c.loop]
+until.timing.confidence = 0.95
+until.timing.interval = 
+until.minimum = 5

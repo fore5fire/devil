@@ -8,3 +8,17 @@ query = '''query {
                 }
             }
         }'''
+
+[query_string.graphql]
+url = "https://swapi-graphql.netlify.app/.netlify/functions/index"
+query = '''query {
+            allFilms {
+                films {
+                title
+                }
+            }
+        }'''
+use_query_string = true
+[query_string.graphql.http]
+method = "GET"
+headers = { Content-Type = { unset = true } }

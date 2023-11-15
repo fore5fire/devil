@@ -18,14 +18,33 @@ pub(super) async fn execute(
             .transpose()?,
         variables: req.params.evaluate(state)?.into_iter().collect(),
     };
-    let http_body = serde_json::to_string(&body)?;
+    let raw_url = req.url.evaluate(state)?;
+    let mut url: url::Url = raw_url.parse()?;
+    let use_query_string = req.use_query_string.evaluate(state)?;
+    let (http_body, url) = if use_query_string {
+        let mut query_pairs = url.query_pairs_mut();
+        query_pairs.append_pair("query", &body.query);
+        if let Some(name) = &body.operation_name {
+            query_pairs.append_pair("operationName", &name);
+        }
+        if !body.variables.is_empty() {
+            query_pairs.append_pair("variables", &serde_json::to_string(&body.variables)?);
+        }
+        //query_pairs.append_pair("extensions", &serde_json::to_string(&body.extensions)?);
+        query_pairs.finish();
+        drop(query_pairs);
+        (None, url)
+    } else {
+        (Some(serde_json::to_string(&body)?), url)
+    };
     let mut out = super::http::execute(
         &HTTPRequest {
-            url: req.url.clone(),
-            body: crate::PlanValue::Literal(http_body),
+            url: crate::PlanValue::Literal(url.to_string()),
+            body: http_body.map(crate::PlanValue::Literal),
             options: req.http.clone(),
             tls: req.tls.clone(),
             ip: req.ip.clone(),
+            pause: req.pause.clone(),
         },
         state,
     )
@@ -39,6 +58,7 @@ pub(super) async fn execute(
         query: body.query,
         operation: body.operation_name,
         params: body.variables,
+        use_query_string,
         response: GraphQLResponse {
             data: resp
                 .get("data")

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, rc::Rc};
+use std::{collections::HashMap, rc::Rc, time::Duration};
 
 use cel_interpreter::{
     objects::{Key, Map},
@@ -66,8 +66,9 @@ pub struct HTTPOutput {
     pub url: String,
     pub method: String,
     pub headers: Vec<(String, String)>,
-    pub body: String,
+    pub body: Option<String>,
     pub response: HTTPResponse,
+    pub pause: Vec<PauseOutput>,
 }
 
 impl From<&HTTPOutput> for Value {
@@ -126,6 +127,7 @@ pub struct GraphQLOutput {
     pub url: String,
     pub query: String,
     pub operation: Option<String>,
+    pub use_query_string: bool,
     pub params: HashMap<String, String>,
     pub response: GraphQLResponse,
 }
@@ -286,6 +288,12 @@ impl From<serde_json::Value> for OutValue {
             }
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct PauseOutput {
+    pub after: String,
+    pub duration: Duration,
 }
 
 fn kv_pair_to_map(pair: &(String, String)) -> Value {
