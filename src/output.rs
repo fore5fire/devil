@@ -223,6 +223,7 @@ pub struct TCPOutput {
     pub host: String,
     pub port: u16,
     pub body: Vec<u8>,
+    pub pause: Vec<PauseOutput>,
     pub response: TCPResponse,
 }
 

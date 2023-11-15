@@ -52,7 +52,7 @@ pub(super) async fn execute(
                 duration: p.duration.evaluate(state)?,
             })
         })
-        .collect::<crate::Result<_>>()?;
+        .collect::<crate::Result<Vec<_>>>()?;
 
     // TODO: explicitly lookup dns names so we can do pausing if needed. Also dns should get its
     // own protocol options.
@@ -98,6 +98,10 @@ pub(super) async fn execute(
         tls_writes = Vec::new();
         tls_reads = Vec::new();
         tls_start = None;
+        if let Some(p) = pause.iter().find(|p| p.after == "open") {
+            println!("pausing after open for {:?}", p.duration);
+            std::thread::sleep(p.duration);
+        }
         http_start = std::time::Instant::now();
         run(tee, req).await?
     } else {
@@ -121,6 +125,10 @@ pub(super) async fn execute(
         let tee = Tee::new(connection);
 
         //println!("connected: {:?}", connection);
+        if let Some(p) = pause.iter().find(|p| p.after == "open") {
+            println!("pausing after open for {:?}", p.duration);
+            std::thread::sleep(p.duration);
+        }
         http_start = std::time::Instant::now();
         let (mut tee, head, body) = run(tee, req).await?;
         // Record tls request and response body before unwrapping back to the tcp tee.
@@ -128,6 +136,10 @@ pub(super) async fn execute(
         tls_reads = std::mem::replace(&mut tee.reads, Vec::new());
         (tee.into_inner().into_inner().0, head, body)
     };
+    if let Some(p) = pause.iter().find(|p| p.after == "request_body") {
+        println!("pausing after {} for {:?}", p.after, p.duration);
+        std::thread::sleep(p.duration);
+    }
 
     // Collect the remaining bytes in the response body.
     let body_bytes = body.collect().await?;
@@ -195,6 +207,7 @@ pub(super) async fn execute(
             host: host.to_owned(),
             port,
             body: tcp_tee.writes,
+            pause: Vec::new(),
             response: TCPResponse {
                 body: tcp_tee.reads,
                 duration: tcp_duration,
