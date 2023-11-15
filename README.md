@@ -12,17 +12,19 @@ MVP release items are in bold.
 - [X] **Global Defaults**
 - [ ] **Modules**
 - [ ] **Parallel Execution**
-- [ ] Assertions
-- [ ] **HTTP/1.0**
+- [X] **Timing Information**
+- [ ] **Assertions**
+    - [ ] **Fuzzing**
 - [X] **HTTP/1.1**
+- [ ] **gRPC**
+- [X] **GraphQL**
+- [X] **TLS**
+- [X] **TCP**
 - [ ] Websockets
-- [ ] gRPC
-- [X] GraphQL
+- [ ] HTTP/1.0
 - [ ] HTTP/2
 - [ ] HTTP/3
-- [X] TCP
 - [ ] UDP
-- [X] TLS
 - [ ] quic
 - [ ] h2c
 - [ ] HTTP auto-serialized bodies (protobuf, zstd, gzip, etc.)

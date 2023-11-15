@@ -85,7 +85,9 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                 for (k, v) in &http.headers {
                     println!(">   {}: {}", k, v);
                 }
-                println!("> {}", http.body);
+                if let Some(body) = &http.body {
+                    println!("> {}", body);
+                }
             }
         }
         Protocol::GraphQL => {

@@ -23,3 +23,5 @@ tokio-rustls = "0.24.1"
 webpki-roots = "=0.26.0-alpha.1"
 clap = { version = "4.4.8", features = ["derive"] }
 chrono = "0.4.31"
+parse_duration = "2.1.1"
+url = { version = "2.4.1", features = ["serde"] }

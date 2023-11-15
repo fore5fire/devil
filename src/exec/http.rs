@@ -18,6 +18,7 @@ use tokio::net::TcpStream;
 
 use super::tee::Tee;
 use super::State;
+use crate::PauseOutput;
 use crate::{
     HTTPOutput, HTTPRequest, HTTPResponse, StepOutput, TCPOutput, TCPResponse, TLSOutput,
     TLSResponse,
@@ -41,6 +42,20 @@ pub(super) async fn execute(
         }
     });
 
+    let pause = http
+        .pause
+        .clone()
+        .into_iter()
+        .map(|p| {
+            Ok(PauseOutput {
+                after: p.after.evaluate(state)?,
+                duration: p.duration.evaluate(state)?,
+            })
+        })
+        .collect::<crate::Result<_>>()?;
+
+    // TODO: explicitly lookup dns names so we can do pausing if needed. Also dns should get its
+    // own protocol options.
     let address = format!("{}:{}", host, port);
 
     // Prepare the request.
@@ -63,9 +78,12 @@ pub(super) async fn execute(
     //    req_builder
     //};
 
-    let req_body = http.body.evaluate(state)?;
-    let req = req_builder.body(req_body.clone())?;
-
+    let req_body = http
+        .body
+        .clone()
+        .map(|body| body.evaluate(state))
+        .transpose()?;
+    let req = req_builder.body(req_body.clone().unwrap_or_default())?;
     // Start the TCP timer.
     let tcp_start = std::time::Instant::now();
     // Open a TCP connection to the remote host
@@ -134,6 +152,7 @@ pub(super) async fn execute(
             method,
             headers,
             body: req_body,
+            pause,
             response: HTTPResponse {
                 status_code: head.status.as_u16(),
                 status_reason: "unimplemented".to_owned(),
