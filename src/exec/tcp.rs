@@ -4,7 +4,7 @@ use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{lookup_host, TcpStream};
 
-use crate::{TCPOutput, TCPRequest, TCPResponse};
+use crate::{PauseOutput, TCPOutput, TCPRequest, TCPResponse};
 
 use super::{State, StepOutput};
 
@@ -18,11 +18,32 @@ pub(super) async fn execute(
     //let addr = ip_for_host(&host).await?;
     let addr = format!("{}:{}", host, port);
 
+    let pause = tcp
+        .pause
+        .clone()
+        .into_iter()
+        .map(|p| {
+            Ok(PauseOutput {
+                after: p.after.evaluate(state)?,
+                duration: p.duration.evaluate(state)?,
+            })
+        })
+        .collect::<crate::Result<Vec<_>>>()?;
+
+    let body = tcp.body.evaluate(state)?;
+
     // Open a TCP connection to the remote host
     let start = Instant::now();
     let mut stream = TcpStream::connect(addr).await?;
-    let body = tcp.body.evaluate(state)?;
+    if let Some(p) = pause.iter().find(|p| p.after == "open") {
+        println!("pausing after {} for {:?}", p.after, p.duration);
+        std::thread::sleep(p.duration);
+    }
     stream.write_all(&body).await?;
+    if let Some(p) = pause.iter().find(|p| p.after == "request_body") {
+        println!("pausing after {} for {:?}", p.after, p.duration);
+        std::thread::sleep(p.duration);
+    }
     let mut response = Vec::new();
     stream.read_to_end(&mut response).await?;
     //let stream = Tee::new(stream);
@@ -32,6 +53,7 @@ pub(super) async fn execute(
             host,
             port: port.parse()?,
             body,
+            pause,
             response: TCPResponse {
                 body: response,
                 duration: start.elapsed(),

@@ -8,7 +8,7 @@ use tokio::{
 };
 
 use super::{tee::Tee, State};
-use crate::{StepOutput, TCPOutput, TCPResponse, TLSOutput, TLSRequest, TLSResponse};
+use crate::{PauseOutput, StepOutput, TCPOutput, TCPResponse, TLSOutput, TLSRequest, TLSResponse};
 
 pub(super) async fn execute(
     tls: &TLSRequest,
@@ -21,6 +21,17 @@ pub(super) async fn execute(
     let host = tls.host.evaluate(state)?;
     let port = tls.port.evaluate(state)?;
     let address = format!("{}:{}", host, port);
+    let pause = tls
+        .pause
+        .clone()
+        .into_iter()
+        .map(|p| {
+            Ok(PauseOutput {
+                after: p.after.evaluate(state)?,
+                duration: p.duration.evaluate(state)?,
+            })
+        })
+        .collect::<crate::Result<Vec<_>>>()?;
     let stream = TcpStream::connect(address).await?;
     let tee = Tee::new(stream);
     //println!("using TLS with name {}", host);
@@ -39,10 +50,20 @@ pub(super) async fn execute(
     let connector = tokio_rustls::TlsConnector::from(Arc::new(tls_config));
     let domain =
         rustls::ServerName::try_from(host.as_str()).map_err(|e| crate::Error(e.to_string()))?;
+    let req_body = tls.body.evaluate(state)?;
+
+    // Perform the TLS handshake.
     let tls_start = Instant::now();
     let mut connection = connector.connect(domain, tee).await?;
-    let req_body = tls.body.evaluate(state)?;
+    if let Some(p) = pause.iter().find(|p| p.after == "open") {
+        println!("pausing after {} for {:?}", p.after, p.duration);
+        std::thread::sleep(p.duration);
+    }
     connection.write_all(&req_body).await?;
+    if let Some(p) = pause.iter().find(|p| p.after == "request_body") {
+        println!("pausing after {} for {:?}", p.after, p.duration);
+        std::thread::sleep(p.duration);
+    }
     // Get the response body into a Vec.
     let mut resp_body = Vec::new();
     connection.read_to_end(&mut resp_body).await?;
@@ -66,6 +87,7 @@ pub(super) async fn execute(
             host,
             port: port.parse()?,
             body: tee.writes,
+            pause,
             response: TCPResponse {
                 body: tee.reads,
                 duration: tcp_duration,

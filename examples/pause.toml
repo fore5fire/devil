@@ -1,0 +1,14 @@
+[http_pause.http]
+url = "https://example.com/"
+pause = [{ after = "open", duration = "500ms" }]
+
+[multiple_pauses.tls]
+host = "example.com"
+port = "443"
+body = "GET / HTTP/1.0\r\n\r\n"
+[[multiple_pauses.tls.pause]]
+after = "open"
+duration = "500ms"
+[[multiple_pauses.tls.pause]]
+after = "request_body"
+duration = "500ms"

@@ -164,11 +164,6 @@ impl TryFrom<toml::Value> for HTTPRequest {
             return Err(Error("invalid type".to_owned()));
         };
         Ok(HTTPRequest {
-            pause: protocol
-                .remove("pause")
-                .map(Pause::process_toml)
-                .transpose()?
-                .ok_or_else(|| Error::from("http.url is required"))?,
             url: protocol
                 .remove("url")
                 .map(PlanValue::process_toml)
@@ -180,6 +175,11 @@ impl TryFrom<toml::Value> for HTTPRequest {
                 .map(PlanValue::process_toml)
                 .transpose()?
                 .flatten(),
+            pause: protocol
+                .remove("pause")
+                .map(Pause::process_toml)
+                .transpose()?
+                .unwrap_or_default(),
             tls: protocol
                 .remove("tls")
                 .map(TLSOptions::try_from)
