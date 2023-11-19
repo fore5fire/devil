@@ -7,7 +7,7 @@ pub mod tls;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 
-use crate::{Plan, Step, StepOutput};
+use crate::{Plan, Protocol, Step, StepOutput};
 
 pub struct Executor<'a> {
     iter: indexmap::map::Iter<'a, String, Step>,
@@ -29,14 +29,14 @@ impl<'a> Executor<'a> {
         let inputs = &State {
             data: &self.outputs,
         };
-        let out = match step {
-            Step::TCP(req) => tcp::execute(req, &inputs).await?,
-            Step::TLS(req) => tls::execute(req, &inputs).await?,
-            Step::HTTP(req) => http::execute(req, &inputs).await?,
-            Step::HTTP1(req) => http::execute(&req.http, &inputs).await?,
-            Step::HTTP2(req) => http::execute(&req.http, &inputs).await?,
-            Step::HTTP3(req) => http::execute(&req.http, &inputs).await?,
-            Step::GraphQL(req) => graphql::execute(&req, &inputs).await?,
+        let out = match &step.main {
+            Protocol::TCP(req) => tcp::execute(req, &inputs).await?,
+            Protocol::TLS(req) => tls::execute(req, &inputs).await?,
+            Protocol::HTTP(req) => http::execute(req, &inputs).await?,
+            Protocol::HTTP1(req) => http::execute(&req.http, &inputs).await?,
+            Protocol::HTTP2(req) => http::execute(&req.http, &inputs).await?,
+            Protocol::HTTP3(req) => http::execute(&req.http, &inputs).await?,
+            Protocol::GraphQL(req) => graphql::execute(&req, &inputs).await?,
         };
 
         self.outputs.insert(name, out.clone());
