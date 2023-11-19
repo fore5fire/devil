@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::Serialize;
 
 use super::State;
-use crate::{GraphQLOutput, GraphQLRequest, GraphQLResponse, HTTPRequest, StepOutput};
+use crate::{GraphQLOutput, GraphQLRequest, GraphQLResponse, HTTPRequest, PlanValue, StepOutput};
 
 pub(super) async fn execute(
     req: &GraphQLRequest,
@@ -39,12 +39,13 @@ pub(super) async fn execute(
     };
     let mut out = super::http::execute(
         &HTTPRequest {
-            url: crate::PlanValue::Literal(url.to_string()),
-            body: http_body.map(crate::PlanValue::Literal),
-            options: req.http.clone(),
-            tls: req.tls.clone(),
-            ip: req.ip.clone(),
-            pause: req.pause.clone(),
+            body: req
+                .http
+                .body
+                .clone()
+                .or_else(|| http_body.map(PlanValue::Literal)),
+            url: PlanValue::Literal(url.to_string()),
+            ..req.http.clone()
         },
         state,
     )

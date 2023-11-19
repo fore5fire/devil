@@ -1,66 +1,105 @@
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::time::Instant;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{lookup_host, TcpStream};
 
-use crate::{PauseOutput, TCPOutput, TCPRequest, TCPResponse};
+use crate::{Error, PauseOutput, TCPOutput, TCPRequest, TCPResponse};
 
 use super::{State, StepOutput};
 
-pub(super) async fn execute(
-    tcp: &TCPRequest,
-    state: &State<'_>,
-) -> Result<StepOutput, Box<dyn std::error::Error + Send + Sync>> {
-    // Get the host and the port
-    let host = tcp.host.evaluate(state)?;
-    let port = tcp.port.evaluate(state)?;
-    //let addr = ip_for_host(&host).await?;
-    let addr = format!("{}:{}", host, port);
+pub(super) struct TCPRunner {
+    out: TCPOutput,
+    stream: TcpStream,
+    start: Instant,
+    host: String,
+}
 
-    let pause = tcp
-        .pause
-        .clone()
-        .into_iter()
-        .map(|p| {
-            Ok(PauseOutput {
-                after: p.after.evaluate(state)?,
-                duration: p.duration.evaluate(state)?,
-            })
+impl AsyncRead for TCPRunner {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        Pin::new(&mut self.as_ref().stream).poll_read(cx, buf)
+    }
+}
+
+impl Unpin for TCPRunner {}
+
+impl AsyncWrite for TCPRunner {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<Result<usize, std::io::Error>> {
+        Pin::new(&mut self.as_ref().stream).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        Pin::new(&mut self.as_ref().stream).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        Pin::new(&mut self.as_ref().stream).poll_shutdown(cx)
+    }
+}
+
+impl<'a> TCPRunner {
+    pub(super) async fn new(data: TCPOutput, state: &State<'_>) -> crate::Result<TCPRunner> {
+        //let addr = ip_for_host(&host).await?;
+        let addr = format!("{}:{}", data.host, data.port);
+        let start = Instant::now();
+        let stream = TcpStream::connect(addr)
+            .await
+            .map_err(|e| Error(e.to_string()))?;
+        Ok(TCPRunner {
+            stream,
+            start,
+            host: format!("{}:{}", data.host, data.port),
+            out: data,
         })
-        .collect::<crate::Result<Vec<_>>>()?;
-
-    let body = tcp.body.evaluate(state)?;
-
-    // Open a TCP connection to the remote host
-    let start = Instant::now();
-    let mut stream = TcpStream::connect(addr).await?;
-    if let Some(p) = pause.iter().find(|p| p.after == "open") {
-        println!("pausing after {} for {:?}", p.after, p.duration);
-        std::thread::sleep(p.duration);
     }
-    stream.write_all(&body).await?;
-    if let Some(p) = pause.iter().find(|p| p.after == "request_body") {
-        println!("pausing after {} for {:?}", p.after, p.duration);
-        std::thread::sleep(p.duration);
-    }
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response).await?;
-    //let stream = Tee::new(stream);
 
-    Ok(StepOutput {
-        tcp: Some(TCPOutput {
-            host,
-            port: port.parse()?,
-            body,
-            pause,
-            response: TCPResponse {
-                body: response,
-                duration: start.elapsed(),
-            },
-        }),
-        ..Default::default()
-    })
+    pub(super) async fn execute(
+        &mut self,
+        tcp: &TCPRequest,
+        state: &State<'_>,
+    ) -> Result<StepOutput, Box<dyn std::error::Error + Send + Sync>> {
+        if let Some(p) = self.out.pause.iter().find(|p| p.after == "open") {
+            println!("pausing after {} for {:?}", p.after, p.duration);
+            std::thread::sleep(p.duration);
+        }
+        self.stream.write_all(&self.out.body).await?;
+        if let Some(p) = self.out.pause.iter().find(|p| p.after == "request_body") {
+            println!("pausing after {} for {:?}", p.after, p.duration);
+            std::thread::sleep(p.duration);
+        }
+        let mut response = Vec::new();
+        self.stream.read_to_end(&mut response).await?;
+        //let stream = Tee::new(stream);
+
+        Ok(StepOutput {
+            tcp: Some(TCPOutput {
+                host,
+                port: port.parse()?,
+                body,
+                pause,
+                response: Some(TCPResponse {
+                    body: response,
+                    duration: start.elapsed(),
+                }),
+            }),
+            ..Default::default()
+        })
+    }
 }
 
 async fn ip_for_host(host: &str) -> Result<SocketAddr, Box<dyn std::error::Error + Send + Sync>> {

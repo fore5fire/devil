@@ -61,8 +61,8 @@ pub(super) async fn execute(
     // Prepare the request.
     let authority = url.authority().ok_or("request missing host")?.clone();
     let default_headers = [(hyper::header::HOST, authority.as_str())];
-    let headers = http.options.headers.evaluate(state)?;
-    let method = http.options.method.evaluate(state)?;
+    let headers = http.headers.evaluate(state)?;
+    let method = http.method.evaluate(state)?;
     let mut req_builder = Request::builder().method(method.as_str()).uri(url.clone());
     for (k, v) in default_headers {
         if !contains_header(&headers, k.as_str()) {

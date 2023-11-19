@@ -5,6 +5,8 @@ use cel_interpreter::{
     Value,
 };
 
+use crate::TCPRequest;
+
 pub trait State<'a, O: Into<&'a str>, I: IntoIterator<Item = O>> {
     fn get(&self, name: &'a str) -> Option<&StepOutput>;
     fn iter(&self) -> I;
@@ -59,7 +61,7 @@ pub enum ProtocolOutput {
     GraphQL(GraphQLOutput),
 }
 
-pub type ProtocolStack = Vec<ProtocolOutput>;
+pub type OutputStack = Vec<ProtocolOutput>;
 
 #[derive(Debug, Clone)]
 pub struct HTTPOutput {
@@ -224,7 +226,7 @@ pub struct TCPOutput {
     pub port: u16,
     pub body: Vec<u8>,
     pub pause: Vec<PauseOutput>,
-    pub response: TCPResponse,
+    pub response: Option<TCPResponse>,
 }
 
 impl From<&TCPOutput> for Value {
@@ -233,8 +235,37 @@ impl From<&TCPOutput> for Value {
         map.insert("host".into(), Value::Bytes(Rc::new(value.body.clone())));
         map.insert("port".into(), (value.port as u32).into());
         map.insert("body".into(), Value::Bytes(Rc::new(value.body.clone())));
-        map.insert("response".into(), (&value.response).into());
+        value
+            .response
+            .as_ref()
+            .map(|resp| map.insert("response".into(), resp.into()));
         Value::Map(Map { map: Rc::new(map) })
+    }
+}
+
+impl TCPRequest {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<TCPOutput>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O>,
+    {
+        Ok(TCPOutput {
+            host: self.host.evaluate(state)?,
+            port: self.port.evaluate(state)?,
+            body: self.body.evaluate(state)?,
+            pause: self
+                .pause
+                .into_iter()
+                .map(|p| {
+                    Ok(PauseOutput {
+                        after: p.after.evaluate(state)?,
+                        duration: p.duration.evaluate(state)?,
+                    })
+                })
+                .collect::<crate::Result<_>>()?,
+            response: None,
+        })
     }
 }
 
