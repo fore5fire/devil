@@ -88,10 +88,10 @@ pub(super) async fn execute(
             port: port.parse()?,
             body: tee.writes,
             pause,
-            response: TCPResponse {
+            response: Some(TCPResponse {
                 body: tee.reads,
                 duration: tcp_duration,
-            },
+            }),
         }),
         ..Default::default()
     })
