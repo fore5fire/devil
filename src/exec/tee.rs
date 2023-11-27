@@ -10,18 +10,18 @@ pub(crate) struct Tee<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> {
 }
 
 impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> Tee<T> {
-    pub fn into_inner(self) -> T {
-        self.inner
-    }
-}
-
-impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> Tee<T> {
     pub fn new(wrap: T) -> Self {
         Tee {
             inner: wrap,
             reads: Vec::new(),
             writes: Vec::new(),
         }
+    }
+    pub fn into_inner(self) -> T {
+        self.inner
+    }
+    pub fn into_parts(self) -> (T, Vec<u8>, Vec<u8>) {
+        (self.inner, self.writes, self.reads)
     }
 }
 

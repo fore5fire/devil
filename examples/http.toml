@@ -6,6 +6,12 @@ url = "https://example.com/"
 [http_get.http]
 url = "http://example.com/test"
 
+[gql-test.graphql]
+url = "http://example.com/test"
+gql-test.http.method = "GET"
+[gql-test.http]
+method = "GET"
+
 # HTTPS GET with headers
 [get_with_headers.http]
 url = "https://example.com/test"
@@ -13,8 +19,8 @@ url = "https://example.com/test"
 Content-Type = "application/json"
 X-Custom-Header = "foo"
 X-Repeated-Header = ["foo", "bar"]
-# Don't include default User-Agent header
-User-Agent = { unset = true }
+# Don't include default Host header
+Host = { unset = true }
 
 # HTTPS GET with array format for non-adjacent repeated headers
 [ordered_headers.http]
@@ -31,8 +37,9 @@ value = "foo"
 [[ordered_headers.http.headers]]
 key =   "X-Repeated-Header"
 value = "bar"
+# Don't include default Host header
 [[ordered_headers.http.headers]]
-key =   "User-Agent"
+key =   "Host"
 value = { unset = true }
 
 # HTTPS POST
@@ -82,7 +89,7 @@ body = { template = "multiline_post.http.response.body" }
 #[http3_example.http3]
 #url = "https://example.com/test"
 
-[courier.defaults]
+[[courier.defaults]]
 # Add a header to all requests.
 http.headers.User-Agent = "foobar"
 

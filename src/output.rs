@@ -244,7 +244,7 @@ impl From<&TCPOutput> for Value {
 }
 
 impl TCPRequest {
-    fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<TCPOutput>
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<TCPOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,

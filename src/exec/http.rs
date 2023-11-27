@@ -132,9 +132,9 @@ pub(super) async fn execute(
         http_start = std::time::Instant::now();
         let (mut tee, head, body) = run(tee, req).await?;
         // Record tls request and response body before unwrapping back to the tcp tee.
-        tls_writes = std::mem::replace(&mut tee.writes, Vec::new());
-        tls_reads = std::mem::replace(&mut tee.reads, Vec::new());
-        (tee.into_inner().into_inner().0, head, body)
+        let inner;
+        (inner, tls_writes, tls_reads) = tee.into_parts();
+        (inner.into_inner().0, head, body)
     };
     if let Some(p) = pause.iter().find(|p| p.after == "request_body") {
         println!("pausing after {} for {:?}", p.after, p.duration);
@@ -208,10 +208,10 @@ pub(super) async fn execute(
             port,
             body: tcp_tee.writes,
             pause: Vec::new(),
-            response: TCPResponse {
+            response: Some(TCPResponse {
                 body: tcp_tee.reads,
                 duration: tcp_duration,
-            },
+            }),
         }),
         ..Default::default()
     })

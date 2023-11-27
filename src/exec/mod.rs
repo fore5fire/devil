@@ -9,6 +9,8 @@ use std::fmt::Display;
 
 use crate::{Plan, Protocol, Step, StepOutput};
 
+use self::tcp::TCPRunner;
+
 pub struct Executor<'a> {
     iter: indexmap::map::Iter<'a, String, Step>,
     outputs: HashMap<&'a str, StepOutput>,
@@ -30,7 +32,7 @@ impl<'a> Executor<'a> {
             data: &self.outputs,
         };
         let out = match &step.main {
-            Protocol::TCP(req) => tcp::execute(req, &inputs).await?,
+            Protocol::TCP(req) => TCPRunner::new(req.evaluate(inputs)?).await?,
             Protocol::TLS(req) => tls::execute(req, &inputs).await?,
             Protocol::HTTP(req) => http::execute(req, &inputs).await?,
             Protocol::HTTP1(req) => http::execute(&req.http, &inputs).await?,

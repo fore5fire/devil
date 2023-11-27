@@ -1,6 +1,7 @@
 use crate::{Error, Result, State};
 use cel_interpreter::{Context, Program};
 use indexmap::IndexMap;
+use serde::Deserialize;
 use std::{collections::HashMap, iter::repeat, ops::Deref, rc::Rc, time::Duration};
 use toml::Table;
 
@@ -24,17 +25,20 @@ impl<'a> Plan {
             return Err(Error::from("invalid type for courier table"));
         };
 
-        let defaults = courier
+        let defaults = match courier.remove("defaults") {
+            Some(toml::Value::Array(a)) => a,
+            Some(_) => Error::from("courier.defaults must be an array"),
+            None => Defaults::default(),
+        };
+        defaults
             .iter_mut()
-            .map(|(k, v)| match (k.as_str(), v) {
-                ("http", toml::Value::Table(mut t)) => {
-                    if let Some(toml::Value::Table(t)) = t.remove("defaults") {
-                        Ok(())
-                    } else {
-                        Err(Error::from("invalid type for courier.{}"))
-                    }
-                }
-                (k, _) => Err(Error(format!("invalid key courier.{}", k))),
+            .filter_map(|(k, v)| match (k.as_str(), v) {
+                ("http", toml::Value::Table(mut t)) => match t.remove("defaults") {
+                    Some(toml::Value::Table(t)) => Some(Ok(t)),
+                    None => None,
+                    _ => Some(Err(Error::from("invalid type for courier.{}"))),
+                },
+                (k, _) => Some(Err(Error(format!("invalid key courier.{}", k)))),
             })
             .collect()?;
 
@@ -71,20 +75,24 @@ impl<'a> Plan {
         // Parse all remaining tables as steps.
         let steps: IndexMap<String, Step> = table
             .into_iter()
-            .map(|(name, value)| {
-                let toml::Value::Table(t) = value else {
-                    return Err(Error(format!("invalid type for {}", name)));
-                };
-                Ok(Some((
-                    name,
-                    Step::from_table(t, &defaults.as_table().unwrap())?,
-                )))
-            })
+            .map(|(name, value)| Ok(Some((name, Step::from_toml(name, value)?))))
             .filter_map(Result::transpose)
             .collect::<Result<_>>()?;
 
         Ok(Plan { steps })
     }
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct Defaults {
+    pub selector: Option<String>,
+    pub http: HTTPRequest,
+    pub http1: HTTP1Request,
+    pub http2: HTTP2Request,
+    pub http3: HTTP3Request,
+    pub tls: TLSSettings,
+    pub tcp: TCPRequest,
+    pub graphql: GraphQLRequest,
 }
 
 fn merge_toml(target: &mut toml::Value, defaults: &toml::Value) {
@@ -546,6 +554,7 @@ impl TryFrom<toml::Value> for IPRequest {
 
 #[derive(Debug, Clone)]
 pub struct Step {
+    pub name: String,
     pub main: Protocol,
     pub graphql: Option<GraphQLRequest>,
     pub http: Option<HTTPRequest>,
@@ -554,6 +563,31 @@ pub struct Step {
     pub http3: Option<HTTPRequest>,
     pub tls: Option<TLSRequest>,
     pub tcp: Option<TCPRequest>,
+}
+
+impl Step {
+    pub fn from_toml(name: String, value: toml::Value) -> Result<Step> {
+        let toml::Value::Table(t) = value else {
+            return Err(Error(format!("step {name} must be a table")));
+        };
+        let iter = t.into_iter();
+        let mut s = Step {
+            name,
+            main: iter
+                .next()
+                .map(|(proto, value)| Protocol::from_toml(proto, value))
+                .ok_or_else(|| Error(format!("step {name} missing protocol")))??,
+            graphql: None,
+            http: None,
+            http1: None,
+            http2: None,
+            http3: None,
+            tls: None,
+            tcp: None,
+        };
+        for (name, proto) in iter {}
+        Ok(s)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -575,7 +609,10 @@ pub enum Protocol {
 }
 
 impl Protocol {
-    pub fn from_table(mut table: Table, defaults: &Table) -> Result<Self> {
+    pub fn from_toml(name: String, value: toml::Value) -> Result<Self> {
+        let toml::Value::Table(mut table) = value else {
+            return Err(Error::from("protocol must be a table"));
+        };
         // The first step specified is the top-most protocol we're executing. All others must be
         // protocols that can run under the speicified protocol.
         let mut iter = table.keys();
@@ -585,48 +622,13 @@ impl Protocol {
             .clone();
         let mut proto = table.remove(&name).unwrap();
         Ok(match name.as_str() {
-            "http" => {
-                if let Some(d) = defaults.get("http") {
-                    merge_toml(&mut proto, &d);
-                }
-                Protocol::HTTP(HTTPRequest::try_from(proto)?)
-            }
-            "http11" => {
-                if let Some(d) = defaults.get("http11") {
-                    merge_toml(&mut proto, &d);
-                }
-                Protocol::HTTP1(HTTP1Request {})
-            }
-            "http2" => {
-                if let Some(d) = defaults.get("http2") {
-                    merge_toml(&mut proto, &d);
-                }
-                Protocol::HTTP2(HTTP2Request {})
-            }
-            "http3" => {
-                if let Some(d) = defaults.get("http3") {
-                    merge_toml(&mut proto, &d);
-                }
-                Protocol::HTTP3(HTTP3Request {})
-            }
-            "graphql" => {
-                if let Some(d) = defaults.get("graphql") {
-                    merge_toml(&mut proto, &d);
-                }
-                Protocol::GraphQL(GraphQLRequest::try_from(proto)?)
-            }
-            "tcp" => {
-                if let Some(d) = defaults.get("tcp") {
-                    merge_toml(&mut proto, &d);
-                }
-                Protocol::TCP(TCPRequest::try_from(proto)?)
-            }
-            "tls" => {
-                if let Some(d) = defaults.get("tls") {
-                    merge_toml(&mut proto, &d);
-                }
-                Protocol::TLS(TLSRequest::try_from(proto)?)
-            }
+            "http" => Protocol::HTTP(HTTPRequest::try_from(proto)?),
+            "http11" => Protocol::HTTP1(HTTP1Request {}),
+            "http2" => Protocol::HTTP2(HTTP2Request {}),
+            "http3" => Protocol::HTTP3(HTTP3Request {}),
+            "graphql" => Protocol::GraphQL(GraphQLRequest::try_from(proto)?),
+            "tcp" => Protocol::TCP(TCPRequest::try_from(proto)?),
+            "tls" => Protocol::TLS(TLSRequest::try_from(proto)?),
             _ => {
                 return Err(Error::from("no matching protocols"));
             }
@@ -643,6 +645,15 @@ pub enum PlanValue<T: TryFrom<PlanData, Error = Error> + Clone> {
     },
 }
 
+impl<'a> Deserialize<'a> for PlanValue<String> {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'a>,
+    {
+        deserializer.deserialize_string(PlanValueStringVisitor)
+    }
+}
+
 impl<T: TryFrom<PlanData, Error = Error> + Clone + Default> Default for PlanValue<T> {
     fn default() -> Self {
         PlanValue::Literal(T::default())
@@ -651,7 +662,14 @@ impl<T: TryFrom<PlanData, Error = Error> + Clone + Default> Default for PlanValu
 
 impl<T: TryFrom<PlanData, Error = Error> + Clone> PlanValue<T> {
     pub fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<T>
-    where
+    where    {
+        if s.len() >= self.min {
+            Ok(s.to_owned())
+        } else {
+            Err(de::Error::invalid_value(Unexpected::Str(s), &self))
+        }
+    }
+}
         O: Into<&'a str>,
         S: State<'a, O, I>,
         I: IntoIterator<Item = O>,
