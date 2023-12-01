@@ -253,7 +253,7 @@ impl TCPRequest {
         Ok(TCPOutput {
             host: self.host.evaluate(state)?,
             port: self.port.evaluate(state)?,
-            body: self.body.evaluate(state)?,
+            body: self.body.evaluate(state)?.into(),
             pause: self
                 .pause
                 .into_iter()
