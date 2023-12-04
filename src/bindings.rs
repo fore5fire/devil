@@ -37,13 +37,15 @@ pub struct Step {
     pub http3: Option<HTTP3>,
     pub tls: Option<TLS>,
     pub tcp: Option<TCP>,
+    pub quic: Option<QUIC>,
+    pub udp: Option<UDP>,
 }
 
 impl Step {
     pub fn merge(steps: &[Step]) -> Step {
         assert!(!steps.is_empty());
 
-        let (graphql, http, http1, http2, http3, tls, tcp): (
+        let (graphql, http, http1, http2, http3, tls, tcp, quic, udp): (
             Vec<_>,
             Vec<_>,
             Vec<_>,
@@ -51,11 +53,13 @@ impl Step {
             Vec<_>,
             Vec<_>,
             Vec<_>,
-        ) = itertools::multiunzip(
-            steps
-                .into_iter()
-                .map(|x| (x.graphql, x.http, x.http1, x.http2, x.http3, x.tls, x.tcp)),
-        );
+            Vec<_>,
+            Vec<_>,
+        ) = itertools::multiunzip(steps.into_iter().map(|x| {
+            (
+                x.graphql, x.http, x.http1, x.http2, x.http3, x.tls, x.tcp, x.quic, x.udp,
+            )
+        }));
         Step {
             graphql: GraphQL::merge(graphql),
             http: HTTP::merge(http),
@@ -64,6 +68,8 @@ impl Step {
             http3: HTTP3::merge(http3),
             tls: TLS::merge(tls),
             tcp: TCP::merge(tcp),
+            quic: QUIC::merge(quic),
+            udp: UDP::merge(udp),
         }
     }
 }
@@ -229,6 +235,63 @@ pub struct TCP {
 }
 
 impl TCP {
+    fn merge<I: IntoIterator<Item = Option<Self>>>(protos: I) -> Option<Self> {
+        let mut protos = protos.into_iter().filter_map(identity).peekable();
+        protos.peek()?;
+        let (host, port, body, pause): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) = itertools::multiunzip(
+            protos
+                .into_iter()
+                .map(|x| (x.host, x.port, x.body, x.pause)),
+        );
+        Some(Self {
+            host: Value::merge(host),
+            port: Value::merge(port),
+            body: Value::merge(body),
+            pause: Pause::merge(pause),
+        })
+    }
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct QUIC {
+    pub host: Option<Value>,
+    pub port: Option<Value>,
+    pub body: Option<Value>,
+    pub tls_version: Option<Value>,
+    #[serde(default)]
+    pub pause: Vec<Pause>,
+}
+
+impl QUIC {
+    fn merge<I: IntoIterator<Item = Option<Self>>>(protos: I) -> Option<Self> {
+        let mut protos = protos.into_iter().filter_map(identity).peekable();
+        protos.peek()?;
+        let (host, port, body, version, pause): (Vec<_>, Vec<_>, Vec<_>, Vec<_>, Vec<_>) =
+            itertools::multiunzip(
+                protos
+                    .into_iter()
+                    .map(|x| (x.host, x.port, x.body, x.tls_version, x.pause)),
+            );
+        Some(Self {
+            host: Value::merge(host),
+            port: Value::merge(port),
+            body: Value::merge(body),
+            tls_version: Value::merge(version),
+            pause: Pause::merge(pause),
+        })
+    }
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct UDP {
+    pub host: Option<Value>,
+    pub port: Option<Value>,
+    pub body: Option<Value>,
+    #[serde(default)]
+    pub pause: Vec<Pause>,
+}
+
+impl UDP {
     fn merge<I: IntoIterator<Item = Option<Self>>>(protos: I) -> Option<Self> {
         let mut protos = protos.into_iter().filter_map(identity).peekable();
         protos.peek()?;

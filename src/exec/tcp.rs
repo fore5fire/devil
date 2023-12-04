@@ -9,6 +9,7 @@ use crate::{Error, TCPOutput, TCPResponse};
 
 use super::tee::Tee;
 
+#[derive(Debug)]
 pub(super) struct TCPRunner {
     out: TCPOutput,
     stream: Tee<TcpStream>,
@@ -48,6 +49,8 @@ impl AsyncWrite for TCPRunner {
         Pin::new(&mut self.as_ref().stream).poll_shutdown(cx)
     }
 }
+
+impl Unpin for TCPRunner {}
 
 impl<'a> TCPRunner {
     pub(super) async fn new(data: TCPOutput) -> crate::Result<TCPRunner> {
