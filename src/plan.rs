@@ -1,11 +1,11 @@
 use crate::{
     bindings::{self, Defaults},
-    Error, Result, State,
+    Error, Output, Result, State,
 };
 use base64::Engine;
 use cel_interpreter::{Context, Program};
 use indexmap::IndexMap;
-use std::{collections::HashMap, ops::Deref, rc::Rc, time::Duration};
+use std::{collections::HashMap, ops::Deref, time::Duration};
 
 #[derive(Debug)]
 pub struct Plan {
@@ -121,45 +121,19 @@ pub struct Pause {
     pub duration: PlanValue<Duration>,
 }
 
-impl Pause {
-    fn try_from_binding(binding: bindings::Pause) -> Result<Pause> {
+impl TryFrom<bindings::Pause> for Pause {
+    type Error = Error;
+    fn try_from(binding: bindings::Pause) -> Result<Pause> {
         Ok(Pause {
             after: binding
                 .after
-                .map(PlanValue::<String>::try_from_binding)
+                .map(PlanValue::<String>::try_from)
                 .ok_or_else(|| Error::from("pause.after is required"))??,
             duration: binding
                 .duration
-                .map(PlanValue::<Duration>::try_from_binding)
+                .map(PlanValue::<Duration>::try_from)
                 .ok_or_else(|| Error::from("pause.duration is required"))??,
         })
-    }
-    fn process_toml(value: toml::Value) -> Result<Vec<Pause>> {
-        let toml::Value::Array(list) = value else {
-            return Err(Error::from("wrong type for pause"));
-        };
-        list.into_iter()
-            .enumerate()
-            .map(|(i, pause)| {
-                let toml::Value::Table(mut table) = pause else {
-                    return Err(Error::from(format!("wrong type for pause[{i}]")));
-                };
-                Ok(Pause {
-                    after: table
-                        .remove("after")
-                        .map(PlanValue::process_toml)
-                        .transpose()?
-                        .flatten()
-                        .ok_or_else(|| Error::from("pause.after is required"))?,
-                    duration: table
-                        .remove("duration")
-                        .map(PlanValue::process_toml)
-                        .transpose()?
-                        .flatten()
-                        .ok_or_else(|| Error::from("pause.duration is required"))?,
-                })
-            })
-            .collect()
     }
 }
 
@@ -173,26 +147,27 @@ pub struct HTTPRequest {
     pub pause: Vec<Pause>,
 }
 
-impl HTTPRequest {
-    pub fn try_from_binding(binding: bindings::HTTP) -> Result<Self> {
+impl TryFrom<bindings::HTTP> for HTTPRequest {
+    type Error = Error;
+    fn try_from(binding: bindings::HTTP) -> Result<Self> {
         Ok(Self {
             url: binding
                 .url
-                .map(PlanValue::<String>::try_from_binding)
+                .map(PlanValue::<String>::try_from)
                 .ok_or_else(|| Error::from("http.url is required"))??,
             body: binding
                 .body
-                .map(PlanValue::<Vec<u8>>::try_from_binding)
+                .map(PlanValue::<Vec<u8>>::try_from)
                 .transpose()?,
             method: binding
                 .method
-                .map(PlanValue::<String>::try_from_binding)
+                .map(PlanValue::<String>::try_from)
                 .transpose()?,
-            headers: PlanValueTable::try_from_binding(binding.headers.unwrap_or_default())?,
+            headers: PlanValueTable::try_from(binding.headers.unwrap_or_default())?,
             pause: binding
                 .pause
                 .into_iter()
-                .map(Pause::try_from_binding)
+                .map(Pause::try_from)
                 .collect::<Result<_>>()?,
         })
     }
@@ -201,8 +176,9 @@ impl HTTPRequest {
 #[derive(Debug, Default, Clone)]
 pub struct HTTP1Request {}
 
-impl HTTP1Request {
-    pub fn try_from_binding(binding: bindings::HTTP1) -> Result<Self> {
+impl TryFrom<bindings::HTTP1> for HTTP1Request {
+    type Error = Error;
+    fn try_from(binding: bindings::HTTP1) -> Result<Self> {
         Ok(Self {})
     }
 }
@@ -210,8 +186,9 @@ impl HTTP1Request {
 #[derive(Debug, Default, Clone)]
 pub struct HTTP2Request {}
 
-impl HTTP2Request {
-    pub fn try_from_binding(binding: bindings::HTTP2) -> Result<Self> {
+impl TryFrom<bindings::HTTP2> for HTTP2Request {
+    type Error = Error;
+    fn try_from(binding: bindings::HTTP2) -> Result<Self> {
         Ok(Self {})
     }
 }
@@ -219,8 +196,9 @@ impl HTTP2Request {
 #[derive(Debug, Default, Clone)]
 pub struct HTTP3Request {}
 
-impl HTTP3Request {
-    pub fn try_from_binding(binding: bindings::HTTP3) -> Result<Self> {
+impl TryFrom<bindings::HTTP3> for HTTP3Request {
+    type Error = Error;
+    fn try_from(binding: bindings::HTTP3) -> Result<Self> {
         Ok(Self {})
     }
 }
@@ -235,31 +213,32 @@ pub struct GraphQLRequest {
     pub pause: Vec<Pause>,
 }
 
-impl GraphQLRequest {
-    pub fn try_from_binding(binding: bindings::GraphQL) -> Result<Self> {
+impl TryFrom<bindings::GraphQL> for GraphQLRequest {
+    type Error = Error;
+    fn try_from(binding: bindings::GraphQL) -> Result<Self> {
         Ok(Self {
             url: binding
                 .url
-                .map(PlanValue::<String>::try_from_binding)
+                .map(PlanValue::<String>::try_from)
                 .ok_or_else(|| Error::from("graphql.url is required"))??,
             query: binding
                 .query
-                .map(PlanValue::<String>::try_from_binding)
+                .map(PlanValue::<String>::try_from)
                 .ok_or_else(|| Error::from("graphql.query is required"))??,
-            params: PlanValueTable::try_from_binding(binding.params.unwrap_or_default())?,
+            params: binding.params.unwrap_or_default().try_into()?,
             operation: binding
                 .operation
-                .map(PlanValue::<String>::try_from_binding)
+                .map(PlanValue::<String>::try_from)
                 .transpose()?,
             use_query_string: binding
                 .use_query_string
-                .map(PlanValue::<bool>::try_from_binding)
+                .map(PlanValue::<bool>::try_from)
                 .transpose()?
                 .unwrap_or_else(|| PlanValue::Literal(false)),
             pause: binding
                 .pause
                 .into_iter()
-                .map(Pause::try_from_binding)
+                .map(Pause::try_from)
                 .collect::<Result<_>>()?,
         })
     }
@@ -274,25 +253,52 @@ pub struct TCPRequest {
 }
 
 impl TCPRequest {
-    pub fn try_from_binding(binding: bindings::TCP) -> Result<Self> {
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::TCPOutput>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O>,
+    {
+        Ok(crate::TCPOutput {
+            host: self.host.evaluate(state)?,
+            port: self.port.evaluate(state)?,
+            body: self.body.evaluate(state)?.into(),
+            pause: self
+                .pause
+                .into_iter()
+                .map(|p| {
+                    Ok(crate::PauseOutput {
+                        after: p.after.evaluate(state)?,
+                        duration: p.duration.evaluate(state)?,
+                    })
+                })
+                .collect::<crate::Result<_>>()?,
+            response: None,
+        })
+    }
+}
+
+impl TryFrom<bindings::TCP> for TCPRequest {
+    type Error = Error;
+    fn try_from(binding: bindings::TCP) -> Result<Self> {
         Ok(Self {
             host: binding
                 .host
-                .map(PlanValue::<String>::try_from_binding)
+                .map(PlanValue::<String>::try_from)
                 .ok_or_else(|| Error::from("tcp.host is required"))??,
             port: binding
                 .port
-                .map(PlanValue::<u16>::try_from_binding)
+                .map(PlanValue::<u16>::try_from)
                 .ok_or_else(|| Error::from("tcp.port is required"))??,
             body: binding
                 .body
-                .map(PlanValue::<Vec<u8>>::try_from_binding)
+                .map(PlanValue::<Vec<u8>>::try_from)
                 .transpose()?
                 .unwrap_or_else(|| PlanValue::Literal(Vec::new())),
             pause: binding
                 .pause
                 .into_iter()
-                .map(Pause::try_from_binding)
+                .map(Pause::try_from)
                 .collect::<Result<_>>()?,
         })
     }
@@ -376,36 +382,6 @@ impl TryFrom<PlanData> for TLSVersion {
     }
 }
 
-impl TryFrom<toml::Value> for PlanData {
-    type Error = Error;
-    fn try_from(value: toml::Value) -> std::result::Result<Self, Self::Error> {
-        Ok(PlanData(match value {
-            toml::Value::String(x) => cel_interpreter::Value::String(Rc::new(x)),
-            toml::Value::Integer(x) => cel_interpreter::Value::Int(
-                i32::try_from(x).map_err(|e| Error::from(e.to_string()))?,
-            ),
-            toml::Value::Float(x) => cel_interpreter::Value::Float(x),
-            toml::Value::Boolean(x) => cel_interpreter::Value::Bool(x),
-            toml::Value::Datetime(x) => cel_interpreter::Value::Timestamp(
-                chrono::DateTime::parse_from_rfc3339(&x.to_string())
-                    .map_err(|e| Error(e.to_string()))?,
-            ),
-            toml::Value::Array(x) => cel_interpreter::Value::List(Rc::new(
-                x.into_iter()
-                    .map(|x| Ok(PlanData::try_from(x)?.0))
-                    .collect::<Result<_>>()?,
-            )),
-            toml::Value::Table(x) => cel_interpreter::Value::Map(cel_interpreter::objects::Map {
-                map: Rc::new(
-                    x.into_iter()
-                        .map(|(k, v)| Ok((k.into(), PlanData::try_from(v)?.0)))
-                        .collect::<Result<_>>()?,
-                ),
-            }),
-        }))
-    }
-}
-
 impl From<cel_interpreter::Value> for PlanData {
     fn from(value: cel_interpreter::Value) -> Self {
         PlanData(value)
@@ -428,29 +404,57 @@ pub struct TLSRequest {
 }
 
 impl TLSRequest {
-    pub fn try_from_binding(binding: bindings::TLS) -> Result<Self> {
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::TLSOutput>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O>,
+    {
+        Ok(crate::TLSOutput {
+            host: self.host.evaluate(state)?,
+            port: self.port.evaluate(state)?,
+            body: self.body.evaluate(state)?.into(),
+            version: self.version.map(|v| v.evaluate(state)).transpose()?,
+            pause: self
+                .pause
+                .into_iter()
+                .map(|p| {
+                    Ok(crate::PauseOutput {
+                        after: p.after.evaluate(state)?,
+                        duration: p.duration.evaluate(state)?,
+                    })
+                })
+                .collect::<crate::Result<_>>()?,
+            response: None,
+        })
+    }
+}
+
+impl TryFrom<bindings::TLS> for TLSRequest {
+    type Error = Error;
+    fn try_from(binding: bindings::TLS) -> Result<Self> {
         Ok(Self {
             host: binding
                 .host
-                .map(PlanValue::<String>::try_from_binding)
+                .map(PlanValue::<String>::try_from)
                 .ok_or_else(|| Error::from("tls.host is required"))??,
             port: binding
                 .port
-                .map(PlanValue::<u16>::try_from_binding)
+                .map(PlanValue::<u16>::try_from)
                 .ok_or_else(|| Error::from("tls.port is required"))??,
             body: binding
                 .body
-                .map(PlanValue::<Vec<u8>>::try_from_binding)
+                .map(PlanValue::<Vec<u8>>::try_from)
                 .transpose()?
                 .unwrap_or_else(|| PlanValue::Literal(Vec::new())),
             version: binding
                 .body
-                .map(PlanValue::<TLSVersion>::try_from_binding)
+                .map(PlanValue::<TLSVersion>::try_from)
                 .transpose()?,
             pause: binding
                 .pause
                 .into_iter()
-                .map(Pause::try_from_binding)
+                .map(Pause::try_from)
                 .collect::<Result<_>>()?,
         })
     }
@@ -459,114 +463,349 @@ impl TLSRequest {
 #[derive(Debug, Default, Clone)]
 pub struct WebsocketRequest {}
 
-impl TryFrom<toml::Value> for WebsocketRequest {
+#[derive(Debug, Default, Clone)]
+pub struct QUICRequest {
+    pub host: PlanValue<String>,
+    pub port: PlanValue<u16>,
+    pub body: PlanValue<Vec<u8>>,
+    pub version: Option<PlanValue<TLSVersion>>,
+    pub pause: Vec<Pause>,
+}
+
+impl TryFrom<bindings::QUIC> for QUICRequest {
     type Error = Error;
-    fn try_from(value: toml::Value) -> Result<Self> {
-        let toml::Value::Table(mut protocol) = value else {
-            return Err(Error::from("invalid type"));
-        };
-        Ok(Self {})
+    fn try_from(binding: bindings::QUIC) -> Result<Self> {
+        Ok(Self {
+            host: binding
+                .host
+                .map(PlanValue::<String>::try_from)
+                .ok_or_else(|| Error::from("quic.host is required"))??,
+            port: binding
+                .port
+                .map(PlanValue::<u16>::try_from)
+                .ok_or_else(|| Error::from("quic.port is required"))??,
+            body: binding
+                .body
+                .map(PlanValue::<Vec<u8>>::try_from)
+                .transpose()?
+                .unwrap_or_else(|| PlanValue::Literal(Vec::new())),
+            version: binding
+                .body
+                .map(PlanValue::<TLSVersion>::try_from)
+                .transpose()?,
+            pause: binding
+                .pause
+                .into_iter()
+                .map(Pause::try_from)
+                .collect::<Result<_>>()?,
+        })
     }
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct QUICRequest {}
+pub struct UDPRequest {
+    pub body: PlanValue<Vec<u8>>,
+    pub host: PlanValue<String>,
+    pub port: PlanValue<u16>,
+    pub pause: Vec<Pause>,
+}
 
-impl TryFrom<toml::Value> for QUICRequest {
+impl TryFrom<bindings::UDP> for UDPRequest {
     type Error = Error;
-    fn try_from(value: toml::Value) -> Result<Self> {
-        let toml::Value::Table(mut protocol) = value else {
-            return Err(Error::from("invalid type"));
-        };
-        Ok(Self {})
+    fn try_from(binding: bindings::UDP) -> Result<Self> {
+        Ok(Self {
+            host: binding
+                .host
+                .map(PlanValue::<String>::try_from)
+                .ok_or_else(|| Error::from("udp.host is required"))??,
+            port: binding
+                .port
+                .map(PlanValue::<u16>::try_from)
+                .ok_or_else(|| Error::from("udp.port is required"))??,
+            body: binding
+                .body
+                .map(PlanValue::<Vec<u8>>::try_from)
+                .transpose()?
+                .unwrap_or_else(|| PlanValue::Literal(Vec::new())),
+            pause: binding
+                .pause
+                .into_iter()
+                .map(Pause::try_from)
+                .collect::<Result<_>>()?,
+        })
     }
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct UDPRequest {}
-
-impl TryFrom<toml::Value> for UDPRequest {
-    type Error = Error;
-    fn try_from(value: toml::Value) -> Result<Self> {
-        let toml::Value::Table(mut protocol) = value else {
-            return Err(Error::from("invalid type"));
-        };
-        Ok(Self {})
-    }
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct IPRequest {}
-
-impl TryFrom<toml::Value> for IPRequest {
-    type Error = Error;
-    fn try_from(value: toml::Value) -> Result<Self> {
-        let toml::Value::Table(mut protocol) = value else {
-            return Err(Error::from("invalid type"));
-        };
-        Ok(Self {})
-    }
-}
+//#[derive(Debug, Default, Clone)]
+//pub struct IPRequest {}
 
 #[derive(Debug, Clone)]
-pub struct Step {
-    pub name: String,
-    pub graphql: Option<GraphQLRequest>,
-    pub http: Option<HTTPRequest>,
-    pub http1: Option<HTTP1Request>,
-    pub http2: Option<HTTP2Request>,
-    pub http3: Option<HTTP3Request>,
-    pub tls: Option<TLSRequest>,
-    pub tcp: Option<TCPRequest>,
+pub enum Step {
+    GraphQLHTTP {
+        graphql: GraphQLRequest,
+        http: HTTPRequest,
+    },
+    GraphQLHTTP1 {
+        graphql: GraphQLRequest,
+        http1: HTTP1Request,
+        tls: Option<TLSRequest>,
+        tcp: TCPRequest,
+    },
+    GraphQLHTTP2 {
+        graphql: GraphQLRequest,
+        http2: HTTP2Request,
+        tls: Option<TLSRequest>,
+        tcp: TCPRequest,
+    },
+    GraphQLHTTP3 {
+        graphql: GraphQLRequest,
+        http3: HTTP3Request,
+        quic: QUICRequest,
+        udp: UDPRequest,
+    },
+    HTTP {
+        http: HTTPRequest,
+    },
+    HTTP1 {
+        http1: HTTP1Request,
+        tls: Option<TLSRequest>,
+        tcp: TCPRequest,
+    },
+    HTTP2 {
+        http2: HTTP2Request,
+        tls: Option<TLSRequest>,
+        tcp: TCPRequest,
+    },
+    HTTP3 {
+        http3: HTTP3Request,
+        quic: QUICRequest,
+        udp: UDPRequest,
+    },
+    TLSTCP {
+        tls: TLSRequest,
+        tcp: TCPRequest,
+    },
+    TCP {
+        tcp: TCPRequest,
+    },
+    QUIC {
+        quic: QUICRequest,
+        udp: UDPRequest,
+    },
+    UDP {
+        udp: UDPRequest,
+    },
 }
 
 impl Step {
     pub fn from_bindings(name: String, binding: bindings::Step) -> Result<Step> {
-        let mut s = Self {
-            name,
-            graphql: binding
-                .graphql
-                .map(GraphQLRequest::try_from_binding)
-                .transpose()?,
-            http: binding
-                .http
-                .map(HTTPRequest::try_from_binding)
-                .transpose()?,
-            http1: binding
-                .http1
-                .map(HTTP1Request::try_from_binding)
-                .transpose()?,
-            http2: binding
-                .http2
-                .map(HTTP2Request::try_from_binding)
-                .transpose()?,
-            http3: binding
-                .http3
-                .map(HTTP3Request::try_from_binding)
-                .transpose()?,
-            tls: binding.tls.map(TLSRequest::try_from_binding).transpose()?,
-            tcp: binding.tcp.map(TCPRequest::try_from_binding).transpose()?,
-        };
-        Ok(s)
+        match binding {
+            bindings::Step {
+                graphql: Some(gql),
+                http: Some(http),
+                http1: None,
+                http2: None,
+                http3: None,
+                tls: None,
+                tcp: None,
+                quic: None,
+                udp: None,
+            } => Ok(Step::GraphQLHTTP {
+                http: http.try_into()?,
+                graphql: gql.try_into()?,
+            }),
+            bindings::Step {
+                graphql: Some(gql),
+                http: None,
+                http1: Some(http1),
+                http2: None,
+                http3: None,
+                tls,
+                tcp: Some(tcp),
+                quic: None,
+                udp: None,
+            } => Ok(Step::GraphQLHTTP1 {
+                http1: http1.try_into()?,
+                graphql: gql.try_into()?,
+                tls: tls.map(TLSRequest::try_from).transpose()?,
+                tcp: tcp.try_into()?,
+            }),
+            bindings::Step {
+                graphql: Some(gql),
+                http: None,
+                http1: None,
+                http2: Some(http2),
+                http3: None,
+                tls,
+                tcp: Some(tcp),
+                quic: None,
+                udp: None,
+            } => Ok(Step::GraphQLHTTP2 {
+                http2: http2.try_into()?,
+                graphql: gql.try_into()?,
+                tls: tls.map(TLSRequest::try_from).transpose()?,
+                tcp: tcp.try_into()?,
+            }),
+            bindings::Step {
+                graphql: Some(gql),
+                http: None,
+                http1: None,
+                http2: None,
+                http3: Some(http3),
+                tls: None,
+                tcp: None,
+                quic: Some(quic),
+                udp: Some(udp),
+            } => Ok(Step::GraphQLHTTP3 {
+                graphql: gql.try_into()?,
+                http3: http3.try_into()?,
+                quic: quic.try_into()?,
+                udp: udp.try_into()?,
+            }),
+            _ => Err(Error::from("step has incompatible protocols")),
+        }
+    }
+
+    pub fn into_stack(self) -> Vec<Protocol> {
+        match self {
+            Self::GraphQLHTTP { graphql, http } => {
+                vec![Protocol::HTTP(http), Protocol::GraphQL(graphql)]
+            }
+            Self::GraphQLHTTP1 {
+                graphql,
+                http1,
+                tls,
+                tcp,
+            } => {
+                if let Some(tls) = tls {
+                    vec![
+                        Protocol::TCP(tcp),
+                        Protocol::TLS(tls),
+                        Protocol::HTTP1(http1),
+                        Protocol::GraphQL(graphql),
+                    ]
+                } else {
+                    vec![
+                        Protocol::TCP(tcp),
+                        Protocol::HTTP1(http1),
+                        Protocol::GraphQL(graphql),
+                    ]
+                }
+            }
+            Self::GraphQLHTTP2 {
+                graphql,
+                http2,
+                tls,
+                tcp,
+            } => {
+                if let Some(tls) = tls {
+                    vec![
+                        Protocol::TCP(tcp),
+                        Protocol::TLS(tls),
+                        Protocol::HTTP2(http2),
+                        Protocol::GraphQL(graphql),
+                    ]
+                } else {
+                    vec![
+                        Protocol::TCP(tcp),
+                        Protocol::HTTP2(http2),
+                        Protocol::GraphQL(graphql),
+                    ]
+                }
+            }
+            Self::GraphQLHTTP3 {
+                graphql,
+                http3,
+                quic,
+                udp,
+            } => {
+                vec![
+                    Protocol::UDP(udp),
+                    Protocol::QUIC(quic),
+                    Protocol::HTTP3(http3),
+                    Protocol::GraphQL(graphql),
+                ]
+            }
+            Self::HTTP { http } => {
+                vec![Protocol::HTTP(http)]
+            }
+            Self::HTTP1 { http1, tls, tcp } => {
+                if let Some(tls) = tls {
+                    vec![
+                        Protocol::TCP(tcp),
+                        Protocol::TLS(tls),
+                        Protocol::HTTP1(http1),
+                    ]
+                } else {
+                    vec![Protocol::TCP(tcp), Protocol::HTTP1(http1)]
+                }
+            }
+            Self::HTTP2 { http2, tls, tcp } => {
+                if let Some(tls) = tls {
+                    vec![
+                        Protocol::TCP(tcp),
+                        Protocol::TLS(tls),
+                        Protocol::HTTP2(http2),
+                    ]
+                } else {
+                    vec![Protocol::TCP(tcp), Protocol::HTTP2(http2)]
+                }
+            }
+            Self::HTTP3 { http3, quic, udp } => {
+                vec![
+                    Protocol::UDP(udp),
+                    Protocol::QUIC(quic),
+                    Protocol::HTTP3(http3),
+                ]
+            }
+            Self::TLSTCP { tls, tcp } => {
+                vec![Protocol::TCP(tcp), Protocol::TLS(tls)]
+            }
+            Self::TCP { tcp } => {
+                vec![Protocol::TCP(tcp)]
+            }
+            Self::QUIC { quic, udp } => {
+                vec![Protocol::QUIC(quic), Protocol::UDP(udp)]
+            }
+            Self::UDP { udp } => {
+                vec![Protocol::UDP(udp)]
+            }
+        }
     }
 }
 
 #[derive(Debug, Clone)]
 pub enum Protocol {
+    GraphQL(GraphQLRequest),
     HTTP(HTTPRequest),
     HTTP1(HTTP1Request),
     HTTP2(HTTP2Request),
     HTTP3(HTTP3Request),
     TLS(TLSRequest),
     TCP(TCPRequest),
-    //UDP {
-    //    udp: UDPRequest,
-    //},
-    GraphQL(GraphQLRequest),
-    //GRPC {
-    //    grpc: GRPCRequest,
-    //    http2: HTTP2Request,
-    //},
+    QUIC(QUICRequest),
+    UDP(UDPRequest),
+}
+
+impl Protocol {
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<Output>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O>,
+    {
+        match self {
+            Self::GraphQL(proto) => proto.evaluate(state),
+            Self::HTTP(proto) => proto.evaluate(state),
+            Self::HTTP1(proto) => proto.evaluate(state),
+            Self::HTTP2(proto) => proto.evaluate(state),
+            Self::HTTP3(proto) => proto.evaluate(state),
+            Self::TLS(proto) => proto.evaluate(state),
+            Self::TCP(proto) => proto.evaluate(state),
+            Self::QUIC(proto) => proto.evaluate(state),
+            Self::UDP(proto) => proto.evaluate(state),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -584,16 +823,18 @@ impl<T: TryFrom<PlanData, Error = Error> + Clone + Default> Default for PlanValu
     }
 }
 
-impl PlanValue<String> {
-    pub fn try_from_binding(binding: bindings::Value) -> Result<Self> {
+impl TryFrom<bindings::Value> for PlanValue<String> {
+    type Error = Error;
+    fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
             bindings::Value::LiteralString(x) => Ok(Self::Literal(x)),
             _ => Err(Error(format!("invalid value {binding:?} for string field"))),
         }
     }
 }
-impl PlanValue<u16> {
-    pub fn try_from_binding(binding: bindings::Value) -> Result<Self> {
+impl TryFrom<bindings::Value> for PlanValue<u16> {
+    type Error = Error;
+    fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
             bindings::Value::LiteralInt(x) => {
                 Ok(Self::Literal(x.try_into().map_err(|_| {
@@ -606,8 +847,9 @@ impl PlanValue<u16> {
         }
     }
 }
-impl PlanValue<bool> {
-    pub fn try_from_binding(binding: bindings::Value) -> Result<Self> {
+impl TryFrom<bindings::Value> for PlanValue<bool> {
+    type Error = Error;
+    fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
             bindings::Value::LiteralBool(x) => Ok(Self::Literal(x)),
             _ => Err(Error(format!(
@@ -616,8 +858,9 @@ impl PlanValue<bool> {
         }
     }
 }
-impl PlanValue<Vec<u8>> {
-    pub fn try_from_binding(binding: bindings::Value) -> Result<Self> {
+impl TryFrom<bindings::Value> for PlanValue<Vec<u8>> {
+    type Error = Error;
+    fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
             bindings::Value::LiteralString(x) => Ok(PlanValue::Literal(x.into_bytes())),
             bindings::Value::LiteralBase64 { base64: data } => Ok(Self::Literal(
@@ -629,8 +872,9 @@ impl PlanValue<Vec<u8>> {
         }
     }
 }
-impl PlanValue<Duration> {
-    pub fn try_from_binding(binding: bindings::Value) -> Result<Self> {
+impl TryFrom<bindings::Value> for PlanValue<Duration> {
+    type Error = Error;
+    fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
             bindings::Value::LiteralString(x) => Ok(Self::Literal(Duration::from_nanos(
                 go_parse_duration::parse_duration(x.as_str())
@@ -644,8 +888,9 @@ impl PlanValue<Duration> {
         }
     }
 }
-impl PlanValue<TLSVersion> {
-    pub fn try_from_binding(binding: bindings::Value) -> Result<Self> {
+impl TryFrom<bindings::Value> for PlanValue<TLSVersion> {
+    type Error = Error;
+    fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
             bindings::Value::LiteralString(x) => Ok(Self::Literal(
                 TLSVersion::try_from_str(x.as_str())
@@ -707,75 +952,25 @@ impl<T: TryFrom<PlanData, Error = Error> + Clone> PlanValue<T> {
     }
 }
 
-impl<T: TryFrom<PlanData, Error = Error> + Clone> PlanValue<T> {
-    fn process_toml(val: toml::Value) -> Result<Option<Self>> {
-        match val {
-            toml::Value::String(s) => Ok(Some(Self::Literal(
-                PlanData::from(cel_interpreter::Value::from(s))
-                    .try_into()
-                    .map_err(|e: Error| Error(e.to_string()))?,
-            ))),
-            toml::Value::Boolean(b) => Ok(Some(Self::Literal(
-                PlanData::from(cel_interpreter::Value::from(b))
-                    .try_into()
-                    .map_err(|e: Error| Error(e.to_string()))?,
-            ))),
-            toml::Value::Table(mut t) => {
-                if let Some(toml::Value::Boolean(unset)) = t.remove("unset") {
-                    if unset {
-                        return Ok(None);
-                    }
-                }
-                if let Some(toml::Value::String(s)) = t.remove("template") {
-                    Ok(Some(Self::Dynamic {
-                        template: s,
-                        vars: t
-                            .remove("vars")
-                            .map(Self::vars_from_toml)
-                            .transpose()?
-                            .unwrap_or_default(),
-                    }))
-                } else if let Some(toml::Value::String(s)) = t.remove("value") {
-                    Ok(Some(Self::Literal(
-                        PlanData(cel_interpreter::Value::from(s)).try_into()?,
-                    )))
-                } else {
-                    Err(format!(
-                        "value long-form must have unset, template, or value set {:?}",
-                        t,
-                    )
-                    .into())
-                }
-            }
-            _ => return Err("invalid value".into()),
-        }
-    }
-}
-
 #[derive(Debug, Default, Clone)]
 pub struct PlanValueTable(pub Vec<(PlanValue<String>, Option<PlanValue<String>>)>);
 
-impl PlanValueTable {
-    pub fn try_from_binding(binding: bindings::Table) -> Result<Self> {
+impl TryFrom<bindings::Table> for PlanValueTable {
+    type Error = Error;
+    fn try_from(binding: bindings::Table) -> Result<Self> {
         Ok(PlanValueTable(match binding {
             bindings::Table::Map(m) => m
                 .into_iter()
-                .map(|(k, v)| {
-                    Ok((
-                        PlanValue::Literal(k),
-                        v.map(|v| PlanValue::<String>::try_from_binding(v))
-                            .transpose()?,
-                    ))
-                })
+                .map(|(k, v)| Ok((PlanValue::Literal(k), v.map(|v| v.try_into()).transpose()?)))
                 .collect::<Result<_>>()?,
             bindings::Table::Array(a) => a
                 .into_iter()
                 .map(|entry| {
                     Ok(Some((
-                        PlanValue::<String>::try_from_binding(entry.key)?,
+                        PlanValue::<String>::try_from(entry.key)?,
                         entry
                             .value
-                            .map(|v| PlanValue::<String>::try_from_binding(v))
+                            .map(|v| PlanValue::<String>::try_from(v))
                             .transpose()?,
                     )))
                 })
@@ -783,7 +978,9 @@ impl PlanValueTable {
                 .collect::<Result<_>>()?,
         }))
     }
+}
 
+impl PlanValueTable {
     pub fn evaluate<'a, O, S, I>(&self, state: &S) -> Result<Vec<(String, Option<String>)>>
     where
         O: Into<&'a str>,
@@ -800,9 +997,7 @@ impl PlanValueTable {
             })
             .collect()
     }
-}
 
-impl PlanValueTable {
     fn leaf_to_key_value(key: String, value: &mut toml::Value) -> Result<PlanValue<String>> {
         match value {
             // Strings or array values mean the key is not templated.

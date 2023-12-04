@@ -15,8 +15,8 @@ body.vars.abc = "a.response.body.auto.abc"
 body.vars.def = "a.response.body.auto.abc"
 
 # import
-[[e]]
-uri = "courier://example.toml"
+[[e.module]]
+uri = "file://example.toml"
 
 [courier.vars]
 a = "b"

@@ -4,12 +4,23 @@ use cel_interpreter::{
     objects::{Key, Map},
     Value,
 };
+use url::Url;
 
-use crate::TCPRequest;
+use crate::TLSVersion;
 
 pub trait State<'a, O: Into<&'a str>, I: IntoIterator<Item = O>> {
     fn get(&self, name: &'a str) -> Option<&StepOutput>;
     fn iter(&self) -> I;
+}
+
+pub enum Output {
+    GraphQL(GraphQLOutput),
+    HTTP(HTTPOutput),
+    HTTP1(HTTPOutput),
+    HTTP2(HTTPOutput),
+    HTTP3(HTTPOutput),
+    TLS(TLSOutput),
+    TCP(TCPOutput),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -27,7 +38,7 @@ impl From<&StepOutput> for Value {
     fn from(value: &StepOutput) -> Self {
         let mut map = HashMap::with_capacity(4);
         if let Some(out) = &value.graphql {
-            map.insert("http".into(), out.into());
+            map.insert("graphql".into(), out.into());
         }
         if let Some(out) = &value.http {
             map.insert("http".into(), out.into());
@@ -65,18 +76,19 @@ pub type OutputStack = Vec<ProtocolOutput>;
 
 #[derive(Debug, Clone)]
 pub struct HTTPOutput {
-    pub url: String,
+    pub url: Url,
     pub method: String,
+    pub protocol: String,
     pub headers: Vec<(String, String)>,
-    pub body: Option<String>,
-    pub response: HTTPResponse,
+    pub body: Vec<u8>,
+    pub response: Option<HTTPResponse>,
     pub pause: Vec<PauseOutput>,
 }
 
 impl From<&HTTPOutput> for Value {
     fn from(value: &HTTPOutput) -> Self {
         let mut map: HashMap<Key, Value> = HashMap::with_capacity(5);
-        map.insert("url".into(), value.url.clone().into());
+        map.insert("url".into(), value.url.to_string().into());
         map.insert("method".into(), value.method.clone().into());
         map.insert(
             "headers".into(),
@@ -126,7 +138,7 @@ impl From<&HTTPResponse> for Value {
 
 #[derive(Debug, Clone)]
 pub struct GraphQLOutput {
-    pub url: String,
+    pub url: Url,
     pub query: String,
     pub operation: Option<String>,
     pub use_query_string: bool,
@@ -137,7 +149,7 @@ pub struct GraphQLOutput {
 impl From<&GraphQLOutput> for Value {
     fn from(value: &GraphQLOutput) -> Self {
         let mut map: HashMap<Key, Value> = HashMap::with_capacity(6);
-        map.insert("url".into(), value.url.clone().into());
+        map.insert("url".into(), value.url.to_string().into());
         map.insert("query".into(), value.query.clone().into());
         map.insert(
             "params".into(),
@@ -186,8 +198,10 @@ impl From<&GraphQLResponse> for Value {
 pub struct TLSOutput {
     pub host: String,
     pub port: u16,
+    pub version: Option<TLSVersion>,
     pub body: Vec<u8>,
-    pub response: TLSResponse,
+    pub pause: Vec<PauseOutput>,
+    pub response: Option<TLSResponse>,
 }
 
 impl From<&TLSOutput> for Value {
@@ -195,6 +209,7 @@ impl From<&TLSOutput> for Value {
         let mut map = HashMap::with_capacity(4);
         map.insert("host".into(), value.host.clone().into());
         map.insert("port".into(), (value.port as u32).into());
+        map.insert("version".into(), (value.version).into());
         map.insert("body".into(), value.body.clone().into());
         map.insert("response".into(), (&value.response).into());
         Value::Map(Map { map: Rc::new(map) })
@@ -240,32 +255,6 @@ impl From<&TCPOutput> for Value {
             .as_ref()
             .map(|resp| map.insert("response".into(), resp.into()));
         Value::Map(Map { map: Rc::new(map) })
-    }
-}
-
-impl TCPRequest {
-    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<TCPOutput>
-    where
-        S: State<'a, O, I>,
-        O: Into<&'a str>,
-        I: IntoIterator<Item = O>,
-    {
-        Ok(TCPOutput {
-            host: self.host.evaluate(state)?,
-            port: self.port.evaluate(state)?,
-            body: self.body.evaluate(state)?.into(),
-            pause: self
-                .pause
-                .into_iter()
-                .map(|p| {
-                    Ok(PauseOutput {
-                        after: p.after.evaluate(state)?,
-                        duration: p.duration.evaluate(state)?,
-                    })
-                })
-                .collect::<crate::Result<_>>()?,
-            response: None,
-        })
     }
 }
 

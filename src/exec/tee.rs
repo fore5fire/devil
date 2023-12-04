@@ -1,15 +1,20 @@
-use std::ops::DerefMut;
 use std::pin::Pin;
+use std::{fmt::Debug, ops::DerefMut};
 
 use tokio::io::{self, AsyncRead, AsyncWrite};
 
-pub(crate) struct Tee<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> {
+pub(crate) trait Stream: AsyncRead + AsyncWrite + Unpin + Debug + Send + 'static {}
+
+impl<T: AsyncRead + AsyncWrite + Unpin + Debug + Send + 'static> Stream for T {}
+
+#[derive(Debug)]
+pub(crate) struct Tee<T: Stream> {
     inner: T,
     pub reads: Vec<u8>,
     pub writes: Vec<u8>,
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> Tee<T> {
+impl<T: Stream> Tee<T> {
     pub fn new(wrap: T) -> Self {
         Tee {
             inner: wrap,
@@ -25,7 +30,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> Tee<T> {
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> AsyncRead for Tee<T> {
+impl<T: Stream> AsyncRead for Tee<T> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -38,7 +43,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> AsyncRead for Tee<T> {
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + Send + 'static> AsyncWrite for Tee<T> {
+impl<T: Stream> AsyncWrite for Tee<T> {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,

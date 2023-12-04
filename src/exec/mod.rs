@@ -1,5 +1,7 @@
 pub mod graphql;
 pub mod http;
+pub mod http1;
+mod runner;
 pub mod tcp;
 mod tee;
 pub mod tls;
@@ -7,9 +9,10 @@ pub mod tls;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 
-use crate::{Plan, Protocol, Step, StepOutput};
+use crate::{Plan, Step, StepOutput};
 
-use self::tcp::TCPRunner;
+use self::runner::Runner;
+use self::tee::Stream;
 
 pub struct Executor<'a> {
     iter: indexmap::map::Iter<'a, String, Step>,
@@ -31,15 +34,26 @@ impl<'a> Executor<'a> {
         let inputs = &State {
             data: &self.outputs,
         };
-        let out = match &step.main {
-            Protocol::TCP(req) => TCPRunner::new(req.evaluate(inputs)?).await?,
-            Protocol::TLS(req) => tls::execute(req, &inputs).await?,
-            Protocol::HTTP(req) => http::execute(req, &inputs).await?,
-            Protocol::HTTP1(req) => http::execute(&req.http, &inputs).await?,
-            Protocol::HTTP2(req) => http::execute(&req.http, &inputs).await?,
-            Protocol::HTTP3(req) => http::execute(&req.http, &inputs).await?,
-            Protocol::GraphQL(req) => graphql::execute(&req, &inputs).await?,
-        };
+        let runner: Option<Runner<Box<dyn Stream>>>;
+        for proto in step.into_stack() {
+            runner = Some(
+                Runner::new(
+                    runner.map(|x| Box::new(x) as Box<dyn Stream>),
+                    proto.evaluate(inputs)?,
+                )
+                .await?,
+            )
+        }
+        let mut runner = runner.expect("no plan should have an empty protocol stack");
+        runner.execute().await?;
+        let out = StepOutput::default();
+        loop {
+            let (out, inner) = runner.finish().await?;
+            let Some(inner) = inner else {
+                break;
+            };
+            runner = inner;
+        }
 
         self.outputs.insert(name, out.clone());
         Ok(out)

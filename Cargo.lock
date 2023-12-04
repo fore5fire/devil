@@ -270,7 +270,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e496a50fda8aacccc86d7529e2c1e0892dbd0f898a6b5645b5561b89c3210efa"
 
 [[package]]
-name = "courier_ql"
+name = "courier_qe"
 version = "0.1.0"
 dependencies = [
  "base64",
@@ -283,6 +283,7 @@ dependencies = [
  "futures",
  "go-parse-duration",
  "http-body-util",
+ "httparse",
  "hyper",
  "hyper-util",
  "indexmap 2.1.0",

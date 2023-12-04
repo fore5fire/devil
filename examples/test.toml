@@ -2,21 +2,9 @@
 [a.http]
 url = "https://example.com/test"
 
-[b.http]
 url = "https://example.com/test"
 [b.http.headers]
-Content-Type = { _template = "application/{{ if a.http.response.json.foo else bar }}/{{ foo }}" }
-[b.http.Content-Type]
-template = "application/${type}/$other"
-open_delimiter = "${"
-close_delimiter = "}"
-[b.http.Content-Type.vars]
-type = "foo"
-[b.http.Content-Type.vars.other]
-if = "a.http.out.body.json.foo >= ${type}"
-if = "a.http.out.body.json.foo >= ${type}"
-then = "a.out.http.response.json.foo"
-else = ""
+Content-Type.cel = "application/{{ if a.http.response.json.foo else bar }}/{{ foo }}"
 
 [c.http]
 url = "https://example.com/test"
@@ -24,7 +12,7 @@ url = "https://example.com/test"
 after_headers = "50ms"
 after_handshake = "10ms"
 after_done = "100ms"
-[c.loop]
-until.timing.confidence = 0.95
-until.timing.interval = 
-until.minimum = 5
+[c.run]
+while.cel = ""
+for.cel = "def"
+if = ""
