@@ -9,10 +9,14 @@ pub mod tls;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 
-use crate::{Plan, Step, StepOutput};
+use crate::{Output, Plan, Step, StepOutput};
 
+use self::graphql::GraphQLRunner;
+use self::http::HTTPRunner;
+use self::http1::HTTP1Runner;
 use self::runner::Runner;
-use self::tee::Stream;
+use self::tcp::TCPRunner;
+use self::tls::TLSRunner;
 
 pub struct Executor<'a> {
     iter: indexmap::map::Iter<'a, String, Step>,
@@ -34,15 +38,34 @@ impl<'a> Executor<'a> {
         let inputs = &State {
             data: &self.outputs,
         };
-        let runner: Option<Runner<Box<dyn Stream>>>;
-        for proto in step.into_stack() {
-            runner = Some(
-                Runner::new(
-                    runner.map(|x| Box::new(x) as Box<dyn Stream>),
-                    proto.evaluate(inputs)?,
-                )
-                .await?,
-            )
+        let mut runner: Option<Box<dyn Runner>> = None;
+        for proto in step.stack() {
+            runner = Some(match proto.evaluate(inputs)? {
+                Output::GraphQL(proto) => Box::new(
+                    GraphQLRunner::new(
+                        runner.expect("no plan should have graphql as a base protocol"),
+                        proto,
+                    )
+                    .await?,
+                ),
+                Output::HTTP(proto) => Box::new(HTTPRunner::new(proto).await?),
+                Output::HTTP1(proto) => Box::new(
+                    HTTP1Runner::new(
+                        runner.expect("no plan should have http1 as a base protocol"),
+                        proto,
+                    )
+                    .await?,
+                ),
+                Output::TLS(proto) => Box::new(
+                    TLSRunner::new(
+                        runner.expect("no plan should have tls as a base protocol"),
+                        proto,
+                    )
+                    .await?,
+                ),
+                Output::TCP(proto) => Box::new(TCPRunner::new(proto).await?),
+                _ => return Err(Box::new(crate::Error::from("protocol not implemented"))),
+            })
         }
         let mut runner = runner.expect("no plan should have an empty protocol stack");
         runner.execute().await?;
