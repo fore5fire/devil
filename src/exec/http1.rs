@@ -2,16 +2,19 @@ use std::pin::Pin;
 use std::time::Duration;
 use std::time::Instant;
 
+use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+use super::runner::Runner;
 use super::tee::Stream;
 use super::tee::Tee;
 use crate::Error;
+use crate::Output;
 use crate::{HTTPOutput, HTTPResponse};
 
 #[derive(Debug)]
 pub(super) struct HTTP1Runner<S: Stream> {
-    out: HTTPOutput,
+    out: HTTP1Output,
     stream: Tee<S>,
     start_time: Instant,
     header_sent: bool,
@@ -75,36 +78,6 @@ impl<S: Stream> HTTP1Runner<S> {
         })
     }
 
-    pub(super) async fn execute(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // Headers will be sent automatically before the first body byte.
-        if !self.out.body.is_empty() {
-            self.stream.write_all(self.out.body.as_slice()).await?;
-        }
-        self.stream.flush().await?;
-        if let Some(p) = self.out.pause.iter().find(|p| p.after == "request_body") {
-            println!("pausing after {} for {:?}", p.after, p.duration);
-            tokio::time::sleep(p.duration).await;
-        }
-        let mut response = Vec::new();
-        self.stream.read_to_end(&mut response).await?;
-        Ok(())
-    }
-
-    pub(super) async fn finish(mut self) -> crate::Result<(HTTPOutput, S)> {
-        let (stream, writes, reads) = self.stream.into_parts();
-
-        // Update the response body to the actual data that was sent since it will differ for
-        // layered protocols.
-        self.out.body = writes;
-
-        // The response should always be set once the header has been read.
-        if let Some(response) = &mut self.out.response {
-            response.body = reads;
-            response.duration = self.start_time.elapsed();
-        }
-        Ok((self.out, stream))
-    }
-
     #[inline]
     async fn send_header(&mut self) -> std::io::Result<()> {
         // Build a buffer with the header contents to avoid the overhead of separate writes.
@@ -124,7 +97,7 @@ impl<S: Stream> HTTP1Runner<S> {
                     .iter()
                     .fold(0, |sum, (k, v)| sum + k.len() + 2 + v.len() + 2)
                 + 2
-                + self.out.body.len(),
+                + self.out.body.as_ref().map(Vec::len).unwrap_or(0),
         );
         buf.extend_from_slice(self.out.method.as_bytes());
         buf.push(b' ');
@@ -191,6 +164,51 @@ impl<S: Stream> HTTP1Runner<S> {
                 Ok(httparse::Status::Partial) => drop(resp),
                 Err(e) => return Err(Error(e.to_string())),
             }
+        }
+    }
+}
+
+#[async_trait]
+impl Runner for HTTP1Runner<Box<dyn Runner>> {
+    async fn execute(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Headers will be sent automatically before the first body byte.
+        if let Some(body) = &self.out.body {
+            self.size_hint(body.len());
+            self.stream.write_all(body.as_slice()).await?;
+        }
+        self.stream.flush().await?;
+        if let Some(p) = self.out.pause.iter().find(|p| p.after == "request_body") {
+            println!("pausing after {} for {:?}", p.after, p.duration);
+            tokio::time::sleep(p.duration).await;
+        }
+        let mut response = Vec::new();
+        self.stream.read_to_end(&mut response).await?;
+        Ok(())
+    }
+
+    async fn finish(mut self) -> crate::Result<(Output, Option<Box<dyn Runner>>)> {
+        let (stream, writes, reads) = self.stream.into_parts();
+
+        // Update the response body to the actual data that was sent since it will differ for
+        // layered protocols.
+        self.out.body = Some(writes);
+
+        // The response should always be set once the header has been read.
+        if let Some(response) = &mut self.out.response {
+            response.body = reads;
+            response.duration = self.start_time.elapsed();
+        }
+        Ok((Output::HTTP(self.out), Some(stream)))
+    }
+
+    fn size_hint(&mut self, size: usize) {
+        if self.header_sent {
+            panic!("size_hint called after header was already sent")
+        }
+        if self.out.automatic_content_length {
+            self.out
+                .headers
+                .push(("Content-Length".to_owned(), format!("{size}")));
         }
     }
 }

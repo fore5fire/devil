@@ -2,17 +2,18 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::time::Instant;
 
+use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{lookup_host, TcpStream};
 
-use crate::{Error, TCPOutput, TCPResponse};
+use crate::{Error, Output, TCPOutput, TCPResponse};
 
-use super::tee::Tee;
+use super::runner::Runner;
 
 #[derive(Debug)]
 pub(super) struct TCPRunner {
     out: TCPOutput,
-    stream: Tee<TcpStream>,
+    stream: TcpStream,
     start: Instant,
 }
 
@@ -65,13 +66,16 @@ impl<'a> TCPRunner {
             std::thread::sleep(p.duration);
         }
         Ok(TCPRunner {
-            stream: Tee::new(stream),
+            stream,
             start,
             out: data,
         })
     }
+}
 
-    pub(super) async fn execute(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+#[async_trait]
+impl Runner for TCPRunner {
+    async fn execute(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.stream.write_all(&self.out.body).await?;
         self.stream.flush().await?;
         if let Some(p) = self.out.pause.iter().find(|p| p.after == "request_body") {
@@ -83,7 +87,7 @@ impl<'a> TCPRunner {
         Ok(())
     }
 
-    pub(super) async fn finish(mut self) -> TCPOutput {
+    async fn finish(mut self) -> crate::Result<(Output, Option<Box<dyn Runner>>)> {
         let (_, writes, reads) = self.stream.into_parts();
 
         self.out.body = writes;
@@ -91,7 +95,7 @@ impl<'a> TCPRunner {
             body: reads,
             duration: self.start.elapsed(),
         });
-        self.out
+        Ok((Output::TCP(self.out), None))
     }
 }
 

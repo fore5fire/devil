@@ -5,7 +5,8 @@ use crate::{
 use base64::Engine;
 use cel_interpreter::{Context, Program};
 use indexmap::IndexMap;
-use std::{collections::HashMap, ops::Deref, time::Duration};
+use std::{collections::HashMap, ops::Deref, rc::Rc, time::Duration};
+use url::Url;
 
 #[derive(Debug)]
 pub struct Plan {
@@ -106,6 +107,20 @@ impl TLSVersion {
     }
 }
 
+impl From<&TLSVersion> for cel_interpreter::Value {
+    fn from(value: &TLSVersion) -> Self {
+        match value {
+            TLSVersion::SSL1 => cel_interpreter::Value::String(Rc::new("ssl1".to_owned())),
+            TLSVersion::SSL2 => cel_interpreter::Value::String(Rc::new("ssl2".to_owned())),
+            TLSVersion::SSL3 => cel_interpreter::Value::String(Rc::new("ssl3".to_owned())),
+            TLSVersion::TLS1_0 => cel_interpreter::Value::String(Rc::new("tls1.0".to_owned())),
+            TLSVersion::TLS1_1 => cel_interpreter::Value::String(Rc::new("tls1.1".to_owned())),
+            TLSVersion::TLS1_2 => cel_interpreter::Value::String(Rc::new("tls1.2".to_owned())),
+            TLSVersion::TLS1_3 => cel_interpreter::Value::String(Rc::new("tls1.3".to_owned())),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum HTTPVersion {
     HTTP0_9,
@@ -139,9 +154,9 @@ impl TryFrom<bindings::Pause> for Pause {
 
 #[derive(Debug, Default, Clone)]
 pub struct HTTPRequest {
-    pub url: PlanValue<String>,
-    pub body: Option<PlanValue<Vec<u8>>>,
+    pub url: PlanValue<Url>,
     pub method: Option<PlanValue<String>>,
+    pub body: Option<PlanValue<Vec<u8>>>,
     pub headers: PlanValueTable,
 
     pub pause: Vec<Pause>,
@@ -169,6 +184,45 @@ impl TryFrom<bindings::HTTP> for HTTPRequest {
                 .into_iter()
                 .map(Pause::try_from)
                 .collect::<Result<_>>()?,
+        })
+    }
+}
+
+impl HTTPRequest {
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::HTTPOutput>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O>,
+    {
+        Ok(crate::HTTPOutput {
+            url: self.url.evaluate(state)?,
+            method: self
+                .method
+                .map(|body| Ok(body.evaluate(state)?))
+                .transpose()?,
+            headers: self
+                .headers
+                .evaluate(state)?
+                .into_iter()
+                .map(|(k, v)| (k, v.unwrap_or_default()))
+                .collect(),
+            body: self
+                .body
+                .map(|body| Ok(body.evaluate(state)?))
+                .transpose()?,
+            automatic_content_length: self.automatic_content_length.evaluate(state)?,
+            pause: self
+                .pause
+                .into_iter()
+                .map(|p| {
+                    Ok(crate::PauseOutput {
+                        after: p.after.evaluate(state)?,
+                        duration: p.duration.evaluate(state)?,
+                    })
+                })
+                .collect::<crate::Result<_>>()?,
+            response: None,
         })
     }
 }
@@ -369,16 +423,29 @@ impl TryFrom<PlanData> for Duration {
 impl TryFrom<PlanData> for TLSVersion {
     type Error = Error;
     fn try_from(value: PlanData) -> Result<Self> {
-        match value.0 {
-            cel_interpreter::Value::String(x) if *x == "SSL1" => Ok(TLSVersion::SSL1),
-            cel_interpreter::Value::String(x) if *x == "SSL2" => Ok(TLSVersion::SSL2),
-            cel_interpreter::Value::String(x) if *x == "SSL3" => Ok(TLSVersion::SSL3),
-            cel_interpreter::Value::String(x) if *x == "TLS1_0" => Ok(TLSVersion::TLS1_0),
-            cel_interpreter::Value::String(x) if *x == "TLS1_1" => Ok(TLSVersion::TLS1_1),
-            cel_interpreter::Value::String(x) if *x == "TLS1_2" => Ok(TLSVersion::TLS1_2),
-            cel_interpreter::Value::String(x) if *x == "TLS1_3" => Ok(TLSVersion::TLS1_3),
-            _ => Err(Error("invalid TLS version".to_owned())),
+        let cel_interpreter::Value::String(x) = value.0 else {
+            return Err(Error("TLS version must be a string".to_owned()));
+        };
+        match x.as_str() {
+            "SSL1" => Ok(TLSVersion::SSL1),
+            "SSL2" => Ok(TLSVersion::SSL2),
+            "SSL3" => Ok(TLSVersion::SSL3),
+            "TLS1_0" => Ok(TLSVersion::TLS1_0),
+            "TLS1_1" => Ok(TLSVersion::TLS1_1),
+            "TLS1_2" => Ok(TLSVersion::TLS1_2),
+            "TLS1_3" => Ok(TLSVersion::TLS1_3),
+            _ => Err(Error::from("invalid TLS version")),
         }
+    }
+}
+
+impl TryFrom<PlanData> for Url {
+    type Error = Error;
+    fn try_from(value: PlanData) -> Result<Self> {
+        let cel_interpreter::Value::String(x) = value.0 else {
+            return Err(Error("TLS version must be a string".to_owned()));
+        };
+        Url::parse(&x).map_err(|e| Error(e.to_string()))
     }
 }
 
@@ -666,12 +733,12 @@ impl Step {
         }
     }
 
-    pub fn into_stack(self) -> Vec<Protocol> {
+    pub fn stack(&self) -> Vec<&Protocol> {
         match self {
-            Self::GraphQLHTTP { graphql, http } => {
-                vec![Protocol::HTTP(http), Protocol::GraphQL(graphql)]
+            &Self::GraphQLHTTP { graphql, http } => {
+                vec![&Protocol::HTTP(http), &Protocol::GraphQL(graphql)]
             }
-            Self::GraphQLHTTP1 {
+            &Self::GraphQLHTTP1 {
                 graphql,
                 http1,
                 tls,
@@ -679,20 +746,20 @@ impl Step {
             } => {
                 if let Some(tls) = tls {
                     vec![
-                        Protocol::TCP(tcp),
-                        Protocol::TLS(tls),
-                        Protocol::HTTP1(http1),
-                        Protocol::GraphQL(graphql),
+                        &Protocol::TCP(tcp),
+                        &Protocol::TLS(tls),
+                        &Protocol::HTTP1(http1),
+                        &Protocol::GraphQL(graphql),
                     ]
                 } else {
                     vec![
-                        Protocol::TCP(tcp),
-                        Protocol::HTTP1(http1),
-                        Protocol::GraphQL(graphql),
+                        &Protocol::TCP(tcp),
+                        &Protocol::HTTP1(http1),
+                        &Protocol::GraphQL(graphql),
                     ]
                 }
             }
-            Self::GraphQLHTTP2 {
+            &Self::GraphQLHTTP2 {
                 graphql,
                 http2,
                 tls,
@@ -700,75 +767,75 @@ impl Step {
             } => {
                 if let Some(tls) = tls {
                     vec![
-                        Protocol::TCP(tcp),
-                        Protocol::TLS(tls),
-                        Protocol::HTTP2(http2),
-                        Protocol::GraphQL(graphql),
+                        &Protocol::TCP(tcp),
+                        &Protocol::TLS(tls),
+                        &Protocol::HTTP2(http2),
+                        &Protocol::GraphQL(graphql),
                     ]
                 } else {
                     vec![
-                        Protocol::TCP(tcp),
-                        Protocol::HTTP2(http2),
-                        Protocol::GraphQL(graphql),
+                        &Protocol::TCP(tcp),
+                        &Protocol::HTTP2(http2),
+                        &Protocol::GraphQL(graphql),
                     ]
                 }
             }
-            Self::GraphQLHTTP3 {
+            &Self::GraphQLHTTP3 {
                 graphql,
                 http3,
                 quic,
                 udp,
             } => {
                 vec![
-                    Protocol::UDP(udp),
-                    Protocol::QUIC(quic),
-                    Protocol::HTTP3(http3),
-                    Protocol::GraphQL(graphql),
+                    &Protocol::UDP(udp),
+                    &Protocol::QUIC(quic),
+                    &Protocol::HTTP3(http3),
+                    &Protocol::GraphQL(graphql),
                 ]
             }
-            Self::HTTP { http } => {
-                vec![Protocol::HTTP(http)]
+            &Self::HTTP { http } => {
+                vec![&Protocol::HTTP(http)]
             }
-            Self::HTTP1 { http1, tls, tcp } => {
+            &Self::HTTP1 { http1, tls, tcp } => {
                 if let Some(tls) = tls {
                     vec![
-                        Protocol::TCP(tcp),
-                        Protocol::TLS(tls),
-                        Protocol::HTTP1(http1),
+                        &Protocol::TCP(tcp),
+                        &Protocol::TLS(tls),
+                        &Protocol::HTTP1(http1),
                     ]
                 } else {
-                    vec![Protocol::TCP(tcp), Protocol::HTTP1(http1)]
+                    vec![&Protocol::TCP(tcp), &Protocol::HTTP1(http1)]
                 }
             }
-            Self::HTTP2 { http2, tls, tcp } => {
+            &Self::HTTP2 { http2, tls, tcp } => {
                 if let Some(tls) = tls {
                     vec![
-                        Protocol::TCP(tcp),
-                        Protocol::TLS(tls),
-                        Protocol::HTTP2(http2),
+                        &Protocol::TCP(tcp),
+                        &Protocol::TLS(tls),
+                        &Protocol::HTTP2(http2),
                     ]
                 } else {
-                    vec![Protocol::TCP(tcp), Protocol::HTTP2(http2)]
+                    vec![&Protocol::TCP(tcp), &Protocol::HTTP2(http2)]
                 }
             }
-            Self::HTTP3 { http3, quic, udp } => {
+            &Self::HTTP3 { http3, quic, udp } => {
                 vec![
-                    Protocol::UDP(udp),
-                    Protocol::QUIC(quic),
-                    Protocol::HTTP3(http3),
+                    &Protocol::UDP(udp),
+                    &Protocol::QUIC(quic),
+                    &Protocol::HTTP3(http3),
                 ]
             }
-            Self::TLSTCP { tls, tcp } => {
-                vec![Protocol::TCP(tcp), Protocol::TLS(tls)]
+            &Self::TLSTCP { tls, tcp } => {
+                vec![&Protocol::TCP(tcp), &Protocol::TLS(tls)]
             }
-            Self::TCP { tcp } => {
-                vec![Protocol::TCP(tcp)]
+            &Self::TCP { tcp } => {
+                vec![&Protocol::TCP(tcp)]
             }
-            Self::QUIC { quic, udp } => {
-                vec![Protocol::QUIC(quic), Protocol::UDP(udp)]
+            &Self::QUIC { quic, udp } => {
+                vec![&Protocol::QUIC(quic), &Protocol::UDP(udp)]
             }
-            Self::UDP { udp } => {
-                vec![Protocol::UDP(udp)]
+            &Self::UDP { udp } => {
+                vec![&Protocol::UDP(udp)]
             }
         }
     }
@@ -899,6 +966,15 @@ impl TryFrom<bindings::Value> for PlanValue<TLSVersion> {
             _ => Err(Error(format!(
                 "invalid value {binding:?} for tls version field"
             ))),
+        }
+    }
+}
+impl TryFrom<bindings::Value> for PlanValue<Url> {
+    type Error = Error;
+    fn try_from(binding: bindings::Value) -> Result<Self> {
+        match binding {
+            bindings::Value::LiteralString(x) => Ok(Self::Literal(x)),
+            _ => Err(Error(format!("invalid value {binding:?} for string field"))),
         }
     }
 }

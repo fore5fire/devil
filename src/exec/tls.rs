@@ -1,13 +1,15 @@
 use std::time::Instant;
 use std::{pin::Pin, sync::Arc};
 
+use async_trait::async_trait;
 use rustls::OwnedTrustAnchor;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_rustls::client::TlsStream;
 
+use super::runner::Runner;
 use super::tee::{Stream, Tee};
-use crate::{TLSOutput, TLSResponse};
+use crate::{Output, TLSOutput, TLSResponse};
 
 #[derive(Debug)]
 pub(super) struct TLSRunner<S: Stream> {
@@ -52,7 +54,7 @@ impl<S: Stream> AsyncWrite for TLSRunner<S> {
 
 impl<S: Stream> Unpin for TLSRunner<S> {}
 
-impl<S: Stream + Send + 'static> TLSRunner<S> {
+impl<S: Stream> TLSRunner<S> {
     pub(super) async fn new(stream: S, data: TLSOutput) -> crate::Result<TLSRunner<S>> {
         let mut root_cert_store = rustls::RootCertStore::empty();
         root_cert_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().map(|ta| {
@@ -86,8 +88,11 @@ impl<S: Stream + Send + 'static> TLSRunner<S> {
             out: data,
         })
     }
+}
 
-    pub(super) async fn execute(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+#[async_trait]
+impl Runner for TLSRunner<Box<dyn Runner>> {
+    async fn execute(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.stream.write_all(&self.out.body).await?;
         self.stream.flush().await?;
         if let Some(p) = self.out.pause.iter().find(|p| p.after == "request_body") {
@@ -99,7 +104,7 @@ impl<S: Stream + Send + 'static> TLSRunner<S> {
         Ok(())
     }
 
-    pub(super) async fn finish(mut self) -> (TLSOutput, S) {
+    async fn finish(mut self) -> crate::Result<(Output, Option<Box<dyn Runner>>)> {
         let (stream, writes, reads) = self.stream.into_parts();
 
         self.out.body = writes;
@@ -107,6 +112,6 @@ impl<S: Stream + Send + 'static> TLSRunner<S> {
             body: reads,
             duration: self.start.elapsed(),
         });
-        (self.out, stream.into_inner().0)
+        Ok((Output::TLS(self.out), Some(stream.into_inner().0)))
     }
 }
