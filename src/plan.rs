@@ -5,7 +5,7 @@ use crate::{
 use base64::Engine;
 use cel_interpreter::{Context, Program};
 use indexmap::IndexMap;
-use std::{collections::HashMap, ops::Deref, rc::Rc, time::Duration};
+use std::{collections::HashMap, ops::Deref, sync::Arc, time::Duration};
 use url::Url;
 
 #[derive(Debug)]
@@ -110,13 +110,13 @@ impl TLSVersion {
 impl From<&TLSVersion> for cel_interpreter::Value {
     fn from(value: &TLSVersion) -> Self {
         match value {
-            TLSVersion::SSL1 => cel_interpreter::Value::String(Rc::new("ssl1".to_owned())),
-            TLSVersion::SSL2 => cel_interpreter::Value::String(Rc::new("ssl2".to_owned())),
-            TLSVersion::SSL3 => cel_interpreter::Value::String(Rc::new("ssl3".to_owned())),
-            TLSVersion::TLS1_0 => cel_interpreter::Value::String(Rc::new("tls1.0".to_owned())),
-            TLSVersion::TLS1_1 => cel_interpreter::Value::String(Rc::new("tls1.1".to_owned())),
-            TLSVersion::TLS1_2 => cel_interpreter::Value::String(Rc::new("tls1.2".to_owned())),
-            TLSVersion::TLS1_3 => cel_interpreter::Value::String(Rc::new("tls1.3".to_owned())),
+            TLSVersion::SSL1 => cel_interpreter::Value::String(Arc::new("ssl1".to_owned())),
+            TLSVersion::SSL2 => cel_interpreter::Value::String(Arc::new("ssl2".to_owned())),
+            TLSVersion::SSL3 => cel_interpreter::Value::String(Arc::new("ssl3".to_owned())),
+            TLSVersion::TLS1_0 => cel_interpreter::Value::String(Arc::new("tls1.0".to_owned())),
+            TLSVersion::TLS1_1 => cel_interpreter::Value::String(Arc::new("tls1.1".to_owned())),
+            TLSVersion::TLS1_2 => cel_interpreter::Value::String(Arc::new("tls1.2".to_owned())),
+            TLSVersion::TLS1_3 => cel_interpreter::Value::String(Arc::new("tls1.3".to_owned())),
         }
     }
 }
@@ -152,7 +152,7 @@ impl TryFrom<bindings::Pause> for Pause {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct HTTPRequest {
     pub url: PlanValue<Url>,
     pub method: Option<PlanValue<String>>,
@@ -168,7 +168,7 @@ impl TryFrom<bindings::HTTP> for HTTPRequest {
         Ok(Self {
             url: binding
                 .url
-                .map(PlanValue::<String>::try_from)
+                .map(PlanValue::<Url>::try_from)
                 .ok_or_else(|| Error::from("http.url is required"))??,
             body: binding
                 .body
@@ -197,10 +197,9 @@ impl HTTPRequest {
     {
         Ok(crate::HTTPOutput {
             url: self.url.evaluate(state)?,
-            method: self
-                .method
-                .map(|body| Ok(body.evaluate(state)?))
-                .transpose()?,
+            method: self.method.map(|body| body.evaluate(state)).transpose()?,
+            // Protocol is resolved at execution time for http.
+            protocol: None,
             headers: self
                 .headers
                 .evaluate(state)?
@@ -209,9 +208,9 @@ impl HTTPRequest {
                 .collect(),
             body: self
                 .body
-                .map(|body| Ok(body.evaluate(state)?))
-                .transpose()?,
-            automatic_content_length: self.automatic_content_length.evaluate(state)?,
+                .map(|body| body.evaluate(state))
+                .transpose()?
+                .unwrap_or_default(),
             pause: self
                 .pause
                 .into_iter()
@@ -227,13 +226,82 @@ impl HTTPRequest {
     }
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct HTTP1Request {}
+#[derive(Debug, Clone)]
+pub struct HTTP1Request {
+    pub url: PlanValue<Url>,
+    pub method: Option<PlanValue<String>>,
+    pub body: Option<PlanValue<Vec<u8>>>,
+    pub headers: PlanValueTable,
+
+    pub pause: Vec<Pause>,
+}
+
+impl HTTP1Request {
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::HTTP1Output>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O>,
+    {
+        Ok(crate::HTTP1Output {
+            url: self.url.evaluate(state)?,
+            method: self
+                .method
+                .map(|body| Ok(body.evaluate(state)?))
+                .transpose()?,
+            headers: self
+                .headers
+                .evaluate(state)?
+                .into_iter()
+                .map(|(k, v)| (k, v.unwrap_or_default()))
+                .collect(),
+            body: self
+                .body
+                .map(|body| Ok(body.evaluate(state)?))
+                .transpose()?
+                .unwrap_or_default(),
+            pause: self
+                .pause
+                .into_iter()
+                .map(|p| {
+                    Ok(crate::PauseOutput {
+                        after: p.after.evaluate(state)?,
+                        duration: p.duration.evaluate(state)?,
+                    })
+                })
+                .collect::<crate::Result<_>>()?,
+            response: None,
+        })
+    }
+}
 
 impl TryFrom<bindings::HTTP1> for HTTP1Request {
     type Error = Error;
     fn try_from(binding: bindings::HTTP1) -> Result<Self> {
-        Ok(Self {})
+        Ok(Self {
+            url: binding
+                .common
+                .url
+                .map(PlanValue::<Url>::try_from)
+                .ok_or_else(|| Error::from("http.url is required"))??,
+            body: binding
+                .common
+                .body
+                .map(PlanValue::<Vec<u8>>::try_from)
+                .transpose()?,
+            method: binding
+                .common
+                .method
+                .map(PlanValue::<String>::try_from)
+                .transpose()?,
+            headers: PlanValueTable::try_from(binding.common.headers.unwrap_or_default())?,
+            pause: binding
+                .common
+                .pause
+                .into_iter()
+                .map(Pause::try_from)
+                .collect::<Result<_>>()?,
+        })
     }
 }
 
@@ -257,9 +325,9 @@ impl TryFrom<bindings::HTTP3> for HTTP3Request {
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct GraphQLRequest {
-    pub url: PlanValue<String>,
+    pub url: PlanValue<Url>,
     pub query: PlanValue<String>,
     pub params: PlanValueTable,
     pub operation: Option<PlanValue<String>>,
@@ -273,7 +341,7 @@ impl TryFrom<bindings::GraphQL> for GraphQLRequest {
         Ok(Self {
             url: binding
                 .url
-                .map(PlanValue::<String>::try_from)
+                .map(PlanValue::<Url>::try_from)
                 .ok_or_else(|| Error::from("graphql.url is required"))??,
             query: binding
                 .query
@@ -294,6 +362,34 @@ impl TryFrom<bindings::GraphQL> for GraphQLRequest {
                 .into_iter()
                 .map(Pause::try_from)
                 .collect::<Result<_>>()?,
+        })
+    }
+}
+
+impl GraphQLRequest {
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::GraphQLOutput>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O>,
+    {
+        Ok(crate::GraphQLOutput {
+            url: self.url.evaluate(state)?,
+            query: self.query.evaluate(state)?,
+            operation: self.operation.map(|x| x.evaluate(state)).transpose()?,
+            params: self.params.evaluate(state)?.into_iter().collect(),
+            use_query_string: self.use_query_string.evaluate(state)?,
+            pause: self
+                .pause
+                .into_iter()
+                .map(|p| {
+                    Ok(crate::PauseOutput {
+                        after: p.after.evaluate(state)?,
+                        duration: p.duration.evaluate(state)?,
+                    })
+                })
+                .collect::<crate::Result<_>>()?,
+            response: None,
         })
     }
 }
@@ -861,17 +957,18 @@ impl Protocol {
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
-        match self {
-            Self::GraphQL(proto) => proto.evaluate(state),
-            Self::HTTP(proto) => proto.evaluate(state),
-            Self::HTTP1(proto) => proto.evaluate(state),
-            Self::HTTP2(proto) => proto.evaluate(state),
-            Self::HTTP3(proto) => proto.evaluate(state),
-            Self::TLS(proto) => proto.evaluate(state),
-            Self::TCP(proto) => proto.evaluate(state),
-            Self::QUIC(proto) => proto.evaluate(state),
-            Self::UDP(proto) => proto.evaluate(state),
-        }
+        Ok(match self {
+            Self::GraphQL(proto) => Output::GraphQL(proto.evaluate(state)?),
+            Self::HTTP(proto) => Output::HTTP(proto.evaluate(state)?),
+            Self::HTTP1(proto) => Output::HTTP1(proto.evaluate(state)?),
+            //Self::HTTP2(proto) => Output::HTTP2(proto.evaluate(state)?),
+            //Self::HTTP3(proto) => Output::HTTP3(proto.evaluate(state)?),
+            Self::TLS(proto) => Output::TLS(proto.evaluate(state)?),
+            Self::TCP(proto) => Output::TCP(proto.evaluate(state)?),
+            //Self::QUIC(proto) => Output::QUIC(proto.evaluate(state)?),
+            //Self::UDP(proto) => Output::UDP(proto.evaluate(state)?),
+            _ => return Err(Error::from("support for protocol {proto:?} is incomplete")),
+        })
     }
 }
 
@@ -973,7 +1070,9 @@ impl TryFrom<bindings::Value> for PlanValue<Url> {
     type Error = Error;
     fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
-            bindings::Value::LiteralString(x) => Ok(Self::Literal(x)),
+            bindings::Value::LiteralString(x) => Ok(Self::Literal(
+                Url::parse(&x).map_err(|e| Error(e.to_string()))?,
+            )),
             _ => Err(Error(format!("invalid value {binding:?} for string field"))),
         }
     }

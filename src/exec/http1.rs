@@ -9,6 +9,7 @@ use super::runner::Runner;
 use super::tee::Stream;
 use super::tee::Tee;
 use crate::Error;
+use crate::HTTP1Output;
 use crate::Output;
 use crate::{HTTPOutput, HTTPResponse};
 
@@ -63,7 +64,7 @@ impl<S: Stream> AsyncWrite for HTTP1Runner<S> {
 }
 
 impl<S: Stream> HTTP1Runner<S> {
-    pub(super) async fn new(stream: S, data: HTTPOutput) -> crate::Result<Self> {
+    pub(super) async fn new(stream: S, data: HTTP1Output) -> crate::Result<Self> {
         let start_time = Instant::now();
 
         if let Some(p) = data.pause.iter().find(|p| p.after == "open") {

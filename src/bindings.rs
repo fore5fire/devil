@@ -1,12 +1,13 @@
 use std::{collections::HashMap, convert::identity};
 
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Plan {
     pub courier: Settings,
     #[serde(flatten)]
-    pub steps: HashMap<String, Step>,
+    pub steps: IndexMap<String, Step>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -150,7 +151,7 @@ impl HTTP {
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct HTTP1 {
     #[serde(flatten, default)]
-    common: HTTP,
+    pub common: HTTP,
 }
 
 impl HTTP1 {
