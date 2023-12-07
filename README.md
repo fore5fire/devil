@@ -82,8 +82,8 @@ courier example-file.cp.toml
 
 ## Project Priorities
 In order of importance:
-1. Be unsuprising. Suprises hide bugs, and a primary purpose of courier is to
-   help find bugs.
+1. Be unsuprising. Unexpected behavior hides bugs, and a primary purpose of
+   courier is to help find bugs.
 2. Be flexible. Implementations don't always match the spec, so flexibility is
    more important than compliance.
 3. Be inclusive. This means including lots of useful protocols and features as
@@ -114,7 +114,6 @@ it sooner then please contribute! And if you don't see something on the roadmap
 that you'd find useful, open a pull request to add it here.
 
 ### Query Engine
-- Modules
 - Parallel Execution
     - Control connection reuse and multiplexing
     - Coordinated pauses (see [HTTP/2 single packet attack](https://portswigger.net/research/smashing-the-state-machine#single-packet-attack))
@@ -125,6 +124,7 @@ that you'd find useful, open a pull request to add it here.
 - Non-UTF8 payloads (UTF16/32, GB 18030, etc.)
 
 ### Protocols
+- IP (using [libpnet](https://github.com/libpnet/libpnet))
 - HTTP multipart uploads
 - Websockets
 - graphql-transport-ws
@@ -144,7 +144,6 @@ that you'd find useful, open a pull request to add it here.
 - FTP
 - SSH
 - SMB
-- Lower level protocols using something like [libpnet](https://github.com/libpnet/libpnet)
   
 ### Integrations with other tools
 - LSP (maybe based on [Taplo](https://taplo.tamasfe.dev/)?)
