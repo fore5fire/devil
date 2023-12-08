@@ -15,23 +15,35 @@ pub trait State<'a, O: Into<&'a str>, I: IntoIterator<Item = O>> {
     fn iter(&self) -> I;
 }
 
+#[derive(Debug)]
 pub enum Output {
     GraphQL(GraphQLOutput),
     HTTP(HTTPOutput),
     HTTP1(HTTP1Output),
-    HTTP2(HTTPOutput),
-    HTTP3(HTTPOutput),
+    //HTTP2(HTTP2Output),
+    //HTTP3(HTTP3Output),
     TLS(TLSOutput),
     TCP(TCPOutput),
+}
+
+#[derive(Debug)]
+pub enum RequestOutput {
+    GraphQL(GraphQLRequestOutput),
+    HTTP(HTTPRequestOutput),
+    HTTP1(HTTP1RequestOutput),
+    //HTTP2(HTTP2RequestOutput),
+    //HTTP3(HTTP3RequestOutput),
+    TLS(TLSRequestOutput),
+    TCP(TCPRequestOutput),
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct StepOutput {
     pub graphql: Option<GraphQLOutput>,
     pub http: Option<HTTPOutput>,
-    pub http1: Option<HTTPOutput>,
-    pub http2: Option<HTTPOutput>,
-    pub http3: Option<HTTPOutput>,
+    pub http1: Option<HTTP1Output>,
+    //pub http2: Option<HTTP2Output>,
+    //pub http3: Option<HTTP3Output>,
     pub tls: Option<TLSOutput>,
     pub tcp: Option<TCPOutput>,
 }
@@ -42,8 +54,8 @@ impl From<StepOutput> for Value {
         map.insert("graphql".into(), value.graphql.into());
         map.insert("http".into(), value.http.into());
         map.insert("http1".into(), value.http1.into());
-        map.insert("http2".into(), value.http2.into());
-        map.insert("http3".into(), value.http3.into());
+        //map.insert("http2".into(), value.http2.into());
+        //map.insert("http3".into(), value.http3.into());
         map.insert("tls".into(), value.tls.into());
         map.insert("tcp".into(), value.tcp.into());
         Value::Map(Map { map: Rc::new(map) })
@@ -84,7 +96,7 @@ impl From<HTTPOutput> for Value {
 #[derive(Debug, Clone)]
 pub struct HTTPRequestOutput {
     pub url: Url,
-    pub method: Option<String>,
+    pub method: Option<Vec<u8>>,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
     pub pause: Vec<PauseOutput>,
@@ -112,9 +124,8 @@ impl From<HTTPRequestOutput> for Value {
 
 #[derive(Debug, Clone)]
 pub struct HTTPResponse {
-    pub protocol: String,
+    pub protocol: Vec<u8>,
     pub status_code: u16,
-    pub status_reason: String,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
     pub duration: std::time::Duration,
@@ -125,13 +136,9 @@ impl From<HTTPResponse> for Value {
         let mut map = HashMap::with_capacity(6);
         map.insert(
             "protocol".into(),
-            Value::String(Arc::new(value.protocol.clone())),
+            Value::Bytes(Arc::new(value.protocol.clone())),
         );
         map.insert("status_code".into(), Value::UInt(value.status_code.into()));
-        map.insert(
-            "status_reason".into(),
-            Value::String(Arc::new(value.status_reason.clone())),
-        );
         map.insert(
             "headers".into(),
             Value::List(Arc::new(value.headers.iter().map(kv_pair_to_map).collect())),
@@ -172,8 +179,8 @@ impl From<HTTP1Output> for Value {
 #[derive(Debug, Clone)]
 pub struct HTTP1RequestOutput {
     pub url: Url,
-    pub method: Option<String>,
-    pub version_string: Option<String>,
+    pub method: Option<Vec<u8>>,
+    pub version_string: Option<Vec<u8>>,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
     pub pause: Vec<PauseOutput>,
@@ -181,9 +188,9 @@ pub struct HTTP1RequestOutput {
 
 #[derive(Debug, Clone)]
 pub struct HTTP1Response {
-    pub protocol: String,
+    pub protocol: Vec<u8>,
     pub status_code: u16,
-    pub status_reason: String,
+    pub status_reason: Vec<u8>,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
     pub duration: std::time::Duration,
@@ -194,12 +201,12 @@ impl From<HTTP1Response> for Value {
         let mut map = HashMap::with_capacity(6);
         map.insert(
             "protocol".into(),
-            Value::String(Arc::new(value.protocol.clone())),
+            Value::Bytes(Arc::new(value.protocol.clone())),
         );
         map.insert("status_code".into(), Value::UInt(value.status_code.into()));
         map.insert(
             "status_reason".into(),
-            Value::String(Arc::new(value.status_reason.clone())),
+            Value::Bytes(Arc::new(value.status_reason.clone())),
         );
         map.insert(
             "headers".into(),
@@ -238,7 +245,7 @@ pub struct GraphQLRequestOutput {
     pub query: String,
     pub operation: Option<String>,
     pub use_query_string: bool,
-    pub params: HashMap<String, Option<String>>,
+    pub params: Option<HashMap<String, Option<String>>>,
     pub pause: Vec<PauseOutput>,
 }
 
@@ -251,16 +258,20 @@ impl From<GraphQLRequestOutput> for Value {
                 ("operation".into(), value.operation.clone().into()),
                 (
                     "params".into(),
-                    Value::Map(Map {
-                        map: Rc::new(
-                            value
-                                .params
-                                .clone()
-                                .into_iter()
-                                .map(|(k, v)| (k.into(), v.into()))
-                                .collect(),
-                        ),
-                    }),
+                    value
+                        .params
+                        .map(|params| {
+                            Value::Map(Map {
+                                map: Rc::new(
+                                    params
+                                        .clone()
+                                        .into_iter()
+                                        .map(|(k, v)| (k.into(), v.into()))
+                                        .collect(),
+                                ),
+                            })
+                        })
+                        .unwrap_or(Value::Null),
                 ),
             ])),
         })

@@ -11,75 +11,56 @@ use std::fmt::Display;
 
 use crate::{Output, Plan, Step, StepOutput};
 
-use self::graphql::GraphQLRunner;
-use self::http::HTTPRunner;
-use self::http1::HTTP1Runner;
-use self::runner::Runner;
-use self::tcp::TCPRunner;
-use self::tls::TLSRunner;
+use self::runner::{new_runner, Runner};
 
 pub struct Executor<'a> {
-    iter: indexmap::map::Iter<'a, String, Step>,
+    steps: VecDeque<(&'a str, Step)>,
     outputs: HashMap<&'a str, StepOutput>,
 }
 
 impl<'a> Executor<'a> {
     pub fn new(plan: &'a Plan) -> Self {
         Executor {
-            iter: plan.steps.iter(),
+            steps: plan
+                .steps
+                .iter()
+                .map(|(name, step)| (name.as_str(), step.to_owned()))
+                .collect(),
             outputs: HashMap::new(),
         }
     }
 
     pub async fn next(&mut self) -> Result<StepOutput, Box<dyn std::error::Error + Send + Sync>> {
-        let Some((name, step)) = &self.iter.next() else {
+        let Some((name, step)) = self.steps.pop_front() else {
             return Err(Box::new(Error::Done));
         };
         let inputs = &State {
             data: &self.outputs,
         };
         let mut runner: Option<Box<dyn Runner>> = None;
-        for proto in step.stack() {
-            runner = Some(match proto.evaluate(inputs)? {
-                Output::GraphQL(proto) => Box::new(
-                    GraphQLRunner::new(
-                        runner.expect("no plan should have graphql as a base protocol"),
-                        proto,
-                    )
-                    .await?,
-                ),
-                Output::HTTP(proto) => Box::new(HTTPRunner::new(proto).await?),
-                Output::HTTP1(proto) => Box::new(
-                    HTTP1Runner::new(
-                        runner.expect("no plan should have http1 as a base protocol"),
-                        proto,
-                    )
-                    .await?,
-                ),
-                Output::TLS(proto) => Box::new(
-                    TLSRunner::new(
-                        runner.expect("no plan should have tls as a base protocol"),
-                        proto,
-                    )
-                    .await?,
-                ),
-                Output::TCP(proto) => Box::new(TCPRunner::new(proto).await?),
-                _ => return Err(Box::new(crate::Error::from("protocol not implemented"))),
-            })
+        for proto in step.into_stack() {
+            runner = Some(new_runner(runner, proto.evaluate(inputs)?).await?)
         }
         let mut runner = runner.expect("no plan should have an empty protocol stack");
         runner.execute().await?;
-        let out = StepOutput::default();
+        let mut output = StepOutput::default();
         loop {
             let (out, inner) = runner.finish().await?;
+            match out {
+                Output::GraphQL(out) => output.graphql = Some(out),
+                Output::HTTP(out) => output.http = Some(out),
+                Output::HTTP1(out) => output.http1 = Some(out),
+                Output::TLS(out) => output.tls = Some(out),
+                Output::TCP(out) => output.tcp = Some(out),
+            }
             let Some(inner) = inner else {
                 break;
             };
             runner = inner;
         }
 
-        self.outputs.insert(name, out.clone());
-        Ok(out)
+        self.outputs.insert(name, output.clone());
+        Ok(output)
     }
 }
 
@@ -93,7 +74,7 @@ impl<'a> crate::State<'a, &'a str, StateIterator<'a>> for State<'a> {
     }
     fn iter(&self) -> StateIterator<'a> {
         StateIterator {
-            data: self.data.keys().map(|k| k.to_owned()).collect(),
+            data: self.data.keys().map(ToOwned::to_owned).collect(),
         }
     }
 }

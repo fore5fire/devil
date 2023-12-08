@@ -88,7 +88,12 @@ In order of importance:
    more important than compliance.
 3. Be inclusive. This means including lots of useful protocols and features as
    well as being easy to use with different people's backgrounds and workflows.
-4. Be fast. Time matters a lot for load testing, race conditions, and side
+4. Minimize breaking changes to plans. courier makes it easy to build up a
+   library of plans, and breaking changes are more painful the bigger your
+   library is. Before the project gets too mature, I'll commit to providing a
+   command that automatically updates plans for any breaking changes that can't
+   be avoided.
+5. Be fast. Time matters a lot for load testing, race conditions, and side
    channel attacks.
 
 ## Non-goals

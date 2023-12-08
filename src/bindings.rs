@@ -43,7 +43,7 @@ pub struct Step {
 }
 
 impl Step {
-    pub fn merge(steps: &[Step]) -> Step {
+    pub fn merge(steps: Vec<Step>) -> Step {
         assert!(!steps.is_empty());
 
         let (graphql, http, http1, http2, http3, tls, tcp, quic, udp): (
@@ -123,6 +123,7 @@ pub struct HTTP {
     pub url: Option<Value>,
     pub body: Option<Value>,
     pub method: Option<Value>,
+    pub version_string: Option<Value>,
     pub headers: Option<Table>,
     #[serde(default)]
     pub pause: Vec<Pause>,
@@ -132,17 +133,29 @@ impl HTTP {
     fn merge<I: IntoIterator<Item = Option<Self>>>(protos: I) -> Option<Self> {
         let mut protos = protos.into_iter().filter_map(identity).peekable();
         protos.peek()?;
-        let (url, body, headers, method, pause): (Vec<_>, Vec<_>, Vec<_>, Vec<_>, Vec<_>) =
-            itertools::multiunzip(
-                protos
-                    .into_iter()
-                    .map(|x| (x.url, x.body, x.headers, x.method, x.pause)),
-            );
+        let (url, headers, method, version_string, body, pause): (
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+            Vec<_>,
+        ) = itertools::multiunzip(protos.into_iter().map(|x| {
+            (
+                x.url,
+                x.headers,
+                x.method,
+                x.version_string,
+                x.body,
+                x.pause,
+            )
+        }));
         Some(Self {
             url: Value::merge(url),
-            body: Value::merge(body),
+            version_string: Value::merge(version_string),
             headers: Table::merge(headers),
             method: Value::merge(method),
+            body: Value::merge(body),
             pause: Pause::merge(pause),
         })
     }
@@ -423,12 +436,12 @@ impl Table {
         for t in tables {
             match t {
                 Self::Map(m) => {
-                    for (key, value) in m {
+                    for (key, value) in m.into_iter() {
                         // Try to merge with an existing value.
-                        if let Some(entry) =
-                            result.iter().find(|x| x.key == Value::LiteralString(key))
-                        {
-                            entry.value;
+                        if let Some(entry) = result.iter_mut().find(
+                            |x| matches!(&x.key, Value::LiteralString(k) if k.as_str() == key),
+                        ) {
+                            entry.value = value;
                             continue;
                         }
                         // It can't be merged, so just append it.
@@ -438,7 +451,17 @@ impl Table {
                         })
                     }
                 }
-                Self::Array(a) => {}
+                Self::Array(a) => {
+                    for row in a.into_iter() {
+                        // Try to merge with an existing value.
+                        if let Some(entry) = result.iter_mut().find(|x| x.key == row.key) {
+                            entry.value = row.value;
+                            continue;
+                        }
+                        // It can't be merged, so just append it.
+                        result.push(row)
+                    }
+                }
             };
         }
         Some(Self::Array(result))
