@@ -1,5 +1,4 @@
 mod bindings;
-mod defaults;
 mod error;
 pub mod exec;
 mod output;

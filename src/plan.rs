@@ -1,11 +1,13 @@
 use crate::{
     bindings::{self, Defaults},
-    Error, Output, Result, State,
+    Error, RequestOutput, Result, State,
 };
 use base64::Engine;
 use cel_interpreter::{Context, Program};
+use chrono::Duration;
+use go_parse_duration::parse_duration;
 use indexmap::IndexMap;
-use std::{collections::HashMap, ops::Deref, sync::Arc, time::Duration};
+use std::{collections::HashMap, ops::Deref, sync::Arc};
 use url::Url;
 
 #[derive(Debug)]
@@ -57,7 +59,7 @@ impl<'a> Plan {
         let steps: IndexMap<String, Step> = plan
             .steps
             .into_iter()
-            .map(|(name, value)| Ok(Some((name, Step::from_bindings(name, value)?))))
+            .map(|(name, value)| Ok(Some((name, Step::from_bindings(value)?))))
             .filter_map(Result::transpose)
             .collect::<Result<_>>()?;
 
@@ -90,6 +92,11 @@ pub enum TLSVersion {
     TLS1_1,
     TLS1_2,
     TLS1_3,
+    DTLS1_0,
+    DTLS1_1,
+    DTLS1_2,
+    DTLS1_3,
+    Other(u16),
 }
 
 impl TLSVersion {
@@ -117,6 +124,11 @@ impl From<&TLSVersion> for cel_interpreter::Value {
             TLSVersion::TLS1_1 => cel_interpreter::Value::String(Arc::new("tls1.1".to_owned())),
             TLSVersion::TLS1_2 => cel_interpreter::Value::String(Arc::new("tls1.2".to_owned())),
             TLSVersion::TLS1_3 => cel_interpreter::Value::String(Arc::new("tls1.3".to_owned())),
+            TLSVersion::DTLS1_0 => cel_interpreter::Value::String(Arc::new("dtls1.0".to_owned())),
+            TLSVersion::DTLS1_1 => cel_interpreter::Value::String(Arc::new("dtls1.1".to_owned())),
+            TLSVersion::DTLS1_2 => cel_interpreter::Value::String(Arc::new("dtls1.2".to_owned())),
+            TLSVersion::DTLS1_3 => cel_interpreter::Value::String(Arc::new("dtls1.3".to_owned())),
+            TLSVersion::Other(a) => cel_interpreter::Value::UInt(*a as u64),
         }
     }
 }
@@ -130,7 +142,7 @@ pub enum HTTPVersion {
     HTTP3,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Pause {
     pub after: PlanValue<String>,
     pub duration: PlanValue<Duration>,
@@ -152,10 +164,29 @@ impl TryFrom<bindings::Pause> for Pause {
     }
 }
 
+impl Pause {
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::PauseOutput>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O>,
+    {
+        let duration = self.duration.evaluate(state)?;
+        // Ensure we can convert this to a standard duration for use in sleep later.
+        if let Err(e) = duration.to_std() {
+            return Err(Error(e.to_string()));
+        }
+        Ok(crate::PauseOutput {
+            after: self.after.evaluate(state)?,
+            duration,
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct HTTPRequest {
     pub url: PlanValue<Url>,
-    pub method: Option<PlanValue<String>>,
+    pub method: Option<PlanValue<Vec<u8>>>,
     pub body: Option<PlanValue<Vec<u8>>>,
     pub headers: PlanValueTable,
 
@@ -176,7 +207,7 @@ impl TryFrom<bindings::HTTP> for HTTPRequest {
                 .transpose()?,
             method: binding
                 .method
-                .map(PlanValue::<String>::try_from)
+                .map(PlanValue::<Vec<u8>>::try_from)
                 .transpose()?,
             headers: PlanValueTable::try_from(binding.headers.unwrap_or_default())?,
             pause: binding
@@ -189,65 +220,18 @@ impl TryFrom<bindings::HTTP> for HTTPRequest {
 }
 
 impl HTTPRequest {
-    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::HTTPOutput>
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::HTTPRequestOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
-        Ok(crate::HTTPOutput {
-            url: self.url.evaluate(state)?,
-            method: self.method.map(|body| body.evaluate(state)).transpose()?,
-            // Protocol is resolved at execution time for http.
-            protocol: None,
-            headers: self
-                .headers
-                .evaluate(state)?
-                .into_iter()
-                .map(|(k, v)| (k, v.unwrap_or_default()))
-                .collect(),
-            body: self
-                .body
-                .map(|body| body.evaluate(state))
-                .transpose()?
-                .unwrap_or_default(),
-            pause: self
-                .pause
-                .into_iter()
-                .map(|p| {
-                    Ok(crate::PauseOutput {
-                        after: p.after.evaluate(state)?,
-                        duration: p.duration.evaluate(state)?,
-                    })
-                })
-                .collect::<crate::Result<_>>()?,
-            response: None,
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct HTTP1Request {
-    pub url: PlanValue<Url>,
-    pub method: Option<PlanValue<String>>,
-    pub body: Option<PlanValue<Vec<u8>>>,
-    pub headers: PlanValueTable,
-
-    pub pause: Vec<Pause>,
-}
-
-impl HTTP1Request {
-    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::HTTP1Output>
-    where
-        S: State<'a, O, I>,
-        O: Into<&'a str>,
-        I: IntoIterator<Item = O>,
-    {
-        Ok(crate::HTTP1Output {
+        Ok(crate::HTTPRequestOutput {
             url: self.url.evaluate(state)?,
             method: self
                 .method
-                .map(|body| Ok(body.evaluate(state)?))
+                .as_ref()
+                .map(|body| body.evaluate(state))
                 .transpose()?,
             headers: self
                 .headers
@@ -257,20 +241,66 @@ impl HTTP1Request {
                 .collect(),
             body: self
                 .body
-                .map(|body| Ok(body.evaluate(state)?))
+                .as_ref()
+                .map(|body| body.evaluate(state))
                 .transpose()?
                 .unwrap_or_default(),
             pause: self
                 .pause
+                .iter()
+                .map(|p| p.evaluate(state))
+                .collect::<Result<_>>()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct HTTP1Request {
+    pub url: PlanValue<Url>,
+    pub method: Option<PlanValue<Vec<u8>>>,
+    pub version_string: Option<PlanValue<Vec<u8>>>,
+    pub body: Option<PlanValue<Vec<u8>>>,
+    pub headers: PlanValueTable,
+
+    pub pause: Vec<Pause>,
+}
+
+impl HTTP1Request {
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::HTTP1RequestOutput>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O>,
+    {
+        Ok(crate::HTTP1RequestOutput {
+            url: self.url.evaluate(state)?,
+            method: self
+                .method
+                .as_ref()
+                .map(|body| body.evaluate(state))
+                .transpose()?,
+            version_string: self
+                .version_string
+                .as_ref()
+                .map(|v| v.evaluate(state))
+                .transpose()?,
+            headers: self
+                .headers
+                .evaluate(state)?
                 .into_iter()
-                .map(|p| {
-                    Ok(crate::PauseOutput {
-                        after: p.after.evaluate(state)?,
-                        duration: p.duration.evaluate(state)?,
-                    })
-                })
+                .map(|(k, v)| (k, v.unwrap_or_default()))
+                .collect(),
+            body: self
+                .body
+                .as_ref()
+                .map(|body| body.evaluate(state))
+                .transpose()?
+                .unwrap_or_default(),
+            pause: self
+                .pause
+                .iter()
+                .map(|p| p.evaluate(state))
                 .collect::<crate::Result<_>>()?,
-            response: None,
         })
     }
 }
@@ -284,15 +314,20 @@ impl TryFrom<bindings::HTTP1> for HTTP1Request {
                 .url
                 .map(PlanValue::<Url>::try_from)
                 .ok_or_else(|| Error::from("http.url is required"))??,
+            method: binding
+                .common
+                .method
+                .map(PlanValue::<Vec<u8>>::try_from)
+                .transpose()?,
+            version_string: binding
+                .common
+                .version_string
+                .map(PlanValue::<Vec<u8>>::try_from)
+                .transpose()?,
             body: binding
                 .common
                 .body
                 .map(PlanValue::<Vec<u8>>::try_from)
-                .transpose()?,
-            method: binding
-                .common
-                .method
-                .map(PlanValue::<String>::try_from)
                 .transpose()?,
             headers: PlanValueTable::try_from(binding.common.headers.unwrap_or_default())?,
             pause: binding
@@ -329,7 +364,7 @@ impl TryFrom<bindings::HTTP3> for HTTP3Request {
 pub struct GraphQLRequest {
     pub url: PlanValue<Url>,
     pub query: PlanValue<String>,
-    pub params: PlanValueTable,
+    pub params: Option<PlanValueTable>,
     pub operation: Option<PlanValue<String>>,
     pub use_query_string: PlanValue<bool>,
     pub pause: Vec<Pause>,
@@ -347,7 +382,7 @@ impl TryFrom<bindings::GraphQL> for GraphQLRequest {
                 .query
                 .map(PlanValue::<String>::try_from)
                 .ok_or_else(|| Error::from("graphql.query is required"))??,
-            params: binding.params.unwrap_or_default().try_into()?,
+            params: binding.params.map(PlanValueTable::try_from).transpose()?,
             operation: binding
                 .operation
                 .map(PlanValue::<String>::try_from)
@@ -367,29 +402,31 @@ impl TryFrom<bindings::GraphQL> for GraphQLRequest {
 }
 
 impl GraphQLRequest {
-    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::GraphQLOutput>
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::GraphQLRequestOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
-        Ok(crate::GraphQLOutput {
+        Ok(crate::GraphQLRequestOutput {
             url: self.url.evaluate(state)?,
             query: self.query.evaluate(state)?,
-            operation: self.operation.map(|x| x.evaluate(state)).transpose()?,
-            params: self.params.evaluate(state)?.into_iter().collect(),
+            operation: self
+                .operation
+                .as_ref()
+                .map(|x| x.evaluate(state))
+                .transpose()?,
+            params: self
+                .params
+                .as_ref()
+                .map(|p| Ok::<_, crate::Error>(p.evaluate(state)?.into_iter().collect()))
+                .transpose()?,
             use_query_string: self.use_query_string.evaluate(state)?,
             pause: self
                 .pause
-                .into_iter()
-                .map(|p| {
-                    Ok(crate::PauseOutput {
-                        after: p.after.evaluate(state)?,
-                        duration: p.duration.evaluate(state)?,
-                    })
-                })
+                .iter()
+                .map(|p| p.evaluate(state))
                 .collect::<crate::Result<_>>()?,
-            response: None,
         })
     }
 }
@@ -403,27 +440,21 @@ pub struct TCPRequest {
 }
 
 impl TCPRequest {
-    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::TCPOutput>
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::TCPRequestOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
-        Ok(crate::TCPOutput {
+        Ok(crate::TCPRequestOutput {
             host: self.host.evaluate(state)?,
             port: self.port.evaluate(state)?,
             body: self.body.evaluate(state)?.into(),
             pause: self
                 .pause
-                .into_iter()
-                .map(|p| {
-                    Ok(crate::PauseOutput {
-                        after: p.after.evaluate(state)?,
-                        duration: p.duration.evaluate(state)?,
-                    })
-                })
+                .iter()
+                .map(|p| p.evaluate(state))
                 .collect::<crate::Result<_>>()?,
-            response: None,
         })
     }
 }
@@ -506,11 +537,13 @@ impl TryFrom<PlanData> for Vec<u8> {
 
 impl TryFrom<PlanData> for Duration {
     type Error = Error;
-    fn try_from(value: PlanData) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: PlanData) -> Result<Self> {
         match value.0 {
-            cel_interpreter::Value::String(x) => {
-                parse_duration::parse(&x).map_err(|e| Error(e.to_string()))
-            }
+            cel_interpreter::Value::String(x) => parse_duration(&x)
+                .map(Duration::nanoseconds)
+                .map_err(|e| match e {
+                    go_parse_duration::Error::ParseError(s) => Error(s),
+                }),
             _ => Err(Error::from("invalid type for duration value")),
         }
     }
@@ -562,33 +595,25 @@ pub struct TLSRequest {
     pub host: PlanValue<String>,
     pub port: PlanValue<u16>,
     pub body: PlanValue<Vec<u8>>,
-    pub version: Option<PlanValue<TLSVersion>>,
     pub pause: Vec<Pause>,
 }
 
 impl TLSRequest {
-    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::TLSOutput>
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::TLSRequestOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
-        Ok(crate::TLSOutput {
+        Ok(crate::TLSRequestOutput {
             host: self.host.evaluate(state)?,
             port: self.port.evaluate(state)?,
             body: self.body.evaluate(state)?.into(),
-            version: self.version.map(|v| v.evaluate(state)).transpose()?,
             pause: self
                 .pause
-                .into_iter()
-                .map(|p| {
-                    Ok(crate::PauseOutput {
-                        after: p.after.evaluate(state)?,
-                        duration: p.duration.evaluate(state)?,
-                    })
-                })
+                .iter()
+                .map(|p| p.evaluate(state))
                 .collect::<crate::Result<_>>()?,
-            response: None,
         })
     }
 }
@@ -610,10 +635,6 @@ impl TryFrom<bindings::TLS> for TLSRequest {
                 .map(PlanValue::<Vec<u8>>::try_from)
                 .transpose()?
                 .unwrap_or_else(|| PlanValue::Literal(Vec::new())),
-            version: binding
-                .body
-                .map(PlanValue::<TLSVersion>::try_from)
-                .transpose()?,
             pause: binding
                 .pause
                 .into_iter()
@@ -653,7 +674,7 @@ impl TryFrom<bindings::QUIC> for QUICRequest {
                 .transpose()?
                 .unwrap_or_else(|| PlanValue::Literal(Vec::new())),
             version: binding
-                .body
+                .tls_version
                 .map(PlanValue::<TLSVersion>::try_from)
                 .transpose()?,
             pause: binding
@@ -761,7 +782,7 @@ pub enum Step {
 }
 
 impl Step {
-    pub fn from_bindings(name: String, binding: bindings::Step) -> Result<Step> {
+    pub fn from_bindings(binding: bindings::Step) -> Result<Step> {
         match binding {
             bindings::Step {
                 graphql: Some(gql),
@@ -829,12 +850,12 @@ impl Step {
         }
     }
 
-    pub fn stack(&self) -> Vec<&Protocol> {
+    pub fn into_stack(self) -> Vec<Protocol> {
         match self {
-            &Self::GraphQLHTTP { graphql, http } => {
-                vec![&Protocol::HTTP(http), &Protocol::GraphQL(graphql)]
+            Self::GraphQLHTTP { graphql, http } => {
+                vec![Protocol::HTTP(http), Protocol::GraphQL(graphql)]
             }
-            &Self::GraphQLHTTP1 {
+            Self::GraphQLHTTP1 {
                 graphql,
                 http1,
                 tls,
@@ -842,20 +863,20 @@ impl Step {
             } => {
                 if let Some(tls) = tls {
                     vec![
-                        &Protocol::TCP(tcp),
-                        &Protocol::TLS(tls),
-                        &Protocol::HTTP1(http1),
-                        &Protocol::GraphQL(graphql),
+                        Protocol::TCP(tcp),
+                        Protocol::TLS(tls),
+                        Protocol::HTTP1(http1),
+                        Protocol::GraphQL(graphql),
                     ]
                 } else {
                     vec![
-                        &Protocol::TCP(tcp),
-                        &Protocol::HTTP1(http1),
-                        &Protocol::GraphQL(graphql),
+                        Protocol::TCP(tcp),
+                        Protocol::HTTP1(http1),
+                        Protocol::GraphQL(graphql),
                     ]
                 }
             }
-            &Self::GraphQLHTTP2 {
+            Self::GraphQLHTTP2 {
                 graphql,
                 http2,
                 tls,
@@ -863,75 +884,75 @@ impl Step {
             } => {
                 if let Some(tls) = tls {
                     vec![
-                        &Protocol::TCP(tcp),
-                        &Protocol::TLS(tls),
-                        &Protocol::HTTP2(http2),
-                        &Protocol::GraphQL(graphql),
+                        Protocol::TCP(tcp),
+                        Protocol::TLS(tls),
+                        Protocol::HTTP2(http2),
+                        Protocol::GraphQL(graphql),
                     ]
                 } else {
                     vec![
-                        &Protocol::TCP(tcp),
-                        &Protocol::HTTP2(http2),
-                        &Protocol::GraphQL(graphql),
+                        Protocol::TCP(tcp),
+                        Protocol::HTTP2(http2),
+                        Protocol::GraphQL(graphql),
                     ]
                 }
             }
-            &Self::GraphQLHTTP3 {
+            Self::GraphQLHTTP3 {
                 graphql,
                 http3,
                 quic,
                 udp,
             } => {
                 vec![
-                    &Protocol::UDP(udp),
-                    &Protocol::QUIC(quic),
-                    &Protocol::HTTP3(http3),
-                    &Protocol::GraphQL(graphql),
+                    Protocol::UDP(udp),
+                    Protocol::QUIC(quic),
+                    Protocol::HTTP3(http3),
+                    Protocol::GraphQL(graphql),
                 ]
             }
-            &Self::HTTP { http } => {
-                vec![&Protocol::HTTP(http)]
+            Self::HTTP { http } => {
+                vec![Protocol::HTTP(http)]
             }
-            &Self::HTTP1 { http1, tls, tcp } => {
+            Self::HTTP1 { http1, tls, tcp } => {
                 if let Some(tls) = tls {
                     vec![
-                        &Protocol::TCP(tcp),
-                        &Protocol::TLS(tls),
-                        &Protocol::HTTP1(http1),
+                        Protocol::TCP(tcp),
+                        Protocol::TLS(tls),
+                        Protocol::HTTP1(http1),
                     ]
                 } else {
-                    vec![&Protocol::TCP(tcp), &Protocol::HTTP1(http1)]
+                    vec![Protocol::TCP(tcp), Protocol::HTTP1(http1)]
                 }
             }
-            &Self::HTTP2 { http2, tls, tcp } => {
+            Self::HTTP2 { http2, tls, tcp } => {
                 if let Some(tls) = tls {
                     vec![
-                        &Protocol::TCP(tcp),
-                        &Protocol::TLS(tls),
-                        &Protocol::HTTP2(http2),
+                        Protocol::TCP(tcp),
+                        Protocol::TLS(tls),
+                        Protocol::HTTP2(http2),
                     ]
                 } else {
-                    vec![&Protocol::TCP(tcp), &Protocol::HTTP2(http2)]
+                    vec![Protocol::TCP(tcp), Protocol::HTTP2(http2)]
                 }
             }
-            &Self::HTTP3 { http3, quic, udp } => {
+            Self::HTTP3 { http3, quic, udp } => {
                 vec![
-                    &Protocol::UDP(udp),
-                    &Protocol::QUIC(quic),
-                    &Protocol::HTTP3(http3),
+                    Protocol::UDP(udp),
+                    Protocol::QUIC(quic),
+                    Protocol::HTTP3(http3),
                 ]
             }
-            &Self::TLSTCP { tls, tcp } => {
-                vec![&Protocol::TCP(tcp), &Protocol::TLS(tls)]
+            Self::TLSTCP { tls, tcp } => {
+                vec![Protocol::TCP(tcp), Protocol::TLS(tls)]
             }
-            &Self::TCP { tcp } => {
-                vec![&Protocol::TCP(tcp)]
+            Self::TCP { tcp } => {
+                vec![Protocol::TCP(tcp)]
             }
-            &Self::QUIC { quic, udp } => {
-                vec![&Protocol::QUIC(quic), &Protocol::UDP(udp)]
+            Self::QUIC { quic, udp } => {
+                vec![Protocol::QUIC(quic), Protocol::UDP(udp)]
             }
-            &Self::UDP { udp } => {
-                vec![&Protocol::UDP(udp)]
+            Self::UDP { udp } => {
+                vec![Protocol::UDP(udp)]
             }
         }
     }
@@ -951,22 +972,22 @@ pub enum Protocol {
 }
 
 impl Protocol {
-    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<Output>
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<RequestOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
         Ok(match self {
-            Self::GraphQL(proto) => Output::GraphQL(proto.evaluate(state)?),
-            Self::HTTP(proto) => Output::HTTP(proto.evaluate(state)?),
-            Self::HTTP1(proto) => Output::HTTP1(proto.evaluate(state)?),
-            //Self::HTTP2(proto) => Output::HTTP2(proto.evaluate(state)?),
-            //Self::HTTP3(proto) => Output::HTTP3(proto.evaluate(state)?),
-            Self::TLS(proto) => Output::TLS(proto.evaluate(state)?),
-            Self::TCP(proto) => Output::TCP(proto.evaluate(state)?),
-            //Self::QUIC(proto) => Output::QUIC(proto.evaluate(state)?),
-            //Self::UDP(proto) => Output::UDP(proto.evaluate(state)?),
+            Self::GraphQL(proto) => RequestOutput::GraphQL(proto.evaluate(state)?),
+            Self::HTTP(proto) => RequestOutput::HTTP(proto.evaluate(state)?),
+            Self::HTTP1(proto) => RequestOutput::HTTP1(proto.evaluate(state)?),
+            //Self::HTTP2(proto) => RequestOutput::HTTP2(proto.evaluate(state)?),
+            //Self::HTTP3(proto) => RequestOutput::HTTP3(proto.evaluate(state)?),
+            Self::TLS(proto) => RequestOutput::TLS(proto.evaluate(state)?),
+            Self::TCP(proto) => RequestOutput::TCP(proto.evaluate(state)?),
+            //Self::QUIC(proto) => RequestOutput::QUIC(proto.evaluate(state)?),
+            //Self::UDP(proto) => RequestOutput::UDP(proto.evaluate(state)?),
             _ => return Err(Error::from("support for protocol {proto:?} is incomplete")),
         })
     }
@@ -1040,12 +1061,11 @@ impl TryFrom<bindings::Value> for PlanValue<Duration> {
     type Error = Error;
     fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
-            bindings::Value::LiteralString(x) => Ok(Self::Literal(Duration::from_nanos(
-                go_parse_duration::parse_duration(x.as_str())
-                    .map(TryInto::try_into)
-                    .map_err(|_| Error::from("invalid value {binding:?} for duration field"))?
-                    .map_err(|_| Error::from("duration cannot be negative"))?,
-            ))),
+            bindings::Value::LiteralString(x) => Ok(Self::Literal(
+                parse_duration(x.as_str())
+                    .map(Duration::nanoseconds)
+                    .map_err(|_| Error::from("invalid duration string {binding:?}"))?,
+            )),
             _ => Err(Error(format!(
                 "invalid value {binding:?} for duration field"
             ))),
@@ -1167,7 +1187,7 @@ impl PlanValueTable {
             .map(|(key, val)| {
                 Ok((
                     key.evaluate(state)?,
-                    val.map(|v| v.evaluate(state)).transpose()?,
+                    val.as_ref().map(|v| v.evaluate(state)).transpose()?,
                 ))
             })
             .collect()
@@ -1206,6 +1226,6 @@ where
     for name in state.iter() {
         let name = name.into();
         let output = state.get(name).unwrap();
-        ctx.add_variable(name, output);
+        ctx.add_variable(name, output.to_owned());
     }
 }

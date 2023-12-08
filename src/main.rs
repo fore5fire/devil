@@ -1,6 +1,6 @@
 use clap::{Parser, ValueEnum};
-use courier_ql::exec::Executor;
-use courier_ql::{Plan, StepOutput};
+use courier_qe::exec::Executor;
+use courier_qe::{Plan, StepOutput};
 
 // Simple program to greet a person
 #[derive(Parser, Debug)]
@@ -40,11 +40,6 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    //let mut buffer = Vec::new();
-    //let stdin = std::io::stdin();
-    //let mut handle = stdin.lock();
-    //let input = handle.read_to_end(&mut buffer)?;
-
     let args = Args::parse();
     let buffer = std::fs::read(&args.file)?;
     let text = String::from_utf8(buffer)?;
@@ -67,7 +62,7 @@ fn print_proto(args: &Args, proto: &StepOutput) {
             if let Some(tcp) = &proto.tcp {
                 println!(
                     "> {}",
-                    String::from_utf8_lossy(&tcp.body).replace("\n", "\n> ")
+                    String::from_utf8_lossy(&tcp.request.body).replace("\n", "\n> ")
                 );
             }
         }
@@ -75,19 +70,26 @@ fn print_proto(args: &Args, proto: &StepOutput) {
             if let Some(tls) = &proto.tls {
                 println!(
                     "> {}",
-                    String::from_utf8_lossy(&tls.body).replace("\n", "\n> ")
+                    String::from_utf8_lossy(&tls.request.body).replace("\n", "\n> ")
                 );
             }
         }
         Protocol::HTTP => {
             if let Some(http) = &proto.http {
-                println!("> {} {}", http.method, http.url);
-                for (k, v) in &http.headers {
+                println!(
+                    "> {}{} {}",
+                    http.request
+                        .method
+                        .as_deref()
+                        .map(|x| String::from_utf8_lossy(x) + " ")
+                        .unwrap_or_default(),
+                    http.request.url,
+                    http.protocol,
+                );
+                for (k, v) in &http.request.headers {
                     println!(">   {}: {}", k, v);
                 }
-                if let Some(body) = &http.body {
-                    println!("> {}", body);
-                }
+                println!("> {}", String::from_utf8_lossy(&http.request.body));
             }
         }
         Protocol::GraphQL => {
@@ -104,10 +106,10 @@ fn print_proto(args: &Args, proto: &StepOutput) {
     let out_level = args.level.clone().unwrap_or_else(|| {
         if proto.graphql.is_some() {
             Protocol::GraphQL
-        } else if proto.http3.is_some() {
-            Protocol::HTTP
-        } else if proto.http2.is_some() {
-            Protocol::HTTP
+        //} else if proto.http3.is_some() {
+        //    Protocol::HTTP
+        //} else if proto.http2.is_some() {
+        //    Protocol::HTTP
         } else if proto.http1.is_some() {
             Protocol::HTTP
         } else if proto.http.is_some() {
@@ -127,7 +129,7 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                     "< {}",
                     String::from_utf8_lossy(&tcp.response.body).replace("\n", "\n< ")
                 );
-                println!("duration: {}ms", tcp.response.duration.as_millis());
+                println!("duration: {}ms", tcp.response.duration.num_milliseconds());
             }
         }
         Protocol::TLS => {
@@ -136,12 +138,16 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                     "< {}",
                     String::from_utf8_lossy(&tls.response.body).replace("\n", "\n< ")
                 );
-                println!("duration: {}ms", tls.response.duration.as_millis());
+                println!("duration: {}ms", tls.response.duration.num_milliseconds());
             }
         }
         Protocol::HTTP => {
             if let Some(http) = &proto.http {
-                println!("< {} {}", http.response.status_code, http.response.protocol);
+                println!(
+                    "< {} {}",
+                    http.response.status_code,
+                    String::from_utf8_lossy(&http.response.protocol)
+                );
                 for (k, v) in &http.response.headers {
                     println!("<   {}: {}", k, v);
                 }
@@ -155,7 +161,7 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                     "{}",
                     serde_json::to_string_pretty(&gql.response.json).unwrap()
                 );
-                println!("duration: {}ms", gql.response.duration.as_millis());
+                println!("duration: {}ms", gql.response.duration.num_milliseconds());
             }
         }
         _ => {}
