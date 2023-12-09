@@ -3,41 +3,41 @@ use std::pin::Pin;
 use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use super::http1::HTTP1Runner;
+use super::http1::Http1Runner;
 use super::runner::Runner;
-use super::tcp::TCPRunner;
-use super::tls::TLSRunner;
+use super::tcp::TcpRunner;
+use super::tls::TlsRunner;
 use crate::Error;
-use crate::HTTPOutput;
-use crate::HTTPResponse;
+use crate::HttpOutput;
+use crate::HttpResponse;
 use crate::Output;
-use crate::{HTTPRequestOutput, TCPRequestOutput, TLSRequestOutput};
+use crate::{HttpRequestOutput, TcpRequestOutput, TlsRequestOutput};
 
 #[derive(Debug)]
-pub(super) enum HTTPRunner {
-    HTTP1(HTTP1Runner<Box<dyn Runner>>),
+pub(super) enum HttpRunner {
+    Http1(Box<Http1Runner>),
 }
 
-impl AsyncRead for HTTPRunner {
+impl AsyncRead for HttpRunner {
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         match *self {
-            Self::HTTP1(ref mut r) => Pin::new(r).poll_read(cx, buf),
+            Self::Http1(ref mut r) => Pin::new(r).poll_read(cx, buf),
         }
     }
 }
 
-impl AsyncWrite for HTTPRunner {
+impl AsyncWrite for HttpRunner {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<Result<usize, std::io::Error>> {
         match *self {
-            Self::HTTP1(ref mut s) => Pin::new(s).poll_write(cx, buf),
+            Self::Http1(ref mut s) => Pin::new(s).poll_write(cx, buf),
         }
     }
     fn poll_flush(
@@ -45,7 +45,7 @@ impl AsyncWrite for HTTPRunner {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
         match *self {
-            Self::HTTP1(ref mut s) => Pin::new(s).poll_flush(cx),
+            Self::Http1(ref mut s) => Pin::new(s).poll_flush(cx),
         }
     }
     fn poll_shutdown(
@@ -53,17 +53,17 @@ impl AsyncWrite for HTTPRunner {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
         match *self {
-            Self::HTTP1(ref mut s) => Pin::new(s).poll_shutdown(cx),
+            Self::Http1(ref mut s) => Pin::new(s).poll_shutdown(cx),
         }
     }
 }
 
-impl HTTPRunner {
-    pub(super) async fn new(req: HTTPRequestOutput) -> crate::Result<Self> {
+impl HttpRunner {
+    pub(super) async fn new(req: HttpRequestOutput) -> crate::Result<Self> {
         // For now we always use TCP and possibly TLS. To support HTTP/3 we'll need to decide
         // whether to use UPD and QUIC instead.
         let tcp: Box<dyn Runner> = Box::new(
-            TCPRunner::new(TCPRequestOutput {
+            TcpRunner::new(TcpRequestOutput {
                 host: req
                     .url
                     .host()
@@ -83,9 +83,9 @@ impl HTTPRunner {
             tcp
         } else {
             Box::new(
-                TLSRunner::new(
+                TlsRunner::new(
                     tcp,
-                    TLSRequestOutput {
+                    TlsRequestOutput {
                         host: req
                             .url
                             .host()
@@ -103,10 +103,10 @@ impl HTTPRunner {
             ) as Box<dyn Runner>
         };
 
-        Ok(HTTPRunner::HTTP1(
-            HTTP1Runner::new(
+        Ok(HttpRunner::Http1(Box::new(
+            Http1Runner::new(
                 inner as Box<dyn Runner>,
-                crate::HTTP1RequestOutput {
+                crate::Http1RequestOutput {
                     url: req.url,
                     method: req.method,
                     version_string: Some("HTTP/1.1".into()),
@@ -116,33 +116,33 @@ impl HTTPRunner {
                 },
             )
             .await?,
-        ))
+        )))
     }
 }
 
 #[async_trait]
-impl Runner for HTTPRunner {
+impl Runner for HttpRunner {
     async fn execute(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         match self {
-            Self::HTTP1(r) => r.execute().await,
+            Self::Http1(r) => r.execute().await,
         }
     }
 
-    async fn finish(mut self) -> crate::Result<(Output, Option<Box<dyn Runner>>)> {
-        let (out, inner) = match self {
-            Self::HTTP1(r) => r.finish().await?,
+    async fn finish(self: Box<Self>) -> crate::Result<(Output, Option<Box<dyn Runner>>)> {
+        let (out, inner) = match *self {
+            Self::Http1(r) => r.finish().await?,
         };
         Ok((
             match out {
-                Output::HTTP1(out) => Output::HTTP(HTTPOutput {
-                    request: HTTPRequestOutput {
+                Output::Http1(out) => Output::Http(HttpOutput {
+                    request: HttpRequestOutput {
                         url: out.request.url,
                         method: out.request.method,
                         headers: out.request.headers,
                         body: out.request.body,
                         pause: out.request.pause,
                     },
-                    response: HTTPResponse {
+                    response: HttpResponse {
                         protocol: out.response.protocol,
                         status_code: out.response.status_code,
                         headers: out.response.headers,
@@ -159,7 +159,7 @@ impl Runner for HTTPRunner {
 
     fn size_hint(&mut self, size: usize) {
         match self {
-            Self::HTTP1(r) => r.size_hint(size),
+            Self::Http1(r) => r.size_hint(size),
         }
     }
 }

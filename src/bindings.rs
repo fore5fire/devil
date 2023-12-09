@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Plan {
+    #[serde(default)]
     pub courier: Settings,
     #[serde(flatten)]
     pub steps: IndexMap<String, Step>,
@@ -15,7 +16,7 @@ pub struct Settings {
     pub defaults: Vec<Defaults>,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Defaults {
     pub selector: Option<Selector>,
     #[serde(flatten)]
@@ -23,26 +24,121 @@ pub struct Defaults {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum Selector {
-    Single(String),
-    List(Vec<String>),
+pub enum ProtocolKind {
+    #[serde(rename = "graphql")]
+    GraphQl,
+    #[serde(rename = "graphqlhttp1")]
+    GraphQlHttp1,
+    #[serde(rename = "graphqlhttp2")]
+    GraphQlHttp2,
+    #[serde(rename = "graphqlhttp3")]
+    GraphQlHttp3,
+    #[serde(rename = "http")]
+    Http,
+    #[serde(rename = "http1")]
+    Http1,
+    #[serde(rename = "http2")]
+    Http2,
+    #[serde(rename = "http3")]
+    Http3,
+    #[serde(rename = "tls")]
+    Tls,
+    #[serde(rename = "tcp")]
+    Tcp,
+    #[serde(rename = "dtls")]
+    Dtls,
+    #[serde(rename = "quic")]
+    Quic,
+    #[serde(rename = "udp")]
+    Udp,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct Step {
-    pub graphql: Option<GraphQL>,
-    pub http: Option<HTTP>,
-    pub http1: Option<HTTP1>,
-    pub http2: Option<HTTP2>,
-    pub http3: Option<HTTP3>,
-    pub tls: Option<TLS>,
-    pub tcp: Option<TCP>,
-    pub quic: Option<QUIC>,
-    pub udp: Option<UDP>,
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Protocol {
+    GraphQl(GraphQl),
+    Http(Http),
+    Http1(Http1),
+    Http2(Http2),
+    Http3(Http3),
+    Tls(Tls),
+    Tcp(Tcp),
+    Quic(Quic),
+    Udp(Udp),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Selector {
+    Single(ProtocolKind),
+    List(Vec<ProtocolKind>),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Step {
+    GraphQlHttp {
+        graphql: Option<GraphQl>,
+        http: Option<Http>,
+    },
+    GraphQlHttp1 {
+        graphql: Option<GraphQl>,
+        http1: Option<Http1>,
+        tls: Option<Tls>,
+        tcp: Option<Tcp>,
+    },
+    GraphQlHttp2 {
+        graphql: Option<GraphQl>,
+        http2: Option<Http2>,
+        tls: Option<Tls>,
+        tcp: Option<Tcp>,
+    },
+    GraphQlHttp3 {
+        graphql: Option<GraphQl>,
+        http3: Option<Http3>,
+        quic: Option<Quic>,
+        udp: Option<Udp>,
+    },
+    Http {
+        http: Option<Http>,
+    },
+    Http1 {
+        http1: Option<Http1>,
+        tls: Option<Tls>,
+        tcp: Option<Tcp>,
+    },
+    Http2 {
+        http2: Option<Http2>,
+        tls: Option<Tls>,
+        tcp: Option<Tcp>,
+    },
+    Http3 {
+        http3: Option<Http3>,
+        quic: Option<Quic>,
+        udp: Option<Udp>,
+    },
+    Tls {
+        tls: Option<Tls>,
+        tcp: Option<Tcp>,
+    },
+    Dtls {
+        tls: Option<Tls>,
+        udp: Option<Udp>,
+    },
+    Tcp {
+        tcp: Option<Tcp>,
+    },
+    Quic {
+        quic: Option<Quic>,
+        udp: Option<Udp>,
+    },
+    Udp {
+        udp: Option<Udp>,
+    },
 }
 
 impl Step {
+    pub fn select() {}
     pub fn merge(steps: Vec<Step>) -> Step {
         assert!(!steps.is_empty());
 
@@ -62,21 +158,21 @@ impl Step {
             )
         }));
         Step {
-            graphql: GraphQL::merge(graphql),
-            http: HTTP::merge(http),
-            http1: HTTP1::merge(http1),
-            http2: HTTP2::merge(http2),
-            http3: HTTP3::merge(http3),
-            tls: TLS::merge(tls),
-            tcp: TCP::merge(tcp),
-            quic: QUIC::merge(quic),
-            udp: UDP::merge(udp),
+            graphql: GraphQl::merge(graphql),
+            http: Http::merge(http),
+            http1: Http1::merge(http1),
+            http2: Http2::merge(http2),
+            http3: Http3::merge(http3),
+            tls: Tls::merge(tls),
+            tcp: Tcp::merge(tcp),
+            quic: Quic::merge(quic),
+            udp: Udp::merge(udp),
         }
     }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub struct GraphQL {
+pub struct GraphQl {
     pub url: Option<Value>,
     pub query: Option<Value>,
     pub params: Option<Table>,
@@ -86,7 +182,7 @@ pub struct GraphQL {
     pub pause: Vec<Pause>,
 }
 
-impl GraphQL {
+impl GraphQl {
     fn merge<I: IntoIterator<Item = Option<Self>>>(protos: I) -> Option<Self> {
         let mut protos = protos.into_iter().filter_map(identity).peekable();
         protos.peek()?;
@@ -119,7 +215,7 @@ impl GraphQL {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub struct HTTP {
+pub struct Http {
     pub url: Option<Value>,
     pub body: Option<Value>,
     pub method: Option<Value>,
@@ -129,7 +225,7 @@ pub struct HTTP {
     pub pause: Vec<Pause>,
 }
 
-impl HTTP {
+impl Http {
     fn merge<I: IntoIterator<Item = Option<Self>>>(protos: I) -> Option<Self> {
         let mut protos = protos.into_iter().filter_map(identity).peekable();
         protos.peek()?;
@@ -162,55 +258,55 @@ impl HTTP {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub struct HTTP1 {
+pub struct Http1 {
     #[serde(flatten, default)]
-    pub common: HTTP,
+    pub common: Http,
 }
 
-impl HTTP1 {
+impl Http1 {
     fn merge<I: IntoIterator<Item = Option<Self>>>(protos: I) -> Option<Self> {
         let mut protos = protos.into_iter().filter_map(identity).peekable();
         protos.peek()?;
         Some(Self {
-            common: HTTP::merge(protos.map(|x| Some(x.common))).unwrap_or_default(),
+            common: Http::merge(protos.map(|x| Some(x.common))).unwrap_or_default(),
         })
     }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub struct HTTP2 {
+pub struct Http2 {
     #[serde(flatten)]
-    common: HTTP,
+    common: Http,
 }
 
-impl HTTP2 {
+impl Http2 {
     fn merge<I: IntoIterator<Item = Option<Self>>>(protos: I) -> Option<Self> {
         let mut protos = protos.into_iter().filter_map(identity).peekable();
         protos.peek()?;
         Some(Self {
-            common: HTTP::merge(protos.map(|x| Some(x.common))).unwrap_or_default(),
+            common: Http::merge(protos.map(|x| Some(x.common))).unwrap_or_default(),
         })
     }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub struct HTTP3 {
+pub struct Http3 {
     #[serde(flatten)]
-    common: HTTP,
+    common: Http,
 }
 
-impl HTTP3 {
+impl Http3 {
     fn merge<I: IntoIterator<Item = Option<Self>>>(protos: I) -> Option<Self> {
         let mut protos = protos.into_iter().filter_map(identity).peekable();
         protos.peek()?;
         Some(Self {
-            common: HTTP::merge(protos.map(|x| Some(x.common))).unwrap_or_default(),
+            common: Http::merge(protos.map(|x| Some(x.common))).unwrap_or_default(),
         })
     }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub struct TLS {
+pub struct Tls {
     pub host: Option<Value>,
     pub port: Option<Value>,
     pub body: Option<Value>,
@@ -219,7 +315,7 @@ pub struct TLS {
     pub pause: Vec<Pause>,
 }
 
-impl TLS {
+impl Tls {
     fn merge<I: IntoIterator<Item = Option<Self>>>(protos: I) -> Option<Self> {
         let mut protos = protos.into_iter().filter_map(identity).peekable();
         protos.peek()?;
@@ -240,7 +336,7 @@ impl TLS {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub struct TCP {
+pub struct Tcp {
     pub host: Option<Value>,
     pub port: Option<Value>,
     pub body: Option<Value>,
@@ -248,7 +344,7 @@ pub struct TCP {
     pub pause: Vec<Pause>,
 }
 
-impl TCP {
+impl Tcp {
     fn merge<I: IntoIterator<Item = Option<Self>>>(protos: I) -> Option<Self> {
         let mut protos = protos.into_iter().filter_map(identity).peekable();
         protos.peek()?;
@@ -267,7 +363,7 @@ impl TCP {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub struct QUIC {
+pub struct Quic {
     pub host: Option<Value>,
     pub port: Option<Value>,
     pub body: Option<Value>,
@@ -276,7 +372,7 @@ pub struct QUIC {
     pub pause: Vec<Pause>,
 }
 
-impl QUIC {
+impl Quic {
     fn merge<I: IntoIterator<Item = Option<Self>>>(protos: I) -> Option<Self> {
         let mut protos = protos.into_iter().filter_map(identity).peekable();
         protos.peek()?;
@@ -297,7 +393,7 @@ impl QUIC {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub struct UDP {
+pub struct Udp {
     pub host: Option<Value>,
     pub port: Option<Value>,
     pub body: Option<Value>,
@@ -305,7 +401,7 @@ pub struct UDP {
     pub pause: Vec<Pause>,
 }
 
-impl UDP {
+impl Udp {
     fn merge<I: IntoIterator<Item = Option<Self>>>(protos: I) -> Option<Self> {
         let mut protos = protos.into_iter().filter_map(identity).peekable();
         protos.peek()?;
@@ -373,7 +469,7 @@ impl Value {
     /// used for each field, except unset which indicates no more merging should be done.
     ///
     /// All non-primitive values stop merging after a primitive value or unset = true expression.
-    fn merge<I: IntoIterator<Item = Option<Self>>>(vals: I) -> Option<Self> {
+    fn merge(vals: Vec<Option<Self>>) -> Option<Self> {
         let mut tables = vals.into_iter().filter_map(identity);
         match tables.next()? {
             Self::Expression {
@@ -394,19 +490,17 @@ impl Value {
                         _ => return Some(Self::Expression { template, vars }),
                     }
                 }
-                Some(Self::Expression { template, vars })
+                return Some(Self::Expression { template, vars });
             }
-            Self::Unset { unset } => {
-                if unset {
-                    None
-                } else {
-                    // I guess we just ignore it if someone puts `unset = false`? I honestly would
-                    // return an error but I don't want to add extra error handling complexity to
-                    // the defaults system just for this one case.
-                    Self::merge(tables.map(|x| Some(x)))
-                }
+            Self::Unset { unset } if unset => return None,
+            Self::Unset { .. } => {
+                // I guess we just ignore it if someone puts `unset = false`? I honestly would
+                // return an error but I don't want to add extra error handling complexity to
+                // the defaults system just for this one case.
+                // Collect to a vec to break the recursive iterator cycle.
+                Self::merge(tables.map(|x| Some(x)).collect())
             }
-            x => Some(x),
+            x => return Some(x),
         }
     }
 }

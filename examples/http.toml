@@ -6,12 +6,6 @@ url = "https://example.com/"
 [http_get.http]
 url = "http://example.com/test"
 
-[gql-test.graphql]
-url = "http://example.com/test"
-gql-test.http.method = "GET"
-[gql-test.http]
-method = "GET"
-
 # HTTPS GET with headers
 [get_with_headers.http]
 url = "https://example.com/test"

@@ -47,11 +47,11 @@ impl<'a> Executor<'a> {
         loop {
             let (out, inner) = runner.finish().await?;
             match out {
-                Output::GraphQL(out) => output.graphql = Some(out),
-                Output::HTTP(out) => output.http = Some(out),
-                Output::HTTP1(out) => output.http1 = Some(out),
-                Output::TLS(out) => output.tls = Some(out),
-                Output::TCP(out) => output.tcp = Some(out),
+                Output::GraphQl(out) => output.graphql = Some(out),
+                Output::Http(out) => output.http = Some(out),
+                Output::Http1(out) => output.http1 = Some(out),
+                Output::Tls(out) => output.tls = Some(out),
+                Output::Tcp(out) => output.tcp = Some(out),
             }
             let Some(inner) = inner else {
                 break;
