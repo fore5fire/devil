@@ -8,7 +8,7 @@ use cel_interpreter::{
 use chrono::Duration;
 use url::Url;
 
-use crate::TLSVersion;
+use crate::TlsVersion;
 
 pub trait State<'a, O: Into<&'a str>, I: IntoIterator<Item = O>> {
     fn get(&self, name: &'a str) -> Option<&StepOutput>;
@@ -17,35 +17,35 @@ pub trait State<'a, O: Into<&'a str>, I: IntoIterator<Item = O>> {
 
 #[derive(Debug)]
 pub enum Output {
-    GraphQL(GraphQLOutput),
-    HTTP(HTTPOutput),
-    HTTP1(HTTP1Output),
-    //HTTP2(HTTP2Output),
-    //HTTP3(HTTP3Output),
-    TLS(TLSOutput),
-    TCP(TCPOutput),
+    GraphQl(GraphQlOutput),
+    Http(HttpOutput),
+    Http1(Http1Output),
+    //Http2(Http2Output),
+    //Http3(Http3Output),
+    Tls(TlsOutput),
+    Tcp(TcpOutput),
 }
 
 #[derive(Debug)]
 pub enum RequestOutput {
-    GraphQL(GraphQLRequestOutput),
-    HTTP(HTTPRequestOutput),
-    HTTP1(HTTP1RequestOutput),
-    //HTTP2(HTTP2RequestOutput),
-    //HTTP3(HTTP3RequestOutput),
-    TLS(TLSRequestOutput),
-    TCP(TCPRequestOutput),
+    GraphQl(GraphQlRequestOutput),
+    Http(HttpRequestOutput),
+    Http1(Http1RequestOutput),
+    //Http2(Http2RequestOutput),
+    //Http3(Http3RequestOutput),
+    Tls(TlsRequestOutput),
+    Tcp(TcpRequestOutput),
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct StepOutput {
-    pub graphql: Option<GraphQLOutput>,
-    pub http: Option<HTTPOutput>,
-    pub http1: Option<HTTP1Output>,
-    //pub http2: Option<HTTP2Output>,
-    //pub http3: Option<HTTP3Output>,
-    pub tls: Option<TLSOutput>,
-    pub tcp: Option<TCPOutput>,
+    pub graphql: Option<GraphQlOutput>,
+    pub http: Option<HttpOutput>,
+    pub http1: Option<Http1Output>,
+    //pub http2: Option<Http2Output>,
+    //pub http3: Option<Http3Output>,
+    pub tls: Option<TlsOutput>,
+    pub tcp: Option<TcpOutput>,
 }
 
 impl From<StepOutput> for Value {
@@ -64,25 +64,25 @@ impl From<StepOutput> for Value {
 
 #[derive(Debug, Clone)]
 pub enum ProtocolOutput {
-    HTTP(HTTPOutput),
-    HTTP11(HTTPOutput),
-    HTTP2(HTTPOutput),
-    HTTP3(HTTPOutput),
-    TCP(TCPOutput),
-    GraphQL(GraphQLOutput),
+    Http(HttpOutput),
+    Http11(HttpOutput),
+    Http2(HttpOutput),
+    Http3(HttpOutput),
+    Tcp(TcpOutput),
+    GraphQl(GraphQlOutput),
 }
 
 pub type OutputStack = Vec<ProtocolOutput>;
 
 #[derive(Debug, Clone)]
-pub struct HTTPOutput {
-    pub request: HTTPRequestOutput,
-    pub response: HTTPResponse,
+pub struct HttpOutput {
+    pub request: HttpRequestOutput,
+    pub response: HttpResponse,
     pub protocol: String,
 }
 
-impl From<HTTPOutput> for Value {
-    fn from(value: HTTPOutput) -> Self {
+impl From<HttpOutput> for Value {
+    fn from(value: HttpOutput) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("request".into(), value.request.into()),
@@ -94,7 +94,7 @@ impl From<HTTPOutput> for Value {
 }
 
 #[derive(Debug, Clone)]
-pub struct HTTPRequestOutput {
+pub struct HttpRequestOutput {
     pub url: Url,
     pub method: Option<Vec<u8>>,
     pub headers: Vec<(String, String)>,
@@ -102,8 +102,8 @@ pub struct HTTPRequestOutput {
     pub pause: Vec<PauseOutput>,
 }
 
-impl From<HTTPRequestOutput> for Value {
-    fn from(value: HTTPRequestOutput) -> Self {
+impl From<HttpRequestOutput> for Value {
+    fn from(value: HttpRequestOutput) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("url".into(), value.url.to_string().into()),
@@ -123,7 +123,7 @@ impl From<HTTPRequestOutput> for Value {
 }
 
 #[derive(Debug, Clone)]
-pub struct HTTPResponse {
+pub struct HttpResponse {
     pub protocol: Vec<u8>,
     pub status_code: u16,
     pub headers: Vec<(String, String)>,
@@ -131,8 +131,8 @@ pub struct HTTPResponse {
     pub duration: std::time::Duration,
 }
 
-impl From<HTTPResponse> for Value {
-    fn from(value: HTTPResponse) -> Self {
+impl From<HttpResponse> for Value {
+    fn from(value: HttpResponse) -> Self {
         let mut map = HashMap::with_capacity(6);
         map.insert(
             "protocol".into(),
@@ -154,13 +154,13 @@ impl From<HTTPResponse> for Value {
 }
 
 #[derive(Debug, Clone)]
-pub struct HTTP1Output {
-    pub request: HTTP1RequestOutput,
-    pub response: HTTP1Response,
+pub struct Http1Output {
+    pub request: Http1RequestOutput,
+    pub response: Http1Response,
 }
 
-impl From<HTTP1Output> for Value {
-    fn from(value: HTTP1Output) -> Self {
+impl From<Http1Output> for Value {
+    fn from(value: Http1Output) -> Self {
         let mut map: HashMap<Key, Value> = HashMap::with_capacity(5);
         map.insert("url".into(), value.request.url.to_string().into());
         map.insert("method".into(), value.request.method.clone().into());
@@ -177,7 +177,7 @@ impl From<HTTP1Output> for Value {
 }
 
 #[derive(Debug, Clone)]
-pub struct HTTP1RequestOutput {
+pub struct Http1RequestOutput {
     pub url: Url,
     pub method: Option<Vec<u8>>,
     pub version_string: Option<Vec<u8>>,
@@ -187,7 +187,7 @@ pub struct HTTP1RequestOutput {
 }
 
 #[derive(Debug, Clone)]
-pub struct HTTP1Response {
+pub struct Http1Response {
     pub protocol: Vec<u8>,
     pub status_code: u16,
     pub status_reason: Vec<u8>,
@@ -196,8 +196,8 @@ pub struct HTTP1Response {
     pub duration: std::time::Duration,
 }
 
-impl From<HTTP1Response> for Value {
-    fn from(value: HTTP1Response) -> Self {
+impl From<Http1Response> for Value {
+    fn from(value: Http1Response) -> Self {
         let mut map = HashMap::with_capacity(6);
         map.insert(
             "protocol".into(),
@@ -223,13 +223,13 @@ impl From<HTTP1Response> for Value {
 }
 
 #[derive(Debug, Clone)]
-pub struct GraphQLOutput {
-    pub request: GraphQLRequestOutput,
-    pub response: GraphQLResponse,
+pub struct GraphQlOutput {
+    pub request: GraphQlRequestOutput,
+    pub response: GraphQlResponse,
 }
 
-impl From<GraphQLOutput> for Value {
-    fn from(value: GraphQLOutput) -> Self {
+impl From<GraphQlOutput> for Value {
+    fn from(value: GraphQlOutput) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("request".into(), value.request.into()),
@@ -240,7 +240,7 @@ impl From<GraphQLOutput> for Value {
 }
 
 #[derive(Debug, Clone)]
-pub struct GraphQLRequestOutput {
+pub struct GraphQlRequestOutput {
     pub url: Url,
     pub query: String,
     pub operation: Option<String>,
@@ -249,8 +249,8 @@ pub struct GraphQLRequestOutput {
     pub pause: Vec<PauseOutput>,
 }
 
-impl From<GraphQLRequestOutput> for Value {
-    fn from(value: GraphQLRequestOutput) -> Self {
+impl From<GraphQlRequestOutput> for Value {
+    fn from(value: GraphQlRequestOutput) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("url".into(), value.url.to_string().into()),
@@ -279,7 +279,7 @@ impl From<GraphQLRequestOutput> for Value {
 }
 
 #[derive(Debug, Clone)]
-pub struct GraphQLResponse {
+pub struct GraphQlResponse {
     pub data: OutValue,
     pub errors: OutValue,
     pub full: OutValue,
@@ -287,8 +287,8 @@ pub struct GraphQLResponse {
     pub json: serde_json::Value,
 }
 
-impl From<GraphQLResponse> for Value {
-    fn from(value: GraphQLResponse) -> Self {
+impl From<GraphQlResponse> for Value {
+    fn from(value: GraphQlResponse) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("data".into(), value.data.clone().into()),
@@ -301,14 +301,14 @@ impl From<GraphQLResponse> for Value {
 }
 
 #[derive(Debug, Clone)]
-pub struct TLSOutput {
-    pub request: TLSRequestOutput,
-    pub response: TLSResponse,
-    pub version: TLSVersion,
+pub struct TlsOutput {
+    pub request: TlsRequestOutput,
+    pub response: TlsResponse,
+    pub version: TlsVersion,
 }
 
-impl From<TLSOutput> for Value {
-    fn from(value: TLSOutput) -> Self {
+impl From<TlsOutput> for Value {
+    fn from(value: TlsOutput) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("request".into(), value.request.into()),
@@ -319,15 +319,15 @@ impl From<TLSOutput> for Value {
 }
 
 #[derive(Debug, Clone)]
-pub struct TLSRequestOutput {
+pub struct TlsRequestOutput {
     pub host: String,
     pub port: u16,
     pub body: Vec<u8>,
     pub pause: Vec<PauseOutput>,
 }
 
-impl From<TLSRequestOutput> for Value {
-    fn from(value: TLSRequestOutput) -> Self {
+impl From<TlsRequestOutput> for Value {
+    fn from(value: TlsRequestOutput) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("host".into(), value.host.into()),
@@ -343,13 +343,13 @@ impl From<TLSRequestOutput> for Value {
 }
 
 #[derive(Debug, Clone)]
-pub struct TLSResponse {
+pub struct TlsResponse {
     pub body: Vec<u8>,
     pub duration: Duration,
 }
 
-impl From<TLSResponse> for Value {
-    fn from(value: TLSResponse) -> Self {
+impl From<TlsResponse> for Value {
+    fn from(value: TlsResponse) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("body".into(), value.body.into()),
@@ -360,13 +360,13 @@ impl From<TLSResponse> for Value {
 }
 
 #[derive(Debug, Clone)]
-pub struct TCPOutput {
-    pub request: TCPRequestOutput,
-    pub response: TCPResponse,
+pub struct TcpOutput {
+    pub request: TcpRequestOutput,
+    pub response: TcpResponse,
 }
 
-impl From<TCPOutput> for Value {
-    fn from(value: TCPOutput) -> Self {
+impl From<TcpOutput> for Value {
+    fn from(value: TcpOutput) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("request".into(), value.request.into()),
@@ -377,14 +377,14 @@ impl From<TCPOutput> for Value {
 }
 
 #[derive(Debug, Clone)]
-pub struct TCPRequestOutput {
+pub struct TcpRequestOutput {
     pub host: String,
     pub port: u16,
     pub body: Vec<u8>,
     pub pause: Vec<PauseOutput>,
 }
-impl From<TCPRequestOutput> for Value {
-    fn from(value: TCPRequestOutput) -> Self {
+impl From<TcpRequestOutput> for Value {
+    fn from(value: TcpRequestOutput) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("host".into(), Value::Bytes(Arc::new(value.body.clone()))),
@@ -396,13 +396,13 @@ impl From<TCPRequestOutput> for Value {
 }
 
 #[derive(Debug, Clone)]
-pub struct TCPResponse {
+pub struct TcpResponse {
     pub body: Vec<u8>,
     pub duration: Duration,
 }
 
-impl From<TCPResponse> for Value {
-    fn from(value: TCPResponse) -> Self {
+impl From<TcpResponse> for Value {
+    fn from(value: TcpResponse) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("body".into(), Value::Bytes(Arc::new(value.body.clone()))),

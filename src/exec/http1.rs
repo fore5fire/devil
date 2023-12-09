@@ -11,24 +11,23 @@ use tokio::io::ReadBuf;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use super::runner::Runner;
-use super::tee::Stream;
 use super::tee::Tee;
 use crate::Error;
-use crate::HTTP1Response;
+use crate::Http1Response;
 use crate::Output;
-use crate::{HTTP1Output, HTTP1RequestOutput};
+use crate::{Http1Output, Http1RequestOutput};
 
 #[derive(Debug)]
-pub(super) struct HTTP1Runner<S: Stream> {
-    req: HTTP1RequestOutput,
-    resp: Option<HTTP1Response>,
-    stream: Tee<S>,
+pub(super) struct Http1Runner {
+    req: Http1RequestOutput,
+    resp: Option<Http1Response>,
+    stream: Tee<Box<dyn Runner>>,
     start_time: Instant,
     resp_header_buf: BytesMut,
     req_header_buf: Option<BytesMut>,
 }
 
-impl<S: Stream> AsyncRead for HTTP1Runner<S> {
+impl AsyncRead for Http1Runner {
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -70,7 +69,7 @@ impl<S: Stream> AsyncRead for HTTP1Runner<S> {
     }
 }
 
-impl<S: Stream> AsyncWrite for HTTP1Runner<S> {
+impl AsyncWrite for Http1Runner {
     fn poll_write(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -115,8 +114,11 @@ impl<S: Stream> AsyncWrite for HTTP1Runner<S> {
     }
 }
 
-impl<S: Stream> HTTP1Runner<S> {
-    pub(super) async fn new(stream: S, req: HTTP1RequestOutput) -> crate::Result<Self> {
+impl Http1Runner {
+    pub(super) async fn new(
+        stream: Box<dyn Runner>,
+        req: Http1RequestOutput,
+    ) -> crate::Result<Self> {
         let start_time = Instant::now();
 
         if let Some(p) = req.pause.iter().find(|p| p.after == "open") {
@@ -186,7 +188,7 @@ impl<S: Stream> HTTP1Runner<S> {
         match resp.parse(&self.resp_header_buf) {
             Ok(httparse::Status::Complete(body_start)) => {
                 // Set the header fields in our response.
-                self.resp = Some(HTTP1Response {
+                self.resp = Some(Http1Response {
                     protocol: format!("HTTP/1.{}", resp.version.unwrap()).into(),
                     status_code: resp.code.unwrap(),
                     status_reason: resp.reason.unwrap().into(),
@@ -219,7 +221,7 @@ impl<S: Stream> HTTP1Runner<S> {
 }
 
 #[async_trait]
-impl Runner for HTTP1Runner<Box<dyn Runner>> {
+impl Runner for Http1Runner {
     async fn execute(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Headers will be sent automatically before the first body byte. We don't use size_hint
         // since request headers are computed in planning for steps where http is the top of the
@@ -237,7 +239,7 @@ impl Runner for HTTP1Runner<Box<dyn Runner>> {
         Ok(())
     }
 
-    async fn finish(mut self) -> crate::Result<(Output, Option<Box<dyn Runner>>)> {
+    async fn finish(mut self: Box<Self>) -> crate::Result<(Output, Option<Box<dyn Runner>>)> {
         let (stream, writes, reads) = self.stream.into_parts();
 
         // Update the response body to the actual data that was sent since it will differ for
@@ -251,7 +253,7 @@ impl Runner for HTTP1Runner<Box<dyn Runner>> {
         resp.body = reads;
         resp.duration = self.start_time.elapsed();
         Ok((
-            Output::HTTP1(HTTP1Output {
+            Output::Http1(Http1Output {
                 request: self.req,
                 response: resp,
             }),

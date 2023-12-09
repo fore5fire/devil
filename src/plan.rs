@@ -7,7 +7,7 @@ use cel_interpreter::{Context, Program};
 use chrono::Duration;
 use go_parse_duration::parse_duration;
 use indexmap::IndexMap;
-use std::{collections::HashMap, ops::Deref, sync::Arc};
+use std::{collections::HashMap, iter::once, ops::Deref, sync::Arc};
 use url::Url;
 
 #[derive(Debug)]
@@ -27,7 +27,7 @@ impl<'a> Plan {
             Defaults {
                 selector: Some(bindings::Selector::Single("graphql".to_owned())),
                 step: bindings::Step {
-                    http: Some(bindings::HTTP {
+                    http: Some(bindings::Http {
                         method: Some(bindings::Value::LiteralString("POST".to_owned())),
                         headers: Some(bindings::Table::Map(
                             [(
@@ -46,7 +46,7 @@ impl<'a> Plan {
             Defaults {
                 selector: None,
                 step: bindings::Step {
-                    http: Some(bindings::HTTP {
+                    http: Some(bindings::Http {
                         method: Some(bindings::Value::LiteralString("GET".to_owned())),
                         ..Default::default()
                     }),
@@ -55,36 +55,28 @@ impl<'a> Plan {
             },
         ]);
 
-        // Generate final steps by combining with defaults.
+        // Generate final steps.
         let steps: IndexMap<String, Step> = plan
             .steps
             .into_iter()
-            .map(|(name, value)| Ok(Some((name, Step::from_bindings(value)?))))
-            .filter_map(Result::transpose)
+            // Apply the user and implicit defaults.
+            .map(|(name, value)| {
+                let selected_defaults = bindings::Step::select(value, defaults);
+                (
+                    name,
+                    bindings::Step::merge(once(value).chain(plan.courier.defaults.iter())),
+                )
+            })
+            // Apply planner requirements and convert to planner structure.
+            .map(|(name, value)| Ok((name, Step::from_bindings(value)?)))
             .collect::<Result<_>>()?;
 
         Ok(Plan { steps })
     }
 }
 
-fn merge_toml(target: &mut toml::Value, defaults: &toml::Value) {
-    let (toml::Value::Table(target), toml::Value::Table(defaults)) = (target, defaults) else {
-        return;
-    };
-    for (name, default) in defaults {
-        match target.entry(name) {
-            toml::map::Entry::Vacant(entry) => {
-                entry.insert(default.clone());
-            }
-            toml::map::Entry::Occupied(mut entry) => {
-                merge_toml(entry.get_mut(), default);
-            }
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TLSVersion {
+pub enum TlsVersion {
     SSL1,
     SSL2,
     SSL3,
@@ -99,8 +91,8 @@ pub enum TLSVersion {
     Other(u16),
 }
 
-impl TLSVersion {
-    pub fn try_from_str(s: &str) -> Result<TLSVersion> {
+impl TlsVersion {
+    pub fn try_from_str(s: &str) -> Result<TlsVersion> {
         Ok(match s.into() {
             "ssl1" => Self::SSL1,
             "ssl2" => Self::SSL2,
@@ -114,27 +106,27 @@ impl TLSVersion {
     }
 }
 
-impl From<&TLSVersion> for cel_interpreter::Value {
-    fn from(value: &TLSVersion) -> Self {
+impl From<&TlsVersion> for cel_interpreter::Value {
+    fn from(value: &TlsVersion) -> Self {
         match value {
-            TLSVersion::SSL1 => cel_interpreter::Value::String(Arc::new("ssl1".to_owned())),
-            TLSVersion::SSL2 => cel_interpreter::Value::String(Arc::new("ssl2".to_owned())),
-            TLSVersion::SSL3 => cel_interpreter::Value::String(Arc::new("ssl3".to_owned())),
-            TLSVersion::TLS1_0 => cel_interpreter::Value::String(Arc::new("tls1.0".to_owned())),
-            TLSVersion::TLS1_1 => cel_interpreter::Value::String(Arc::new("tls1.1".to_owned())),
-            TLSVersion::TLS1_2 => cel_interpreter::Value::String(Arc::new("tls1.2".to_owned())),
-            TLSVersion::TLS1_3 => cel_interpreter::Value::String(Arc::new("tls1.3".to_owned())),
-            TLSVersion::DTLS1_0 => cel_interpreter::Value::String(Arc::new("dtls1.0".to_owned())),
-            TLSVersion::DTLS1_1 => cel_interpreter::Value::String(Arc::new("dtls1.1".to_owned())),
-            TLSVersion::DTLS1_2 => cel_interpreter::Value::String(Arc::new("dtls1.2".to_owned())),
-            TLSVersion::DTLS1_3 => cel_interpreter::Value::String(Arc::new("dtls1.3".to_owned())),
-            TLSVersion::Other(a) => cel_interpreter::Value::UInt(*a as u64),
+            TlsVersion::SSL1 => cel_interpreter::Value::String(Arc::new("ssl1".to_owned())),
+            TlsVersion::SSL2 => cel_interpreter::Value::String(Arc::new("ssl2".to_owned())),
+            TlsVersion::SSL3 => cel_interpreter::Value::String(Arc::new("ssl3".to_owned())),
+            TlsVersion::TLS1_0 => cel_interpreter::Value::String(Arc::new("tls1.0".to_owned())),
+            TlsVersion::TLS1_1 => cel_interpreter::Value::String(Arc::new("tls1.1".to_owned())),
+            TlsVersion::TLS1_2 => cel_interpreter::Value::String(Arc::new("tls1.2".to_owned())),
+            TlsVersion::TLS1_3 => cel_interpreter::Value::String(Arc::new("tls1.3".to_owned())),
+            TlsVersion::DTLS1_0 => cel_interpreter::Value::String(Arc::new("dtls1.0".to_owned())),
+            TlsVersion::DTLS1_1 => cel_interpreter::Value::String(Arc::new("dtls1.1".to_owned())),
+            TlsVersion::DTLS1_2 => cel_interpreter::Value::String(Arc::new("dtls1.2".to_owned())),
+            TlsVersion::DTLS1_3 => cel_interpreter::Value::String(Arc::new("dtls1.3".to_owned())),
+            TlsVersion::Other(a) => cel_interpreter::Value::UInt(*a as u64),
         }
     }
 }
 
 #[derive(Debug)]
-pub enum HTTPVersion {
+pub enum HttpVersion {
     HTTP0_9,
     HTTP1_0,
     HTTP1_1,
@@ -184,7 +176,7 @@ impl Pause {
 }
 
 #[derive(Debug, Clone)]
-pub struct HTTPRequest {
+pub struct HttpRequest {
     pub url: PlanValue<Url>,
     pub method: Option<PlanValue<Vec<u8>>>,
     pub body: Option<PlanValue<Vec<u8>>>,
@@ -193,9 +185,10 @@ pub struct HTTPRequest {
     pub pause: Vec<Pause>,
 }
 
-impl TryFrom<bindings::HTTP> for HTTPRequest {
+impl TryFrom<bindings::Http> for HttpRequest {
     type Error = Error;
-    fn try_from(binding: bindings::HTTP) -> Result<Self> {
+    fn try_from(binding: bindings::Http) -> Result<Self> {
+        println!("{binding:?}");
         Ok(Self {
             url: binding
                 .url
@@ -219,14 +212,14 @@ impl TryFrom<bindings::HTTP> for HTTPRequest {
     }
 }
 
-impl HTTPRequest {
-    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::HTTPRequestOutput>
+impl HttpRequest {
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::HttpRequestOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
-        Ok(crate::HTTPRequestOutput {
+        Ok(crate::HttpRequestOutput {
             url: self.url.evaluate(state)?,
             method: self
                 .method
@@ -255,7 +248,7 @@ impl HTTPRequest {
 }
 
 #[derive(Debug, Clone)]
-pub struct HTTP1Request {
+pub struct Http1Request {
     pub url: PlanValue<Url>,
     pub method: Option<PlanValue<Vec<u8>>>,
     pub version_string: Option<PlanValue<Vec<u8>>>,
@@ -265,14 +258,14 @@ pub struct HTTP1Request {
     pub pause: Vec<Pause>,
 }
 
-impl HTTP1Request {
-    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::HTTP1RequestOutput>
+impl Http1Request {
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::Http1RequestOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
-        Ok(crate::HTTP1RequestOutput {
+        Ok(crate::Http1RequestOutput {
             url: self.url.evaluate(state)?,
             method: self
                 .method
@@ -305,15 +298,15 @@ impl HTTP1Request {
     }
 }
 
-impl TryFrom<bindings::HTTP1> for HTTP1Request {
+impl TryFrom<bindings::Http1> for Http1Request {
     type Error = Error;
-    fn try_from(binding: bindings::HTTP1) -> Result<Self> {
+    fn try_from(binding: bindings::Http1) -> Result<Self> {
         Ok(Self {
             url: binding
                 .common
                 .url
                 .map(PlanValue::<Url>::try_from)
-                .ok_or_else(|| Error::from("http.url is required"))??,
+                .ok_or_else(|| Error::from("http1.url is required"))??,
             method: binding
                 .common
                 .method
@@ -341,27 +334,27 @@ impl TryFrom<bindings::HTTP1> for HTTP1Request {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct HTTP2Request {}
+pub struct Http2Request {}
 
-impl TryFrom<bindings::HTTP2> for HTTP2Request {
+impl TryFrom<bindings::Http2> for Http2Request {
     type Error = Error;
-    fn try_from(binding: bindings::HTTP2) -> Result<Self> {
+    fn try_from(binding: bindings::Http2) -> Result<Self> {
         Ok(Self {})
     }
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct HTTP3Request {}
+pub struct Http3Request {}
 
-impl TryFrom<bindings::HTTP3> for HTTP3Request {
+impl TryFrom<bindings::Http3> for Http3Request {
     type Error = Error;
-    fn try_from(binding: bindings::HTTP3) -> Result<Self> {
+    fn try_from(binding: bindings::Http3) -> Result<Self> {
         Ok(Self {})
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct GraphQLRequest {
+pub struct GraphQlRequest {
     pub url: PlanValue<Url>,
     pub query: PlanValue<String>,
     pub params: Option<PlanValueTable>,
@@ -370,9 +363,9 @@ pub struct GraphQLRequest {
     pub pause: Vec<Pause>,
 }
 
-impl TryFrom<bindings::GraphQL> for GraphQLRequest {
+impl TryFrom<bindings::GraphQl> for GraphQlRequest {
     type Error = Error;
-    fn try_from(binding: bindings::GraphQL) -> Result<Self> {
+    fn try_from(binding: bindings::GraphQl) -> Result<Self> {
         Ok(Self {
             url: binding
                 .url
@@ -401,14 +394,14 @@ impl TryFrom<bindings::GraphQL> for GraphQLRequest {
     }
 }
 
-impl GraphQLRequest {
-    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::GraphQLRequestOutput>
+impl GraphQlRequest {
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::GraphQlRequestOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
-        Ok(crate::GraphQLRequestOutput {
+        Ok(crate::GraphQlRequestOutput {
             url: self.url.evaluate(state)?,
             query: self.query.evaluate(state)?,
             operation: self
@@ -432,21 +425,21 @@ impl GraphQLRequest {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct TCPRequest {
+pub struct TcpRequest {
     pub body: PlanValue<Vec<u8>>,
     pub host: PlanValue<String>,
     pub port: PlanValue<u16>,
     pub pause: Vec<Pause>,
 }
 
-impl TCPRequest {
-    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::TCPRequestOutput>
+impl TcpRequest {
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::TcpRequestOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
-        Ok(crate::TCPRequestOutput {
+        Ok(crate::TcpRequestOutput {
             host: self.host.evaluate(state)?,
             port: self.port.evaluate(state)?,
             body: self.body.evaluate(state)?.into(),
@@ -459,9 +452,9 @@ impl TCPRequest {
     }
 }
 
-impl TryFrom<bindings::TCP> for TCPRequest {
+impl TryFrom<bindings::Tcp> for TcpRequest {
     type Error = Error;
-    fn try_from(binding: bindings::TCP) -> Result<Self> {
+    fn try_from(binding: bindings::Tcp) -> Result<Self> {
         Ok(Self {
             host: binding
                 .host
@@ -549,20 +542,20 @@ impl TryFrom<PlanData> for Duration {
     }
 }
 
-impl TryFrom<PlanData> for TLSVersion {
+impl TryFrom<PlanData> for TlsVersion {
     type Error = Error;
     fn try_from(value: PlanData) -> Result<Self> {
         let cel_interpreter::Value::String(x) = value.0 else {
             return Err(Error("TLS version must be a string".to_owned()));
         };
         match x.as_str() {
-            "SSL1" => Ok(TLSVersion::SSL1),
-            "SSL2" => Ok(TLSVersion::SSL2),
-            "SSL3" => Ok(TLSVersion::SSL3),
-            "TLS1_0" => Ok(TLSVersion::TLS1_0),
-            "TLS1_1" => Ok(TLSVersion::TLS1_1),
-            "TLS1_2" => Ok(TLSVersion::TLS1_2),
-            "TLS1_3" => Ok(TLSVersion::TLS1_3),
+            "ssl1" => Ok(TlsVersion::SSL1),
+            "ssl2" => Ok(TlsVersion::SSL2),
+            "ssl3" => Ok(TlsVersion::SSL3),
+            "tls1_0" => Ok(TlsVersion::TLS1_0),
+            "tls1_1" => Ok(TlsVersion::TLS1_1),
+            "tls1_2" => Ok(TlsVersion::TLS1_2),
+            "tls1_3" => Ok(TlsVersion::TLS1_3),
             _ => Err(Error::from("invalid TLS version")),
         }
     }
@@ -591,21 +584,21 @@ impl From<PlanData> for cel_interpreter::Value {
 }
 
 #[derive(Debug, Clone)]
-pub struct TLSRequest {
+pub struct TlsRequest {
     pub host: PlanValue<String>,
     pub port: PlanValue<u16>,
     pub body: PlanValue<Vec<u8>>,
     pub pause: Vec<Pause>,
 }
 
-impl TLSRequest {
-    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::TLSRequestOutput>
+impl TlsRequest {
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::TlsRequestOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
-        Ok(crate::TLSRequestOutput {
+        Ok(crate::TlsRequestOutput {
             host: self.host.evaluate(state)?,
             port: self.port.evaluate(state)?,
             body: self.body.evaluate(state)?.into(),
@@ -618,9 +611,9 @@ impl TLSRequest {
     }
 }
 
-impl TryFrom<bindings::TLS> for TLSRequest {
+impl TryFrom<bindings::Tls> for TlsRequest {
     type Error = Error;
-    fn try_from(binding: bindings::TLS) -> Result<Self> {
+    fn try_from(binding: bindings::Tls) -> Result<Self> {
         Ok(Self {
             host: binding
                 .host
@@ -648,17 +641,17 @@ impl TryFrom<bindings::TLS> for TLSRequest {
 pub struct WebsocketRequest {}
 
 #[derive(Debug, Default, Clone)]
-pub struct QUICRequest {
+pub struct QuicRequest {
     pub host: PlanValue<String>,
     pub port: PlanValue<u16>,
     pub body: PlanValue<Vec<u8>>,
-    pub version: Option<PlanValue<TLSVersion>>,
+    pub version: Option<PlanValue<TlsVersion>>,
     pub pause: Vec<Pause>,
 }
 
-impl TryFrom<bindings::QUIC> for QUICRequest {
+impl TryFrom<bindings::Quic> for QuicRequest {
     type Error = Error;
-    fn try_from(binding: bindings::QUIC) -> Result<Self> {
+    fn try_from(binding: bindings::Quic) -> Result<Self> {
         Ok(Self {
             host: binding
                 .host
@@ -675,7 +668,7 @@ impl TryFrom<bindings::QUIC> for QUICRequest {
                 .unwrap_or_else(|| PlanValue::Literal(Vec::new())),
             version: binding
                 .tls_version
-                .map(PlanValue::<TLSVersion>::try_from)
+                .map(PlanValue::<TlsVersion>::try_from)
                 .transpose()?,
             pause: binding
                 .pause
@@ -687,16 +680,16 @@ impl TryFrom<bindings::QUIC> for QUICRequest {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct UDPRequest {
+pub struct UdpRequest {
     pub body: PlanValue<Vec<u8>>,
     pub host: PlanValue<String>,
     pub port: PlanValue<u16>,
     pub pause: Vec<Pause>,
 }
 
-impl TryFrom<bindings::UDP> for UDPRequest {
+impl TryFrom<bindings::Udp> for UdpRequest {
     type Error = Error;
-    fn try_from(binding: bindings::UDP) -> Result<Self> {
+    fn try_from(binding: bindings::Udp) -> Result<Self> {
         Ok(Self {
             host: binding
                 .host
@@ -725,59 +718,63 @@ impl TryFrom<bindings::UDP> for UDPRequest {
 
 #[derive(Debug, Clone)]
 pub enum Step {
-    GraphQLHTTP {
-        graphql: GraphQLRequest,
-        http: HTTPRequest,
+    GraphQlHttp {
+        graphql: GraphQlRequest,
+        http: HttpRequest,
     },
-    GraphQLHTTP1 {
-        graphql: GraphQLRequest,
-        http1: HTTP1Request,
-        tls: Option<TLSRequest>,
-        tcp: TCPRequest,
+    GraphQlHttp1 {
+        graphql: GraphQlRequest,
+        http1: Http1Request,
+        tls: Option<TlsRequest>,
+        tcp: TcpRequest,
     },
-    GraphQLHTTP2 {
-        graphql: GraphQLRequest,
-        http2: HTTP2Request,
-        tls: Option<TLSRequest>,
-        tcp: TCPRequest,
+    GraphQlHttp2 {
+        graphql: GraphQlRequest,
+        http2: Http2Request,
+        tls: Option<TlsRequest>,
+        tcp: TcpRequest,
     },
-    GraphQLHTTP3 {
-        graphql: GraphQLRequest,
-        http3: HTTP3Request,
-        quic: QUICRequest,
-        udp: UDPRequest,
+    GraphQlHttp3 {
+        graphql: GraphQlRequest,
+        http3: Http3Request,
+        quic: QuicRequest,
+        udp: UdpRequest,
     },
-    HTTP {
-        http: HTTPRequest,
+    Http {
+        http: HttpRequest,
     },
-    HTTP1 {
-        http1: HTTP1Request,
-        tls: Option<TLSRequest>,
-        tcp: TCPRequest,
+    Http1 {
+        http1: Http1Request,
+        tls: Option<TlsRequest>,
+        tcp: TcpRequest,
     },
-    HTTP2 {
-        http2: HTTP2Request,
-        tls: Option<TLSRequest>,
-        tcp: TCPRequest,
+    Http2 {
+        http2: Http2Request,
+        tls: Option<TlsRequest>,
+        tcp: TcpRequest,
     },
-    HTTP3 {
-        http3: HTTP3Request,
-        quic: QUICRequest,
-        udp: UDPRequest,
+    Http3 {
+        http3: Http3Request,
+        quic: QuicRequest,
+        udp: UdpRequest,
     },
-    TLSTCP {
-        tls: TLSRequest,
-        tcp: TCPRequest,
+    Tls {
+        tls: TlsRequest,
+        tcp: TcpRequest,
     },
-    TCP {
-        tcp: TCPRequest,
+    Dtls {
+        tls: TlsRequest,
+        udp: UdpRequest,
     },
-    QUIC {
-        quic: QUICRequest,
-        udp: UDPRequest,
+    Tcp {
+        tcp: TcpRequest,
     },
-    UDP {
-        udp: UDPRequest,
+    Quic {
+        quic: QuicRequest,
+        udp: UdpRequest,
+    },
+    Udp {
+        udp: UdpRequest,
     },
 }
 
@@ -786,7 +783,7 @@ impl Step {
         match binding {
             bindings::Step {
                 graphql: Some(gql),
-                http: Some(http),
+                http,
                 http1: None,
                 http2: None,
                 http3: None,
@@ -794,25 +791,26 @@ impl Step {
                 tcp: None,
                 quic: None,
                 udp: None,
-            } => Ok(Step::GraphQLHTTP {
-                http: http.try_into()?,
+            } => Ok(Step::GraphQlHttp {
+                http: http.unwrap_or_default().try_into()?,
                 graphql: gql.try_into()?,
             }),
+            // If HTTP1, TLS, or TCP is specified we use HTTP1.
             bindings::Step {
                 graphql: Some(gql),
                 http: None,
-                http1: Some(http1),
+                http1,
                 http2: None,
                 http3: None,
                 tls,
-                tcp: Some(tcp),
+                tcp,
                 quic: None,
                 udp: None,
-            } => Ok(Step::GraphQLHTTP1 {
-                http1: http1.try_into()?,
+            } => Ok(Step::GraphQlHttp1 {
+                http1: http1.unwrap_or_default().try_into()?,
                 graphql: gql.try_into()?,
-                tls: tls.map(TLSRequest::try_from).transpose()?,
-                tcp: tcp.try_into()?,
+                tls: tls.map(TlsRequest::try_from).transpose()?,
+                tcp: tcp.unwrap_or_default().try_into()?,
             }),
             bindings::Step {
                 graphql: Some(gql),
@@ -821,29 +819,155 @@ impl Step {
                 http2: Some(http2),
                 http3: None,
                 tls,
-                tcp: Some(tcp),
+                tcp,
                 quic: None,
                 udp: None,
-            } => Ok(Step::GraphQLHTTP2 {
+            } => Ok(Step::GraphQlHttp2 {
                 http2: http2.try_into()?,
                 graphql: gql.try_into()?,
-                tls: tls.map(TLSRequest::try_from).transpose()?,
-                tcp: tcp.try_into()?,
+                tls: tls.map(TlsRequest::try_from).transpose()?,
+                tcp: tcp.unwrap_or_default().try_into()?,
             }),
             bindings::Step {
                 graphql: Some(gql),
                 http: None,
                 http1: None,
                 http2: None,
+                http3,
+                tls: None,
+                tcp: None,
+                quic,
+                udp,
+            } => Ok(Step::GraphQlHttp3 {
+                graphql: gql.try_into()?,
+                http3: http3.unwrap_or_default().try_into()?,
+                quic: quic.unwrap_or_default().try_into()?,
+                udp: udp.unwrap_or_default().try_into()?,
+            }),
+            bindings::Step {
+                graphql: None,
+                http: Some(http),
+                http1: None,
+                http2: None,
+                http3: None,
+                tls: None,
+                tcp: None,
+                quic: None,
+                udp: None,
+            } => Ok(Step::Http {
+                http: http.try_into()?,
+            }),
+            bindings::Step {
+                graphql: None,
+                http: None,
+                http1: Some(http1),
+                http2: None,
+                http3: None,
+                tls,
+                tcp,
+                quic: None,
+                udp: None,
+            } => Ok(Step::Http1 {
+                http1: http1.try_into()?,
+                tls: tls.map(TlsRequest::try_from).transpose()?,
+                tcp: tcp.unwrap_or_default().try_into()?,
+            }),
+            bindings::Step {
+                graphql: None,
+                http: None,
+                http1: None,
+                http2: Some(http2),
+                http3: None,
+                tls,
+                tcp,
+                quic: None,
+                udp: None,
+            } => Ok(Step::Http2 {
+                http2: http2.try_into()?,
+                tls: tls.map(TlsRequest::try_from).transpose()?,
+                tcp: tcp.unwrap_or_default().try_into()?,
+            }),
+            bindings::Step {
+                graphql: None,
+                http: None,
+                http1: None,
+                http2: None,
                 http3: Some(http3),
                 tls: None,
                 tcp: None,
-                quic: Some(quic),
-                udp: Some(udp),
-            } => Ok(Step::GraphQLHTTP3 {
-                graphql: gql.try_into()?,
+                quic,
+                udp,
+            } => Ok(Step::Http3 {
                 http3: http3.try_into()?,
+                quic: quic.unwrap_or_default().try_into()?,
+                udp: udp.unwrap_or_default().try_into()?,
+            }),
+            bindings::Step {
+                graphql: None,
+                http: None,
+                http1: None,
+                http2: None,
+                http3: None,
+                tls: Some(tls),
+                tcp,
+                quic: None,
+                udp: None,
+            } => Ok(Step::Tls {
+                tls: tls.try_into()?,
+                tcp: tcp.unwrap_or_default().try_into()?,
+            }),
+            bindings::Step {
+                graphql: None,
+                http: None,
+                http1: None,
+                http2: None,
+                http3: None,
+                tls: Some(tls),
+                tcp: None,
+                quic: None,
+                udp,
+            } => Ok(Step::Dtls {
+                tls: tls.try_into()?,
+                udp: udp.unwrap_or_default().try_into()?,
+            }),
+            bindings::Step {
+                graphql: None,
+                http: None,
+                http1: None,
+                http2: None,
+                http3: None,
+                tls: None,
+                tcp: Some(tcp),
+                quic: None,
+                udp: None,
+            } => Ok(Step::Tcp {
+                tcp: tcp.try_into()?,
+            }),
+            bindings::Step {
+                graphql: None,
+                http: None,
+                http1: None,
+                http2: None,
+                http3: None,
+                tls: None,
+                tcp: None,
+                quic: Some(quic),
+                udp,
+            } => Ok(Step::Quic {
                 quic: quic.try_into()?,
+                udp: udp.unwrap_or_default().try_into()?,
+            }),
+            bindings::Step {
+                graphql: None,
+                http: None,
+                http1: None,
+                http2: None,
+                http3: None,
+                tls: None,
+                tcp: None,
+                quic: None,
+                udp: Some(udp),
+            } => Ok(Step::Udp {
                 udp: udp.try_into()?,
             }),
             _ => Err(Error::from("step has incompatible protocols")),
@@ -852,10 +976,10 @@ impl Step {
 
     pub fn into_stack(self) -> Vec<Protocol> {
         match self {
-            Self::GraphQLHTTP { graphql, http } => {
-                vec![Protocol::HTTP(http), Protocol::GraphQL(graphql)]
+            Self::GraphQlHttp { graphql, http } => {
+                vec![Protocol::Http(http), Protocol::GraphQl(graphql)]
             }
-            Self::GraphQLHTTP1 {
+            Self::GraphQlHttp1 {
                 graphql,
                 http1,
                 tls,
@@ -863,20 +987,20 @@ impl Step {
             } => {
                 if let Some(tls) = tls {
                     vec![
-                        Protocol::TCP(tcp),
-                        Protocol::TLS(tls),
-                        Protocol::HTTP1(http1),
-                        Protocol::GraphQL(graphql),
+                        Protocol::Tcp(tcp),
+                        Protocol::Tls(tls),
+                        Protocol::Http1(http1),
+                        Protocol::GraphQl(graphql),
                     ]
                 } else {
                     vec![
-                        Protocol::TCP(tcp),
-                        Protocol::HTTP1(http1),
-                        Protocol::GraphQL(graphql),
+                        Protocol::Tcp(tcp),
+                        Protocol::Http1(http1),
+                        Protocol::GraphQl(graphql),
                     ]
                 }
             }
-            Self::GraphQLHTTP2 {
+            Self::GraphQlHttp2 {
                 graphql,
                 http2,
                 tls,
@@ -884,75 +1008,78 @@ impl Step {
             } => {
                 if let Some(tls) = tls {
                     vec![
-                        Protocol::TCP(tcp),
-                        Protocol::TLS(tls),
-                        Protocol::HTTP2(http2),
-                        Protocol::GraphQL(graphql),
+                        Protocol::Tcp(tcp),
+                        Protocol::Tls(tls),
+                        Protocol::Http2(http2),
+                        Protocol::GraphQl(graphql),
                     ]
                 } else {
                     vec![
-                        Protocol::TCP(tcp),
-                        Protocol::HTTP2(http2),
-                        Protocol::GraphQL(graphql),
+                        Protocol::Tcp(tcp),
+                        Protocol::Http2(http2),
+                        Protocol::GraphQl(graphql),
                     ]
                 }
             }
-            Self::GraphQLHTTP3 {
+            Self::GraphQlHttp3 {
                 graphql,
                 http3,
                 quic,
                 udp,
             } => {
                 vec![
-                    Protocol::UDP(udp),
-                    Protocol::QUIC(quic),
-                    Protocol::HTTP3(http3),
-                    Protocol::GraphQL(graphql),
+                    Protocol::Udp(udp),
+                    Protocol::Quic(quic),
+                    Protocol::Http3(http3),
+                    Protocol::GraphQl(graphql),
                 ]
             }
-            Self::HTTP { http } => {
-                vec![Protocol::HTTP(http)]
+            Self::Http { http } => {
+                vec![Protocol::Http(http)]
             }
-            Self::HTTP1 { http1, tls, tcp } => {
+            Self::Http1 { http1, tls, tcp } => {
                 if let Some(tls) = tls {
                     vec![
-                        Protocol::TCP(tcp),
-                        Protocol::TLS(tls),
-                        Protocol::HTTP1(http1),
+                        Protocol::Tcp(tcp),
+                        Protocol::Tls(tls),
+                        Protocol::Http1(http1),
                     ]
                 } else {
-                    vec![Protocol::TCP(tcp), Protocol::HTTP1(http1)]
+                    vec![Protocol::Tcp(tcp), Protocol::Http1(http1)]
                 }
             }
-            Self::HTTP2 { http2, tls, tcp } => {
+            Self::Http2 { http2, tls, tcp } => {
                 if let Some(tls) = tls {
                     vec![
-                        Protocol::TCP(tcp),
-                        Protocol::TLS(tls),
-                        Protocol::HTTP2(http2),
+                        Protocol::Tcp(tcp),
+                        Protocol::Tls(tls),
+                        Protocol::Http2(http2),
                     ]
                 } else {
-                    vec![Protocol::TCP(tcp), Protocol::HTTP2(http2)]
+                    vec![Protocol::Tcp(tcp), Protocol::Http2(http2)]
                 }
             }
-            Self::HTTP3 { http3, quic, udp } => {
+            Self::Http3 { http3, quic, udp } => {
                 vec![
-                    Protocol::UDP(udp),
-                    Protocol::QUIC(quic),
-                    Protocol::HTTP3(http3),
+                    Protocol::Udp(udp),
+                    Protocol::Quic(quic),
+                    Protocol::Http3(http3),
                 ]
             }
-            Self::TLSTCP { tls, tcp } => {
-                vec![Protocol::TCP(tcp), Protocol::TLS(tls)]
+            Self::Tls { tls, tcp } => {
+                vec![Protocol::Tcp(tcp), Protocol::Tls(tls)]
             }
-            Self::TCP { tcp } => {
-                vec![Protocol::TCP(tcp)]
+            Self::Dtls { tls, udp } => {
+                vec![Protocol::Udp(udp), Protocol::Tls(tls)]
             }
-            Self::QUIC { quic, udp } => {
-                vec![Protocol::QUIC(quic), Protocol::UDP(udp)]
+            Self::Tcp { tcp } => {
+                vec![Protocol::Tcp(tcp)]
             }
-            Self::UDP { udp } => {
-                vec![Protocol::UDP(udp)]
+            Self::Quic { quic, udp } => {
+                vec![Protocol::Quic(quic), Protocol::Udp(udp)]
+            }
+            Self::Udp { udp } => {
+                vec![Protocol::Udp(udp)]
             }
         }
     }
@@ -960,15 +1087,15 @@ impl Step {
 
 #[derive(Debug, Clone)]
 pub enum Protocol {
-    GraphQL(GraphQLRequest),
-    HTTP(HTTPRequest),
-    HTTP1(HTTP1Request),
-    HTTP2(HTTP2Request),
-    HTTP3(HTTP3Request),
-    TLS(TLSRequest),
-    TCP(TCPRequest),
-    QUIC(QUICRequest),
-    UDP(UDPRequest),
+    GraphQl(GraphQlRequest),
+    Http(HttpRequest),
+    Http1(Http1Request),
+    Http2(Http2Request),
+    Http3(Http3Request),
+    Tls(TlsRequest),
+    Tcp(TcpRequest),
+    Quic(QuicRequest),
+    Udp(UdpRequest),
 }
 
 impl Protocol {
@@ -979,15 +1106,15 @@ impl Protocol {
         I: IntoIterator<Item = O>,
     {
         Ok(match self {
-            Self::GraphQL(proto) => RequestOutput::GraphQL(proto.evaluate(state)?),
-            Self::HTTP(proto) => RequestOutput::HTTP(proto.evaluate(state)?),
-            Self::HTTP1(proto) => RequestOutput::HTTP1(proto.evaluate(state)?),
-            //Self::HTTP2(proto) => RequestOutput::HTTP2(proto.evaluate(state)?),
-            //Self::HTTP3(proto) => RequestOutput::HTTP3(proto.evaluate(state)?),
-            Self::TLS(proto) => RequestOutput::TLS(proto.evaluate(state)?),
-            Self::TCP(proto) => RequestOutput::TCP(proto.evaluate(state)?),
-            //Self::QUIC(proto) => RequestOutput::QUIC(proto.evaluate(state)?),
-            //Self::UDP(proto) => RequestOutput::UDP(proto.evaluate(state)?),
+            Self::GraphQl(proto) => RequestOutput::GraphQl(proto.evaluate(state)?),
+            Self::Http(proto) => RequestOutput::Http(proto.evaluate(state)?),
+            Self::Http1(proto) => RequestOutput::Http1(proto.evaluate(state)?),
+            //Self::HTTp2(proto) => RequestOutput::Http2(proto.evaluate(state)?),
+            //Self::Http3(proto) => RequestOutput::Http3(proto.evaluate(state)?),
+            Self::Tls(proto) => RequestOutput::Tls(proto.evaluate(state)?),
+            Self::Tcp(proto) => RequestOutput::Tcp(proto.evaluate(state)?),
+            //Self::Quic(proto) => RequestOutput::Quic(proto.evaluate(state)?),
+            //Self::Udp(proto) => RequestOutput::Udp(proto.evaluate(state)?),
             _ => return Err(Error::from("support for protocol {proto:?} is incomplete")),
         })
     }
@@ -1072,12 +1199,12 @@ impl TryFrom<bindings::Value> for PlanValue<Duration> {
         }
     }
 }
-impl TryFrom<bindings::Value> for PlanValue<TLSVersion> {
+impl TryFrom<bindings::Value> for PlanValue<TlsVersion> {
     type Error = Error;
     fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
             bindings::Value::LiteralString(x) => Ok(Self::Literal(
-                TLSVersion::try_from_str(x.as_str())
+                TlsVersion::try_from_str(x.as_str())
                     .map_err(|_| Error::from("out-of-bounds unsigned 16 bit integer literal"))?,
             )),
             _ => Err(Error(format!(
@@ -1161,15 +1288,14 @@ impl TryFrom<bindings::Table> for PlanValueTable {
             bindings::Table::Array(a) => a
                 .into_iter()
                 .map(|entry| {
-                    Ok(Some((
+                    Ok((
                         PlanValue::<String>::try_from(entry.key)?,
                         entry
                             .value
                             .map(|v| PlanValue::<String>::try_from(v))
                             .transpose()?,
-                    )))
+                    ))
                 })
-                .filter_map(Result::transpose)
                 .collect::<Result<_>>()?,
         }))
     }

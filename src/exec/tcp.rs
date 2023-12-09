@@ -6,19 +6,19 @@ use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{lookup_host, TcpStream};
 
-use crate::{Error, Output, TCPOutput, TCPRequestOutput, TCPResponse};
+use crate::{Error, Output, TcpOutput, TcpRequestOutput, TcpResponse};
 
 use super::runner::Runner;
 use super::tee::Tee;
 
 #[derive(Debug)]
-pub(super) struct TCPRunner {
-    req: TCPRequestOutput,
+pub(super) struct TcpRunner {
+    req: TcpRequestOutput,
     stream: Tee<TcpStream>,
     start: Instant,
 }
 
-impl AsyncRead for TCPRunner {
+impl AsyncRead for TcpRunner {
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -28,7 +28,7 @@ impl AsyncRead for TCPRunner {
     }
 }
 
-impl AsyncWrite for TCPRunner {
+impl AsyncWrite for TcpRunner {
     fn poll_write(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -52,10 +52,10 @@ impl AsyncWrite for TCPRunner {
     }
 }
 
-impl Unpin for TCPRunner {}
+impl Unpin for TcpRunner {}
 
-impl<'a> TCPRunner {
-    pub(super) async fn new(req: TCPRequestOutput) -> crate::Result<TCPRunner> {
+impl<'a> TcpRunner {
+    pub(super) async fn new(req: TcpRequestOutput) -> crate::Result<TcpRunner> {
         //let addr = ip_for_host(&host).await?;
         let start = Instant::now();
         let addr = format!("{}:{}", req.host, req.port);
@@ -66,7 +66,7 @@ impl<'a> TCPRunner {
             println!("pausing after {} for {:?}", p.after, p.duration);
             std::thread::sleep(p.duration.to_std().unwrap());
         }
-        Ok(TCPRunner {
+        Ok(TcpRunner {
             stream: Tee::new(stream),
             start,
             req,
@@ -75,7 +75,7 @@ impl<'a> TCPRunner {
 }
 
 #[async_trait]
-impl Runner for TCPRunner {
+impl Runner for TcpRunner {
     async fn execute(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.stream.write_all(&self.req.body).await?;
         self.stream.flush().await?;
@@ -88,14 +88,14 @@ impl Runner for TCPRunner {
         Ok(())
     }
 
-    async fn finish(mut self) -> crate::Result<(Output, Option<Box<dyn Runner>>)> {
+    async fn finish(mut self: Box<Self>) -> crate::Result<(Output, Option<Box<dyn Runner>>)> {
         let (_, writes, reads) = self.stream.into_parts();
 
         self.req.body = writes;
         Ok((
-            Output::TCP(TCPOutput {
+            Output::Tcp(TcpOutput {
                 request: self.req,
-                response: TCPResponse {
+                response: TcpResponse {
                     body: reads,
                     duration: chrono::Duration::from_std(self.start.elapsed()).unwrap(),
                 },

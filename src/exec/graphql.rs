@@ -5,18 +5,21 @@ use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use super::runner::Runner;
-use crate::{GraphQLOutput, GraphQLRequestOutput, GraphQLResponse, Output};
+use crate::{GraphQlOutput, GraphQlRequestOutput, GraphQlResponse, Output};
 
 #[derive(Debug)]
-pub(super) struct GraphQLRunner<T: Runner> {
-    req: GraphQLRequestOutput,
+pub(super) struct GraphQlRunner {
+    req: GraphQlRequestOutput,
     resp: Vec<u8>,
-    transport: T,
+    transport: Box<dyn Runner>,
     start_time: Instant,
 }
 
-impl<T: Runner> GraphQLRunner<T> {
-    pub(super) async fn new(transport: T, req: GraphQLRequestOutput) -> crate::Result<Self> {
+impl GraphQlRunner {
+    pub(super) async fn new(
+        transport: Box<dyn Runner>,
+        req: GraphQlRequestOutput,
+    ) -> crate::Result<Self> {
         let start_time = Instant::now();
 
         if let Some(p) = req.pause.iter().find(|p| p.after == "open") {
@@ -32,7 +35,7 @@ impl<T: Runner> GraphQLRunner<T> {
     }
 }
 
-impl<T: Runner> AsyncRead for GraphQLRunner<T> {
+impl AsyncRead for GraphQlRunner {
     fn poll_read(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -42,7 +45,7 @@ impl<T: Runner> AsyncRead for GraphQLRunner<T> {
     }
 }
 
-impl<T: Runner> AsyncWrite for GraphQLRunner<T> {
+impl AsyncWrite for GraphQlRunner {
     fn poll_write(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -65,9 +68,9 @@ impl<T: Runner> AsyncWrite for GraphQLRunner<T> {
 }
 
 #[async_trait]
-impl Runner for GraphQLRunner<Box<dyn Runner>> {
+impl Runner for GraphQlRunner {
     async fn execute(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let body = GraphQLRequestPayload {
+        let body = GraphQlRequestPayload {
             query: self.req.query.clone(),
             operation_name: self.req.operation.clone(),
             variables: self.req.params.clone(),
@@ -101,14 +104,14 @@ impl Runner for GraphQLRunner<Box<dyn Runner>> {
         Ok(())
     }
 
-    async fn finish(mut self) -> crate::Result<(Output, Option<Box<dyn Runner>>)> {
+    async fn finish(self: Box<Self>) -> crate::Result<(Output, Option<Box<dyn Runner>>)> {
         let resp: serde_json::Value =
             serde_json::from_slice(&self.resp).map_err(|e| crate::Error(e.to_string()))?;
 
         Ok((
-            Output::GraphQL(GraphQLOutput {
+            Output::GraphQl(GraphQlOutput {
                 request: self.req,
-                response: GraphQLResponse {
+                response: GraphQlResponse {
                     data: resp
                         .get("data")
                         .unwrap_or(&serde_json::Value::Null)
@@ -131,7 +134,7 @@ impl Runner for GraphQLRunner<Box<dyn Runner>> {
 }
 
 #[derive(Debug, Serialize)]
-struct GraphQLRequestPayload {
+struct GraphQlRequestPayload {
     query: String,
     // TODO: Figure out how we can represent both unset and null for this field.
     #[serde(rename = "operationName")]

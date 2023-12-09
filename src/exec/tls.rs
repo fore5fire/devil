@@ -8,17 +8,17 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_rustls::client::TlsStream;
 
 use super::runner::Runner;
-use super::tee::{Stream, Tee};
-use crate::{Output, TLSOutput, TLSRequestOutput, TLSResponse, TLSVersion};
+use super::tee::Tee;
+use crate::{Output, TlsOutput, TlsRequestOutput, TlsResponse, TlsVersion};
 
 #[derive(Debug)]
-pub(super) struct TLSRunner<S: Stream> {
-    req: TLSRequestOutput,
-    stream: Tee<TlsStream<S>>,
+pub(super) struct TlsRunner {
+    req: TlsRequestOutput,
+    stream: Tee<TlsStream<Box<dyn Runner>>>,
     start: Instant,
 }
 
-impl<S: Stream> AsyncRead for TLSRunner<S> {
+impl AsyncRead for TlsRunner {
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -28,7 +28,7 @@ impl<S: Stream> AsyncRead for TLSRunner<S> {
     }
 }
 
-impl<S: Stream> AsyncWrite for TLSRunner<S> {
+impl AsyncWrite for TlsRunner {
     fn poll_write(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -52,10 +52,13 @@ impl<S: Stream> AsyncWrite for TLSRunner<S> {
     }
 }
 
-impl<S: Stream> Unpin for TLSRunner<S> {}
+impl Unpin for TlsRunner {}
 
-impl<S: Stream> TLSRunner<S> {
-    pub(super) async fn new(stream: S, req: TLSRequestOutput) -> crate::Result<TLSRunner<S>> {
+impl TlsRunner {
+    pub(super) async fn new(
+        stream: Box<dyn Runner>,
+        req: TlsRequestOutput,
+    ) -> crate::Result<TlsRunner> {
         let mut root_cert_store = rustls::RootCertStore::empty();
         root_cert_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().map(|ta| {
             OwnedTrustAnchor::from_subject_spki_name_constraints(
@@ -82,7 +85,7 @@ impl<S: Stream> TLSRunner<S> {
             println!("pausing after {} for {:?}", p.after, p.duration);
             std::thread::sleep(p.duration.to_std().unwrap());
         }
-        Ok(TLSRunner {
+        Ok(TlsRunner {
             stream: Tee::new(connection),
             start,
             req,
@@ -91,7 +94,7 @@ impl<S: Stream> TLSRunner<S> {
 }
 
 #[async_trait]
-impl Runner for TLSRunner<Box<dyn Runner>> {
+impl Runner for TlsRunner {
     async fn execute(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.stream.write_all(&self.req.body).await?;
         self.stream.flush().await?;
@@ -104,31 +107,31 @@ impl Runner for TLSRunner<Box<dyn Runner>> {
         Ok(())
     }
 
-    async fn finish(mut self) -> crate::Result<(Output, Option<Box<dyn Runner>>)> {
+    async fn finish(mut self: Box<Self>) -> crate::Result<(Output, Option<Box<dyn Runner>>)> {
         let (stream, writes, reads) = self.stream.into_parts();
         let (inner, conn) = stream.into_inner();
 
         self.req.body = writes;
         Ok((
-            Output::TLS(TLSOutput {
+            Output::Tls(TlsOutput {
                 version: match conn
                     .protocol_version()
                     .ok_or_else(|| crate::Error::from("finished before version established"))?
                 {
-                    rustls::ProtocolVersion::SSLv2 => TLSVersion::SSL2,
-                    rustls::ProtocolVersion::SSLv3 => TLSVersion::SSL3,
-                    rustls::ProtocolVersion::TLSv1_0 => TLSVersion::TLS1_0,
-                    rustls::ProtocolVersion::TLSv1_1 => TLSVersion::TLS1_1,
-                    rustls::ProtocolVersion::TLSv1_2 => TLSVersion::TLS1_2,
-                    rustls::ProtocolVersion::TLSv1_3 => TLSVersion::TLS1_3,
-                    rustls::ProtocolVersion::DTLSv1_0 => TLSVersion::DTLS1_0,
-                    rustls::ProtocolVersion::DTLSv1_2 => TLSVersion::DTLS1_2,
-                    rustls::ProtocolVersion::DTLSv1_3 => TLSVersion::DTLS1_3,
-                    rustls::ProtocolVersion::Unknown(val) => TLSVersion::Other(val),
-                    _ => TLSVersion::Other(0),
+                    rustls::ProtocolVersion::SSLv2 => TlsVersion::SSL2,
+                    rustls::ProtocolVersion::SSLv3 => TlsVersion::SSL3,
+                    rustls::ProtocolVersion::TLSv1_0 => TlsVersion::TLS1_0,
+                    rustls::ProtocolVersion::TLSv1_1 => TlsVersion::TLS1_1,
+                    rustls::ProtocolVersion::TLSv1_2 => TlsVersion::TLS1_2,
+                    rustls::ProtocolVersion::TLSv1_3 => TlsVersion::TLS1_3,
+                    rustls::ProtocolVersion::DTLSv1_0 => TlsVersion::DTLS1_0,
+                    rustls::ProtocolVersion::DTLSv1_2 => TlsVersion::DTLS1_2,
+                    rustls::ProtocolVersion::DTLSv1_3 => TlsVersion::DTLS1_3,
+                    rustls::ProtocolVersion::Unknown(val) => TlsVersion::Other(val),
+                    _ => TlsVersion::Other(0),
                 },
                 request: self.req,
-                response: TLSResponse {
+                response: TlsResponse {
                     body: reads,
                     duration: chrono::Duration::from_std(self.start.elapsed()).unwrap(),
                 },
