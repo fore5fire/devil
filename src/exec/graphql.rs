@@ -75,7 +75,7 @@ impl Runner for GraphQlRunner {
             operation_name: self.req.operation.clone(),
             variables: self.req.params.clone(),
         };
-        let (http_body, url) = if self.req.use_query_string {
+        let (http_body, url) = if false {
             let mut query_pairs = self.req.url.query_pairs_mut();
             query_pairs.append_pair("query", &body.query);
             if let Some(name) = &body.operation_name {

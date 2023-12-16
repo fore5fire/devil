@@ -16,46 +16,46 @@ X-Repeated-Header = ["foo", "bar"]
 # Don't include default Host header
 Host = { unset = true }
 
-# HTTPS GET with array format for non-adjacent repeated headers
-[ordered_headers.http]
-url = "https://example.com/test"
-[[ordered_headers.http.headers]]
-key =   "Content-Type"
-value = "application/json"
-[[ordered_headers.http.headers]]
-key =   "X-Repeated-Header"
-value = "foo"
-[[ordered_headers.http.headers]]
-key =   "X-Custom-Header" 
-value = "foo"
-[[ordered_headers.http.headers]]
-key =   "X-Repeated-Header"
-value = "bar"
-# Don't include default Host header
-[[ordered_headers.http.headers]]
-key =   "Host"
-value = { unset = true }
-
-# HTTPS POST
-[simple_post.http]
-url = "https://example.com/test"
-method = "POST"
-body = 'sample body'
-
-# HTTP POST with multiline literal body
-[multiline_post.http]
-url = "http://example.com/test"
-method = "POST"
-body = '''
-Line 1
-Line 2
-Line 3'''
-
-# HTTP POST with formatted single-line body
-[singleline_post.http]
-url = "http://example.com/test"
-method = "POST" 
-body = { template = "multiline_post.http.response.body" }
+## HTTPS GET with array format for non-adjacent repeated headers
+#[ordered_headers.http]
+#url = "https://example.com/test"
+#[[ordered_headers.http.headers]]
+#key =   "Content-Type"
+#value = "application/json"
+#[[ordered_headers.http.headers]]
+#key =   "X-Repeated-Header"
+#value = "foo"
+#[[ordered_headers.http.headers]]
+#key =   "X-Custom-Header" 
+#value = "foo"
+#[[ordered_headers.http.headers]]
+#key =   "X-Repeated-Header"
+#value = "bar"
+## Don't include default Host header
+#[[ordered_headers.http.headers]]
+#key =   "Host"
+#value = { unset = true }
+#
+## HTTPS POST
+#[simple_post.http]
+#url = "https://example.com/test"
+#method = "POST"
+#body = 'sample body'
+#
+## HTTP POST with multiline literal body
+#[multiline_post.http]
+#url = "http://example.com/test"
+#method = "POST"
+#body = '''
+#Line 1
+#Line 2
+#Line 3'''
+#
+## HTTP POST with formatted single-line body
+#[singleline_post.http]
+#url = "http://example.com/test"
+#method = "POST" 
+#body = { template = "multiline_post.http.response.body" }
 # HTTP request non-standard options
 #[non-standard.http]
 #url = "http://example.com/test"

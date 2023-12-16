@@ -97,7 +97,7 @@ impl From<HttpOutput> for Value {
 pub struct HttpRequestOutput {
     pub url: Url,
     pub method: Option<Vec<u8>>,
-    pub headers: Vec<(String, String)>,
+    pub headers: Vec<(Vec<u8>, Vec<u8>)>,
     pub body: Vec<u8>,
     pub pause: Vec<PauseOutput>,
 }
@@ -126,7 +126,7 @@ impl From<HttpRequestOutput> for Value {
 pub struct HttpResponse {
     pub protocol: Vec<u8>,
     pub status_code: u16,
-    pub headers: Vec<(String, String)>,
+    pub headers: Vec<(Vec<u8>, Vec<u8>)>,
     pub body: Vec<u8>,
     pub duration: std::time::Duration,
 }
@@ -181,7 +181,7 @@ pub struct Http1RequestOutput {
     pub url: Url,
     pub method: Option<Vec<u8>>,
     pub version_string: Option<Vec<u8>>,
-    pub headers: Vec<(String, String)>,
+    pub headers: Vec<(Vec<u8>, Vec<u8>)>,
     pub body: Vec<u8>,
     pub pause: Vec<PauseOutput>,
 }
@@ -191,7 +191,7 @@ pub struct Http1Response {
     pub protocol: Vec<u8>,
     pub status_code: u16,
     pub status_reason: Vec<u8>,
-    pub headers: Vec<(String, String)>,
+    pub headers: Vec<(Vec<u8>, Vec<u8>)>,
     pub body: Vec<u8>,
     pub duration: std::time::Duration,
 }
@@ -244,8 +244,7 @@ pub struct GraphQlRequestOutput {
     pub url: Url,
     pub query: String,
     pub operation: Option<String>,
-    pub use_query_string: bool,
-    pub params: Option<HashMap<String, Option<String>>>,
+    pub params: Option<HashMap<Vec<u8>, Option<serde_json::Value>>>,
     pub pause: Vec<PauseOutput>,
 }
 
@@ -266,7 +265,18 @@ impl From<GraphQlRequestOutput> for Value {
                                     params
                                         .clone()
                                         .into_iter()
-                                        .map(|(k, v)| (k.into(), v.into()))
+                                        .map(|(k, v)| {
+                                            (
+                                                // FIXME: We allow non-utf8 keys, but cel will only
+                                                // represent utf8 or numeric keys... We probably
+                                                // need to detect and base64 encode these or
+                                                // something for cel eventually.
+                                                String::from_utf8_lossy(k.as_slice())
+                                                    .as_ref()
+                                                    .into(),
+                                                v.map(OutValue::from).into(),
+                                            )
+                                        })
                                         .collect(),
                                 ),
                             })
@@ -545,7 +555,7 @@ impl From<PauseOutput> for Value {
     }
 }
 
-fn kv_pair_to_map(pair: &(String, String)) -> Value {
+fn kv_pair_to_map(pair: &(Vec<u8>, Vec<u8>)) -> Value {
     let mut map = HashMap::with_capacity(2);
     let pair = pair.clone();
     map.insert("key".into(), pair.0.into());

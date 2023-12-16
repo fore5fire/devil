@@ -17,7 +17,7 @@ indexmap = { version = "2.1.0", features = ["serde"] }
 cel-interpreter = "0.5.0"
 frunk = { version = "0.4.2", features = ["serde"] }
 frunk_core = "0.4.2"
-serde_json = { version = "1.0.108", features = ["indexmap", "arbitrary_precision", "preserve_order"] }
+serde_json = { version = "1.0.108", features = ["indexmap", "arbitrary_precision", "preserve_order", "unbounded_depth"] }
 rustls = "0.21.8"
 tokio-rustls = "0.24.1"
 webpki-roots = "=0.26.0-alpha.1"
