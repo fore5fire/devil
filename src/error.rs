@@ -1,11 +1,17 @@
-use std::fmt::Display;
+use std::{convert::Infallible, fmt::Display};
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Error(pub String);
 
-impl<I: Into<String>> From<I> for Error {
-    fn from(value: I) -> Self {
-        Error(value.into())
+impl From<cel_interpreter::ParseError> for Error {
+    fn from(value: cel_interpreter::ParseError) -> Self {
+        Error(value.to_string())
+    }
+}
+
+impl From<Infallible> for Error {
+    fn from(e: Infallible) -> Self {
+        unreachable!()
     }
 }
 

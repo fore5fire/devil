@@ -116,7 +116,7 @@ impl Runner for TlsRunner {
             Output::Tls(TlsOutput {
                 version: match conn
                     .protocol_version()
-                    .ok_or_else(|| crate::Error::from("finished before version established"))?
+                    .ok_or_else(|| crate::Error("finished before version established".to_owned()))?
                 {
                     rustls::ProtocolVersion::SSLv2 => TlsVersion::SSL2,
                     rustls::ProtocolVersion::SSLv3 => TlsVersion::SSL3,

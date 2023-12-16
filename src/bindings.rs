@@ -1,4 +1,4 @@
-use std::{collections::HashMap, convert::identity};
+use std::collections::HashMap;
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -16,14 +16,32 @@ pub struct Settings {
     pub defaults: Vec<Defaults>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Defaults {
     pub selector: Option<Selector>,
-    #[serde(flatten)]
-    pub step: Step,
+    pub graphql: Option<GraphQl>,
+    pub http: Option<Http>,
+    pub http1: Option<Http1>,
+    pub http2: Option<Http2>,
+    pub http3: Option<Http3>,
+    pub tls: Option<Tls>,
+    pub tcp: Option<Tcp>,
+    pub quic: Option<Quic>,
+    pub dtls: Option<Tls>,
+    pub udp: Option<Udp>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+impl Defaults {
+    fn matches(&self, kind: ProtocolKind) -> bool {
+        match &self.selector {
+            None => true,
+            Some(Selector::Single(k)) => *k == kind,
+            Some(Selector::List(l)) => l.contains(&kind),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum ProtocolKind {
     #[serde(rename = "graphql")]
     GraphQl,
@@ -67,7 +85,7 @@ pub enum Protocol {
     Udp(Udp),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Selector {
     Single(ProtocolKind),
@@ -77,144 +95,179 @@ pub enum Selector {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Step {
-    GraphQlHttp {
-        graphql: Option<GraphQl>,
+    GraphQl {
+        graphql: GraphQl,
         http: Option<Http>,
     },
     GraphQlHttp1 {
-        graphql: Option<GraphQl>,
+        graphql: GraphQl,
         http1: Option<Http1>,
         tls: Option<Tls>,
         tcp: Option<Tcp>,
     },
     GraphQlHttp2 {
-        graphql: Option<GraphQl>,
+        graphql: GraphQl,
         http2: Option<Http2>,
         tls: Option<Tls>,
         tcp: Option<Tcp>,
     },
     GraphQlHttp3 {
-        graphql: Option<GraphQl>,
+        graphql: GraphQl,
         http3: Option<Http3>,
         quic: Option<Quic>,
         udp: Option<Udp>,
     },
     Http {
-        http: Option<Http>,
+        http: Http,
     },
     Http1 {
-        http1: Option<Http1>,
+        http1: Http1,
         tls: Option<Tls>,
         tcp: Option<Tcp>,
     },
     Http2 {
-        http2: Option<Http2>,
+        http2: Http2,
         tls: Option<Tls>,
         tcp: Option<Tcp>,
     },
     Http3 {
-        http3: Option<Http3>,
+        http3: Http3,
         quic: Option<Quic>,
         udp: Option<Udp>,
     },
     Tls {
-        tls: Option<Tls>,
+        tls: Tls,
         tcp: Option<Tcp>,
     },
     Dtls {
-        tls: Option<Tls>,
+        tls: Tls,
         udp: Option<Udp>,
     },
     Tcp {
-        tcp: Option<Tcp>,
+        tcp: Tcp,
     },
     Quic {
-        quic: Option<Quic>,
+        quic: Quic,
         udp: Option<Udp>,
     },
     Udp {
-        udp: Option<Udp>,
+        udp: Udp,
     },
 }
 
 impl Step {
-    pub fn select() {}
-    pub fn merge(steps: Vec<Step>) -> Step {
-        assert!(!steps.is_empty());
+    pub fn apply_defaults<'a, I: IntoIterator<Item = Defaults>>(mut self, defaults: I) -> Self {
+        for d in defaults {
+            self = self.merge(d);
+        }
+        self
+    }
 
-        let (graphql, http, http1, http2, http3, tls, tcp, quic, udp): (
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-        ) = itertools::multiunzip(steps.into_iter().map(|x| {
-            (
-                x.graphql, x.http, x.http1, x.http2, x.http3, x.tls, x.tcp, x.quic, x.udp,
-            )
-        }));
-        Step {
-            graphql: GraphQl::merge(graphql),
-            http: Http::merge(http),
-            http1: Http1::merge(http1),
-            http2: Http2::merge(http2),
-            http3: Http3::merge(http3),
-            tls: Tls::merge(tls),
-            tcp: Tcp::merge(tcp),
-            quic: Quic::merge(quic),
-            udp: Udp::merge(udp),
+    #[inline]
+    fn merge(self, default: Defaults) -> Self {
+        match self {
+            Self::GraphQl { graphql, http } => Self::GraphQl {
+                graphql: GraphQl::merge(graphql, default.graphql),
+                http: http.map(|http| http.merge(default.http)),
+            },
+            Self::GraphQlHttp1 {
+                graphql,
+                http1,
+                tls,
+                tcp,
+            } => Self::GraphQlHttp1 {
+                graphql: graphql.merge(default.graphql),
+                http1: http1.map(|x| x.merge(default.http1)),
+                tls: tls.map(|x| x.merge(default.tls)),
+                tcp: tcp.map(|x| x.merge(default.tcp)),
+            },
+            Self::GraphQlHttp2 {
+                graphql,
+                http2,
+                tls,
+                tcp,
+            } => Self::GraphQlHttp2 {
+                graphql: graphql.merge(default.graphql),
+                http2: http2.map(|x| x.merge(default.http2)),
+                tls: tls.map(|x| x.merge(default.tls)),
+                tcp: tcp.map(|x| x.merge(default.tcp)),
+            },
+
+            Self::GraphQlHttp3 {
+                graphql,
+                http3,
+                quic,
+                udp,
+            } => Self::GraphQlHttp3 {
+                graphql: graphql.merge(default.graphql),
+                http3: http3.map(|x| x.merge(default.http3)),
+                quic: quic.map(|x| x.merge(default.quic)),
+                udp: udp.map(|x| x.merge(default.udp)),
+            },
+            Self::Http { http } => Self::Http {
+                http: http.merge(default.http),
+            },
+            Self::Http1 { http1, tls, tcp } => Self::Http1 {
+                http1: http1.merge(default.http1),
+                tls: tls.map(|x| x.merge(default.tls)),
+                tcp: tcp.map(|x| x.merge(default.tcp)),
+            },
+            Self::Http2 { http2, tls, tcp } => Self::Http2 {
+                http2: http2.merge(default.http2),
+                tls: tls.map(|x| x.merge(default.tls)),
+                tcp: tcp.map(|x| x.merge(default.tcp)),
+            },
+            Self::Http3 { http3, quic, udp } => Self::Http3 {
+                http3: http3.merge(default.http3),
+                quic: quic.map(|x| x.merge(default.quic)),
+                udp: udp.map(|x| x.merge(default.udp)),
+            },
+            Self::Tls { tls, tcp } => Self::Tls {
+                tls: tls.merge(default.tls),
+                tcp: tcp.map(|x| x.merge(default.tcp)),
+            },
+            Self::Tcp { tcp } => Self::Tcp {
+                tcp: tcp.merge(default.tcp),
+            },
+
+            Self::Dtls { tls, udp } => Self::Dtls {
+                tls: tls.merge(default.tls),
+                udp: udp.map(|x| x.merge(default.udp)),
+            },
+            Self::Udp { udp } => Self::Udp {
+                udp: udp.merge(default.udp),
+            },
+            _ => unreachable!(),
         }
     }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct GraphQl {
     pub url: Option<Value>,
     pub query: Option<Value>,
     pub params: Option<Table>,
     pub operation: Option<Value>,
-    pub use_query_string: Option<Value>,
     #[serde(default)]
     pub pause: Vec<Pause>,
 }
 
 impl GraphQl {
-    fn merge<I: IntoIterator<Item = Option<Self>>>(protos: I) -> Option<Self> {
-        let mut protos = protos.into_iter().filter_map(identity).peekable();
-        protos.peek()?;
-        let (url, query, params, operation, use_query_string, pause): (
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-        ) = itertools::multiunzip(protos.into_iter().map(|x| {
-            (
-                x.url,
-                x.query,
-                x.params,
-                x.operation,
-                x.use_query_string,
-                x.pause,
-            )
-        }));
-        Some(Self {
-            url: Value::merge(url),
-            query: Value::merge(query),
-            params: Table::merge(params),
-            operation: Value::merge(operation),
-            use_query_string: Value::merge(use_query_string),
-            pause: Pause::merge(pause),
-        })
+    fn merge(self, second: Option<Self>) -> Self {
+        let Some(second) = second else {
+            return self;
+        };
+        Self {
+            url: Value::merge(self.url, second.url),
+            query: Value::merge(self.query, second.query),
+            params: Table::merge(self.params, second.params),
+            operation: Value::merge(self.operation, second.operation),
+            pause: Pause::merge(self.pause, second.pause),
+        }
     }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Http {
     pub url: Option<Value>,
     pub body: Option<Value>,
@@ -226,86 +279,73 @@ pub struct Http {
 }
 
 impl Http {
-    fn merge<I: IntoIterator<Item = Option<Self>>>(protos: I) -> Option<Self> {
-        let mut protos = protos.into_iter().filter_map(identity).peekable();
-        protos.peek()?;
-        let (url, headers, method, version_string, body, pause): (
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-            Vec<_>,
-        ) = itertools::multiunzip(protos.into_iter().map(|x| {
-            (
-                x.url,
-                x.headers,
-                x.method,
-                x.version_string,
-                x.body,
-                x.pause,
-            )
-        }));
-        Some(Self {
-            url: Value::merge(url),
-            version_string: Value::merge(version_string),
-            headers: Table::merge(headers),
-            method: Value::merge(method),
-            body: Value::merge(body),
-            pause: Pause::merge(pause),
-        })
+    fn merge(self, second: Option<Self>) -> Self {
+        let Some(second) = second else {
+            return self;
+        };
+        Self {
+            url: Value::merge(self.url, second.url),
+            version_string: Value::merge(self.version_string, second.version_string),
+            headers: Table::merge(self.headers, second.headers),
+            method: Value::merge(self.method, second.method),
+            body: Value::merge(self.body, second.body),
+            pause: Pause::merge(self.pause, second.pause),
+        }
     }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Http1 {
     #[serde(flatten, default)]
     pub common: Http,
 }
 
 impl Http1 {
-    fn merge<I: IntoIterator<Item = Option<Self>>>(protos: I) -> Option<Self> {
-        let mut protos = protos.into_iter().filter_map(identity).peekable();
-        protos.peek()?;
-        Some(Self {
-            common: Http::merge(protos.map(|x| Some(x.common))).unwrap_or_default(),
-        })
+    fn merge(self, default: Option<Self>) -> Self {
+        let Some(default) = default else {
+            return self;
+        };
+        Self {
+            common: self.common.merge(Some(default.common)),
+        }
     }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Http2 {
     #[serde(flatten)]
     common: Http,
 }
 
 impl Http2 {
-    fn merge<I: IntoIterator<Item = Option<Self>>>(protos: I) -> Option<Self> {
-        let mut protos = protos.into_iter().filter_map(identity).peekable();
-        protos.peek()?;
-        Some(Self {
-            common: Http::merge(protos.map(|x| Some(x.common))).unwrap_or_default(),
-        })
+    fn merge(self, default: Option<Self>) -> Self {
+        let Some(default) = default else {
+            return self;
+        };
+        Self {
+            common: self.common.merge(Some(default.common)),
+        }
     }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Http3 {
     #[serde(flatten)]
     common: Http,
 }
 
 impl Http3 {
-    fn merge<I: IntoIterator<Item = Option<Self>>>(protos: I) -> Option<Self> {
-        let mut protos = protos.into_iter().filter_map(identity).peekable();
-        protos.peek()?;
-        Some(Self {
-            common: Http::merge(protos.map(|x| Some(x.common))).unwrap_or_default(),
-        })
+    fn merge(self, default: Option<Self>) -> Self {
+        let Some(default) = default else {
+            return self;
+        };
+        Self {
+            common: self.common.merge(Some(default.common)),
+        }
     }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Tls {
     pub host: Option<Value>,
     pub port: Option<Value>,
@@ -316,26 +356,21 @@ pub struct Tls {
 }
 
 impl Tls {
-    fn merge<I: IntoIterator<Item = Option<Self>>>(protos: I) -> Option<Self> {
-        let mut protos = protos.into_iter().filter_map(identity).peekable();
-        protos.peek()?;
-        let (host, port, body, version, pause): (Vec<_>, Vec<_>, Vec<_>, Vec<_>, Vec<_>) =
-            itertools::multiunzip(
-                protos
-                    .into_iter()
-                    .map(|x| (x.host, x.port, x.body, x.version, x.pause)),
-            );
-        Some(Self {
-            host: Value::merge(host),
-            port: Value::merge(port),
-            body: Value::merge(body),
-            version: Value::merge(version),
-            pause: Pause::merge(pause),
-        })
+    fn merge(self, default: Option<Self>) -> Self {
+        let Some(default) = default else {
+            return self;
+        };
+        Self {
+            host: Value::merge(self.host, default.host),
+            port: Value::merge(self.port, default.port),
+            body: Value::merge(self.body, default.body),
+            version: Value::merge(self.version, default.version),
+            pause: Pause::merge(self.pause, default.pause),
+        }
     }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Tcp {
     pub host: Option<Value>,
     pub port: Option<Value>,
@@ -345,24 +380,20 @@ pub struct Tcp {
 }
 
 impl Tcp {
-    fn merge<I: IntoIterator<Item = Option<Self>>>(protos: I) -> Option<Self> {
-        let mut protos = protos.into_iter().filter_map(identity).peekable();
-        protos.peek()?;
-        let (host, port, body, pause): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) = itertools::multiunzip(
-            protos
-                .into_iter()
-                .map(|x| (x.host, x.port, x.body, x.pause)),
-        );
-        Some(Self {
-            host: Value::merge(host),
-            port: Value::merge(port),
-            body: Value::merge(body),
-            pause: Pause::merge(pause),
-        })
+    fn merge(self, default: Option<Self>) -> Self {
+        let Some(default) = default else {
+            return self;
+        };
+        Self {
+            host: Value::merge(self.host, default.host),
+            port: Value::merge(self.port, default.port),
+            body: Value::merge(self.body, default.body),
+            pause: Pause::merge(self.pause, default.pause),
+        }
     }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Quic {
     pub host: Option<Value>,
     pub port: Option<Value>,
@@ -373,26 +404,21 @@ pub struct Quic {
 }
 
 impl Quic {
-    fn merge<I: IntoIterator<Item = Option<Self>>>(protos: I) -> Option<Self> {
-        let mut protos = protos.into_iter().filter_map(identity).peekable();
-        protos.peek()?;
-        let (host, port, body, version, pause): (Vec<_>, Vec<_>, Vec<_>, Vec<_>, Vec<_>) =
-            itertools::multiunzip(
-                protos
-                    .into_iter()
-                    .map(|x| (x.host, x.port, x.body, x.tls_version, x.pause)),
-            );
-        Some(Self {
-            host: Value::merge(host),
-            port: Value::merge(port),
-            body: Value::merge(body),
-            tls_version: Value::merge(version),
-            pause: Pause::merge(pause),
-        })
+    fn merge(self, default: Option<Self>) -> Self {
+        let Some(default) = default else {
+            return self;
+        };
+        Self {
+            host: Value::merge(self.host, default.host),
+            port: Value::merge(self.port, default.port),
+            body: Value::merge(self.body, default.body),
+            tls_version: Value::merge(self.tls_version, default.tls_version),
+            pause: Pause::merge(self.pause, default.pause),
+        }
     }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Udp {
     pub host: Option<Value>,
     pub port: Option<Value>,
@@ -402,47 +428,40 @@ pub struct Udp {
 }
 
 impl Udp {
-    fn merge<I: IntoIterator<Item = Option<Self>>>(protos: I) -> Option<Self> {
-        let mut protos = protos.into_iter().filter_map(identity).peekable();
-        protos.peek()?;
-        let (host, port, body, pause): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) = itertools::multiunzip(
-            protos
-                .into_iter()
-                .map(|x| (x.host, x.port, x.body, x.pause)),
-        );
-        Some(Self {
-            host: Value::merge(host),
-            port: Value::merge(port),
-            body: Value::merge(body),
-            pause: Pause::merge(pause),
-        })
+    fn merge(self, default: Option<Self>) -> Self {
+        let Some(default) = default else {
+            return self;
+        };
+        Self {
+            host: Value::merge(self.host, default.host),
+            port: Value::merge(self.port, default.port),
+            body: Value::merge(self.body, default.body),
+            pause: Pause::merge(self.pause, default.pause),
+        }
     }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Pause {
     pub after: Option<Value>,
     pub duration: Option<Value>,
 }
 impl Pause {
-    /// Merge groups of pauses, with earlier groups taking presedence over later ones. If the same
-    /// after tag is found in multiple groups, all entries with that after tag from later groups
-    /// are ignored. Otherwise, they are appended.
-    fn merge<I: IntoIterator<Item = Vec<Self>>>(steps: I) -> Vec<Self> {
-        let mut results = Vec::<Self>::new();
-        for pauses in steps {
-            for pause in pauses {
-                // Only add pauses whose after doesn't match an existing entry.
-                if results.iter().find(|p| p.after == pause.after).is_none() {
-                    results.push(pause);
-                }
+    /// Merge two groups of pauses, with first groups taking presedence over second. If the same
+    /// after tag is found in both groups, all entries with that after tag second are ignored.
+    /// Otherwise, they are appended.
+    fn merge(mut first: Vec<Pause>, second: Vec<Pause>) -> Vec<Pause> {
+        for pause in second {
+            // Only add pauses whose after doesn't match an existing entry.
+            if first.iter().find(|p| p.after == pause.after).is_none() {
+                first.push(pause);
             }
         }
-        results
+        first
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum Value {
     LiteralString(String),
@@ -451,61 +470,95 @@ pub enum Value {
     LiteralBool(bool),
     LiteralDatetime(toml::value::Datetime),
     LiteralArray(Vec<Value>),
+    LiteralStruct {
+        r#struct: toml::Table,
+    },
     LiteralBase64 {
         base64: String,
-    },
-    Expression {
-        template: Option<String>,
-        vars: Option<Vec<(String, String)>>,
     },
     Unset {
         unset: bool,
     },
+    ExpressionCel {
+        cel: String,
+        vars: Option<IndexMap<String, String>>,
+    },
+    ExpressionVars {
+        vars: IndexMap<String, String>,
+    },
 }
 
 impl Value {
-    /// Merge values, with earlier values taking presenence over later ones. For primitive types
-    /// and arrays, the first non-empty value is used. For expressions, the first specified data is
-    /// used for each field, except unset which indicates no more merging should be done.
+    /// Merge values, with taking presenence over second. For primitive types and arrays, the
+    /// earliest non-empty value is used. For expressions, the earlier specified data is used for
+    /// each field, except unset which indicates no more merging should be done.
     ///
     /// All non-primitive values stop merging after a primitive value or unset = true expression.
-    fn merge(vals: Vec<Option<Self>>) -> Option<Self> {
-        let mut tables = vals.into_iter().filter_map(identity);
-        match tables.next()? {
-            Self::Expression {
-                mut template,
-                mut vars,
-            } => {
-                // Merge defaults until we find one that's not an expression, ie. any expressions
-                // overriden by a non-expression should be ignored.
-                for t in tables {
-                    match t {
-                        Self::Expression {
-                            template: t,
-                            vars: v,
-                        } => {
-                            template = template.or(t);
-                            vars = vars.or(v);
-                        }
-                        _ => return Some(Self::Expression { template, vars }),
-                    }
-                }
-                return Some(Self::Expression { template, vars });
-            }
-            Self::Unset { unset } if unset => return None,
-            Self::Unset { .. } => {
-                // I guess we just ignore it if someone puts `unset = false`? I honestly would
-                // return an error but I don't want to add extra error handling complexity to
-                // the defaults system just for this one case.
-                // Collect to a vec to break the recursive iterator cycle.
-                Self::merge(tables.map(|x| Some(x)).collect())
-            }
-            x => return Some(x),
+    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Value> {
+        match (first, second) {
+            (None, second) => second,
+            // Merge individual fields if both are expressions.
+            (
+                Some(Self::ExpressionCel { cel, vars }),
+                Some(Self::ExpressionCel {
+                    vars: second_vars, ..
+                }),
+            ) => Some(Self::ExpressionCel {
+                cel,
+                vars: Some(Self::merge_vars(vars, second_vars)),
+            }),
+            (
+                Some(Self::ExpressionCel { cel, vars }),
+                Some(Self::ExpressionVars { vars: second_vars }),
+            ) => Some(Self::ExpressionCel {
+                cel,
+                vars: Some(Self::merge_vars(vars, Some(second_vars))),
+            }),
+            (
+                Some(Self::ExpressionVars { vars }),
+                Some(Self::ExpressionCel {
+                    cel,
+                    vars: second_vars,
+                }),
+            ) => Some(Self::ExpressionCel {
+                cel,
+                vars: Some(Self::merge_vars(Some(vars), second_vars)),
+            }),
+            (
+                Some(Self::ExpressionVars { vars }),
+                Some(Self::ExpressionVars { vars: second_vars }),
+            ) => Some(Self::ExpressionVars {
+                vars: Self::merge_vars(Some(vars), Some(second_vars)),
+            }),
+            (Some(Self::Unset { unset }), _) if unset => Some(Value::Unset { unset }),
+            // I guess we just ignore it if someone puts `unset = false`? I honestly would
+            // return an error but I don't want to add extra error handling complexity to
+            // the defaults system just for this one case.
+            (Some(Self::Unset { .. }), second) => second,
+            (Some(x), _) => Some(x),
         }
+    }
+
+    fn merge_vars(
+        first: Option<IndexMap<String, String>>,
+        second: Option<IndexMap<String, String>>,
+    ) -> IndexMap<String, String> {
+        let Some(mut first) = first else {
+            return second.unwrap_or_default();
+        };
+        let Some(second) = second else {
+            return first;
+        };
+        for (k, v) in second {
+            if first.iter().find(|(key, _)| **key == k).is_none() {
+                first.insert(k, v);
+            }
+        }
+        first
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Table {
     Map(HashMap<String, Option<Value>>),
@@ -519,50 +572,62 @@ impl Default for Table {
 }
 
 impl Table {
-    /// Merge tables, with earlier tables taking presedence over later ones. If the same key is
-    /// found in multiple tables, all entries with that key from later groups are ignored.
-    /// Otherwise, they are appended.
-    fn merge<I: IntoIterator<Item = Option<Self>>>(tables: I) -> Option<Self> {
-        let mut tables = tables.into_iter().filter_map(identity).peekable();
-        tables.peek()?;
-
-        let mut result = Vec::<TableEntry>::new();
-        for t in tables {
-            match t {
-                Self::Map(m) => {
-                    for (key, value) in m.into_iter() {
-                        // Try to merge with an existing value.
-                        if let Some(entry) = result.iter_mut().find(
-                            |x| matches!(&x.key, Value::LiteralString(k) if k.as_str() == key),
-                        ) {
-                            entry.value = value;
-                            continue;
-                        }
-                        // It can't be merged, so just append it.
-                        result.push(TableEntry {
-                            key: Value::LiteralString(key),
-                            value,
-                        })
+    /// Merge tables, with entries in first taking prescedence over second. If the same key is
+    /// found in both tables, all entries with that key from second are ignored. Otherwise, they
+    /// are appended.
+    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
+        let Some(result) = first else {
+            return second;
+        };
+        // Convert first to array format if needed.
+        let mut table = match result {
+            Self::Map(m) => m
+                .into_iter()
+                .map(|(key, value)| TableEntry {
+                    key: Value::LiteralString(key),
+                    value,
+                })
+                .collect(),
+            Self::Array(a) => a,
+        };
+        // Merge second into the table-ized first.
+        match second {
+            Some(Self::Map(m)) => {
+                for (key, value) in m.into_iter() {
+                    // Try to merge with an existing value.
+                    if let Some(entry) = table
+                        .iter_mut()
+                        .find(|x| matches!(&x.key, Value::LiteralString(k) if k.as_str() == key))
+                    {
+                        entry.value = value;
+                        continue;
                     }
+                    // It can't be merged, so just append it.
+                    table.push(TableEntry {
+                        key: Value::LiteralString(key),
+                        value,
+                    });
                 }
-                Self::Array(a) => {
-                    for row in a.into_iter() {
-                        // Try to merge with an existing value.
-                        if let Some(entry) = result.iter_mut().find(|x| x.key == row.key) {
-                            entry.value = row.value;
-                            continue;
-                        }
-                        // It can't be merged, so just append it.
-                        result.push(row)
+            }
+            Some(Self::Array(a)) => {
+                for row in a.into_iter() {
+                    // Try to merge with an existing value.
+                    if let Some(entry) = table.iter_mut().find(|x| x.key == row.key) {
+                        entry.value = row.value;
+                        continue;
                     }
+                    // It can't be merged, so just append it.
+                    table.push(row)
                 }
-            };
+            }
+            None => {}
         }
-        Some(Self::Array(result))
+        // Re-wrap the array as a Table.
+        Some(Self::Array(table))
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableEntry {
     pub key: Value,
     pub value: Option<Value>,
