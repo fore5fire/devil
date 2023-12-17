@@ -25,6 +25,9 @@ impl<T: Stream> Tee<T> {
     pub fn into_inner(self) -> T {
         self.inner
     }
+    pub fn inner_mut(&mut self) -> &'_ mut T {
+        &mut self.inner
+    }
     pub fn into_parts(self) -> (T, Vec<u8>, Vec<u8>) {
         (self.inner, self.writes, self.reads)
     }

@@ -8,9 +8,12 @@ use async_trait::async_trait;
 
 #[async_trait]
 pub(crate) trait Runner: Stream + std::fmt::Debug {
+    async fn start(
+        &mut self,
+        size_hint: Option<usize>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
     async fn execute(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
     async fn finish(self: Box<Self>) -> crate::Result<(Output, Option<Box<dyn Runner>>)>;
-    fn size_hint(&mut self, _size: usize) {}
 }
 
 pub(super) async fn new_runner(

@@ -12,10 +12,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use super::runner::Runner;
 use super::tee::Tee;
-use crate::Error;
-use crate::Http1Response;
-use crate::Output;
-use crate::{Http1Output, Http1RequestOutput};
+use crate::{Error, Http1Output, Http1RequestOutput, Http1Response, Output};
 
 #[derive(Debug)]
 pub(super) struct Http1Runner {
@@ -24,7 +21,7 @@ pub(super) struct Http1Runner {
     stream: Tee<Box<dyn Runner>>,
     start_time: Instant,
     resp_header_buf: BytesMut,
-    req_header_buf: Option<BytesMut>,
+    header_sent: bool,
 }
 
 impl AsyncRead for Http1Runner {
@@ -75,27 +72,6 @@ impl AsyncWrite for Http1Runner {
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> Poll<Result<usize, std::io::Error>> {
-        // Write the first bytes of the request as the header.
-        if self.req_header_buf.is_none() {
-            self.req_header_buf = Some(self.compute_header());
-        }
-        if !self.req_header_buf.as_ref().unwrap().has_remaining() {
-            let req_header_buf = std::mem::take(&mut self.req_header_buf);
-            let poll = Pin::new(&mut self.stream).poll_write(cx, req_header_buf.as_ref().unwrap());
-            self.req_header_buf = req_header_buf;
-            match poll {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Ok(n)) => {
-                    self.req_header_buf.as_mut().unwrap().advance(n);
-                    // If everything was sent then try sending the body too.
-                    if self.req_header_buf.as_ref().unwrap().has_remaining() {
-                        return Pin::new(&mut self.stream).poll_write(cx, buf);
-                    }
-                    return Poll::Pending;
-                }
-                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
-            }
-        }
         Pin::new(&mut self.stream).poll_write(cx, buf)
     }
 
@@ -128,10 +104,10 @@ impl Http1Runner {
         Ok(Self {
             stream: Tee::new(stream),
             start_time,
-            req_header_buf: None,
             req,
             resp: None,
             resp_header_buf: BytesMut::new(),
+            header_sent: false,
         })
     }
 
@@ -171,9 +147,9 @@ impl Http1Runner {
         }
         buf.put(b"\r\n".as_slice());
         for (k, v) in &self.req.headers {
-            buf.put_slice(k.as_bytes());
+            buf.put_slice(k.as_slice());
             buf.put_slice(b": ");
-            buf.put_slice(v.as_bytes());
+            buf.put_slice(v.as_slice());
             buf.put_slice(b"\r\n");
         }
         buf.put(b"\r\n".as_slice());
@@ -195,12 +171,7 @@ impl Http1Runner {
                     headers: resp
                         .headers
                         .into_iter()
-                        .map(|h| {
-                            (
-                                h.name.to_owned(),
-                                String::from_utf8_lossy(h.value).to_string(),
-                            )
-                        })
+                        .map(|h| (Vec::from(h.name), Vec::from(h.value)))
                         .collect(),
                     body: Vec::new(),
                     duration: Duration::ZERO,
@@ -222,12 +193,38 @@ impl Http1Runner {
 
 #[async_trait]
 impl Runner for Http1Runner {
+    async fn start(
+        &mut self,
+        size_hint: Option<usize>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if let Some(size) = size_hint {
+            self.req
+                .headers
+                .push(("Content-Length".into(), format!("{size}").into()));
+        }
+        let mut header = self.compute_header();
+        self.header_sent = true;
+        self.stream.write_all_buf(&mut header).await?;
+        if let Some(p) = self.req.pause.iter().find(|p| p.after == "headers") {
+            self.stream.flush().await?;
+            println!("pausing after {} for {:?}", p.after, p.duration);
+            tokio::time::sleep(p.duration.to_std().unwrap()).await;
+        }
+        self.stream
+            .inner_mut()
+            .start(Some(header.len() + size_hint.unwrap_or(0)))
+            .await?;
+        Ok(())
+    }
+
     async fn execute(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // Headers will be sent automatically before the first body byte. We don't use size_hint
-        // since request headers are computed in planning for steps where http is the top of the
-        // protocol stack.
+        // Send headers.
+        self.start(Some(self.req.body.len())).await?;
+
         if !self.req.body.is_empty() {
-            self.stream.write_all(self.req.body.as_slice()).await?;
+            let body = std::mem::take(&mut self.req.body);
+            self.write_all(body.as_slice()).await?;
+            self.req.body = body;
         }
         self.stream.flush().await?;
         if let Some(p) = self.req.pause.iter().find(|p| p.after == "request_body") {
@@ -248,7 +245,7 @@ impl Runner for Http1Runner {
 
         // The response should always be set once the header has been read.
         let Some(mut resp) = self.resp else {
-            return Err(Error::from("closing before response headers received"));
+            return Err(Error("closing before response headers received".to_owned()));
         };
         resp.body = reads;
         resp.duration = self.start_time.elapsed();
@@ -259,15 +256,6 @@ impl Runner for Http1Runner {
             }),
             Some(stream),
         ))
-    }
-
-    fn size_hint(&mut self, size: usize) {
-        if self.req_header_buf.is_some() {
-            panic!("size_hint called after header already sending")
-        }
-        self.req
-            .headers
-            .push(("Content-Length".to_owned(), format!("{size}")));
     }
 }
 

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Instant};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use serde::Serialize;
@@ -10,6 +10,7 @@ use crate::{GraphQlOutput, GraphQlRequestOutput, GraphQlResponse, Output};
 #[derive(Debug)]
 pub(super) struct GraphQlRunner {
     req: GraphQlRequestOutput,
+    http_body: Vec<u8>,
     resp: Vec<u8>,
     transport: Box<dyn Runner>,
     start_time: Instant,
@@ -31,6 +32,7 @@ impl GraphQlRunner {
             start_time,
             req,
             resp: Vec::new(),
+            http_body: Vec::new(),
         })
     }
 }
@@ -69,33 +71,31 @@ impl AsyncWrite for GraphQlRunner {
 
 #[async_trait]
 impl Runner for GraphQlRunner {
-    async fn execute(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn start(
+        &mut self,
+        _: Option<usize>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let body = GraphQlRequestPayload {
-            query: self.req.query.clone(),
+            query: serde_json::Value::String(self.req.query.clone()),
             operation_name: self.req.operation.clone(),
-            variables: self.req.params.clone(),
+            variables: self.req.params.clone().map(|params| {
+                serde_json::Value::Object(
+                    params
+                        .into_iter()
+                        .map(|(k, v)| (String::from_utf8_lossy(k.as_slice()).to_string(), v))
+                        .collect(),
+                )
+            }),
         };
-        let (http_body, url) = if false {
-            let mut query_pairs = self.req.url.query_pairs_mut();
-            query_pairs.append_pair("query", &body.query);
-            if let Some(name) = &body.operation_name {
-                query_pairs.append_pair("operationName", &name);
-            }
-            if !body.variables.is_some() {
-                query_pairs.append_pair("variables", &serde_json::to_string(&body.variables)?);
-            }
-            //query_pairs.append_pair("extensions", &serde_json::to_string(&body.extensions)?);
-            query_pairs.finish();
-            drop(query_pairs);
-            (None, self.req.url.clone())
-        } else {
-            (Some(serde_json::to_string(&body)?), self.req.url.clone())
-        };
-        if let Some(http_body) = &http_body {
-            self.transport.size_hint(http_body.len());
-            self.transport.write_all(http_body.as_bytes()).await?;
-            self.transport.flush().await?;
-        }
+        self.http_body = serde_json::to_vec(&body)?;
+        self.transport.start(Some(self.http_body.len())).await?;
+        Ok(())
+    }
+
+    async fn execute(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.start(None).await?;
+        self.transport.write_all(&self.http_body).await?;
+        self.transport.flush().await?;
         if let Some(p) = self.req.pause.iter().find(|p| p.after == "request_body") {
             println!("pausing after {} for {:?}", p.after, p.duration);
             tokio::time::sleep(p.duration.to_std().unwrap()).await;
@@ -135,11 +135,9 @@ impl Runner for GraphQlRunner {
 
 #[derive(Debug, Serialize)]
 struct GraphQlRequestPayload {
-    query: String,
-    // TODO: Figure out how we can represent both unset and null for this field.
-    #[serde(rename = "operationName")]
-    operation_name: Option<String>,
-    // TODO: Figure out how we can represent unset, null, or empty object for this field.
+    query: serde_json::Value,
+    #[serde(rename = "operationName", skip_serializing_if = "Option::is_none")]
+    operation_name: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    variables: Option<HashMap<String, Option<String>>>,
+    variables: Option<serde_json::Value>,
 }

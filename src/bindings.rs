@@ -561,7 +561,7 @@ impl Value {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Table {
-    Map(HashMap<String, Option<Value>>),
+    Map(HashMap<String, Value>),
     Array(Vec<TableEntry>),
 }
 
@@ -583,9 +583,16 @@ impl Table {
         let mut table = match result {
             Self::Map(m) => m
                 .into_iter()
+                // Flatten any array values into multiple records with the same key.
+                // TODO: clean this up so its not duplicated converting bindings to plan format,
+                // since this code won't be run if there are no defaults for a Table field.
+                .flat_map(|(key, value)| match value {
+                    Value::LiteralArray(a) => a.into_iter().map(|v| (key.clone(), v)).collect(),
+                    value => vec![(key, value)],
+                })
                 .map(|(key, value)| TableEntry {
                     key: Value::LiteralString(key),
-                    value,
+                    value: Some(value),
                 })
                 .collect(),
             Self::Array(a) => a,
@@ -599,13 +606,13 @@ impl Table {
                         .iter_mut()
                         .find(|x| matches!(&x.key, Value::LiteralString(k) if k.as_str() == key))
                     {
-                        entry.value = value;
+                        entry.value = Some(value);
                         continue;
                     }
                     // It can't be merged, so just append it.
                     table.push(TableEntry {
                         key: Value::LiteralString(key),
-                        value,
+                        value: Some(value),
                     });
                 }
             }
