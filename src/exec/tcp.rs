@@ -76,6 +76,13 @@ impl<'a> TcpRunner {
 
 #[async_trait]
 impl Runner for TcpRunner {
+    async fn start(
+        &mut self,
+        size_hint: Option<usize>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        Ok(())
+    }
+
     async fn execute(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.stream.write_all(&self.req.body).await?;
         self.stream.flush().await?;

@@ -7,7 +7,7 @@ use cel_interpreter::{Context, Program};
 use chrono::Duration;
 use go_parse_duration::parse_duration;
 use indexmap::IndexMap;
-use std::{collections::HashMap, ops::Deref, sync::Arc};
+use std::{collections::HashMap, ops::Deref, rc::Rc, sync::Arc};
 use url::Url;
 
 #[derive(Debug)]
@@ -34,15 +34,10 @@ impl<'a> Plan {
 
                 http: Some(bindings::Http {
                     method: Some(bindings::Value::LiteralString("POST".to_owned())),
-                    headers: Some(bindings::Table::Map(
-                        [(
-                            "Content-Type".to_owned(),
-                            Some(bindings::Value::LiteralString(
-                                "application/json".to_owned(),
-                            )),
-                        )]
-                        .into(),
-                    )),
+                    headers: Some(bindings::Table::Map(HashMap::from([(
+                        "Content-Type".to_owned(),
+                        bindings::Value::LiteralString("application/json".to_owned()),
+                    )]))),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -224,12 +219,7 @@ impl HttpRequest {
                 .as_ref()
                 .map(|body| body.evaluate(state))
                 .transpose()?,
-            headers: self
-                .headers
-                .evaluate(state)?
-                .into_iter()
-                .map(|(k, v)| (k, v.unwrap_or_default()))
-                .collect(),
+            headers: self.headers.evaluate(state)?,
             body: self
                 .body
                 .as_ref()
@@ -275,12 +265,7 @@ impl Http1Request {
                 .as_ref()
                 .map(|v| v.evaluate(state))
                 .transpose()?,
-            headers: self
-                .headers
-                .evaluate(state)?
-                .into_iter()
-                .map(|(k, v)| (k, v.unwrap_or_default()))
-                .collect(),
+            headers: self.headers.evaluate(state)?,
             body: self
                 .body
                 .as_ref()
@@ -356,7 +341,7 @@ pub struct GraphQlRequest {
     pub url: PlanValue<Url>,
     pub query: PlanValue<String>,
     pub params: Option<PlanValueTable<Vec<u8>, Error, serde_json::Value, Error>>,
-    pub operation: Option<PlanValue<String>>,
+    pub operation: Option<PlanValue<serde_json::Value>>,
     pub pause: Vec<Pause>,
 }
 
@@ -375,7 +360,7 @@ impl TryFrom<bindings::GraphQl> for GraphQlRequest {
             params: binding.params.map(PlanValueTable::try_from).transpose()?,
             operation: binding
                 .operation
-                .map(PlanValue::<String>::try_from)
+                .map(PlanValue::<serde_json::Value>::try_from)
                 .transpose()?,
             pause: binding
                 .pause
@@ -404,8 +389,9 @@ impl GraphQlRequest {
             params: self
                 .params
                 .as_ref()
-                .map(|p| Ok::<_, crate::Error>(p.evaluate(state)?.into_iter().collect()))
-                .transpose()?,
+                .map(|p| p.evaluate(state))
+                .transpose()?
+                .map(|p| p.into_iter().collect()),
             pause: self
                 .pause
                 .iter()
@@ -569,13 +555,16 @@ impl TryFrom<PlanData> for serde_json::Value {
     fn try_from(value: PlanData) -> Result<Self> {
         Ok(match value.0 {
             cel_interpreter::Value::List(l) => Self::Array(
-                l.into_iter()
+                Arc::try_unwrap(l)
+                    .unwrap_or_else(|l| (*l).clone())
+                    .into_iter()
                     .map(PlanData)
                     .map(Self::try_from)
                     .collect::<Result<_>>()?,
             ),
             cel_interpreter::Value::Map(m) => Self::Object(
-                m.map
+                Rc::try_unwrap(m.map)
+                    .unwrap_or_else(|m| (*m).clone())
                     .into_iter()
                     .map(|(k, v)| {
                         let cel_interpreter::objects::Key::String(k) = k else {
@@ -583,7 +572,10 @@ impl TryFrom<PlanData> for serde_json::Value {
                                 "only string keys may be used in json output".to_owned(),
                             ));
                         };
-                        Ok((*k, Self::try_from(PlanData(v))?))
+                        Ok((
+                            Arc::try_unwrap(k).unwrap_or_else(|k| (*k).clone()),
+                            Self::try_from(PlanData(v))?,
+                        ))
                     })
                     .collect::<Result<_>>()?,
             ),
@@ -594,7 +586,9 @@ impl TryFrom<PlanData> for serde_json::Value {
                     Error("json input number fields cannot contain infinity".to_owned())
                 })?)
             }
-            cel_interpreter::Value::String(s) => Self::String(*s),
+            cel_interpreter::Value::String(s) => {
+                Self::String(Arc::try_unwrap(s).unwrap_or_else(|s| (*s).clone()))
+            }
             cel_interpreter::Value::Bytes(b) => {
                 Self::String(String::from_utf8_lossy(b.as_slice()).to_string())
             }
@@ -1078,6 +1072,20 @@ impl From<String> for PlanValue<Vec<u8>> {
     }
 }
 
+impl<T, E> TryFrom<bindings::Value> for Option<PlanValue<T, E>>
+where
+    T: TryFrom<PlanData, Error = E> + Clone,
+    E: std::error::Error,
+    PlanValue<T, E>: TryFrom<bindings::Value, Error = Error>,
+{
+    type Error = Error;
+    fn try_from(value: bindings::Value) -> std::result::Result<Self, Self::Error> {
+        match value {
+            bindings::Value::Unset { .. } => Ok(None),
+            value => Ok(Some(value.try_into()?)),
+        }
+    }
+}
 impl TryFrom<bindings::Value> for PlanValue<String> {
     type Error = Error;
     fn try_from(binding: bindings::Value) -> Result<Self> {
@@ -1134,7 +1142,7 @@ impl TryFrom<bindings::Value> for PlanValue<Duration> {
             bindings::Value::LiteralString(x) => Ok(Self::Literal(
                 parse_duration(x.as_str())
                     .map(Duration::nanoseconds)
-                    .map_err(|_| Error(format!("invalid duration string {binding:?}")))?,
+                    .map_err(|_| Error(format!("invalid duration string")))?,
             )),
             _ => Err(Error(format!(
                 "invalid value {binding:?} for duration field"
@@ -1260,7 +1268,7 @@ where
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct PlanValueTable<K, KE, V, VE>(pub Vec<(PlanValue<K, KE>, Option<PlanValue<V, VE>>)>)
+pub struct PlanValueTable<K, KE, V, VE>(pub Vec<(PlanValue<K, KE>, PlanValue<V, VE>)>)
 where
     K: TryFrom<PlanData, Error = KE> + Clone,
     KE: std::error::Error,
@@ -1283,27 +1291,44 @@ where
         Ok(PlanValueTable(match binding {
             bindings::Table::Map(m) => m
                 .into_iter()
-                .map(|(k, v)| {
-                    Ok((
-                        k.into(),
-                        v.map(PlanValue::<V, VE>::try_from)
-                            .transpose()
-                            .map_err(|e| Error(e.to_string()))?,
-                    ))
+                // Flatten literal array values into separate entries of the same key.
+                // TODO: this should probably be handled in an intermediary layer between bindings
+                // and PlanValues since it's currently duplicated in the bindings merge process for
+                // map -> table conversion.
+                .flat_map(|(k, v)| match v {
+                    bindings::Value::LiteralArray(a) => {
+                        a.into_iter().map(|v| (k.clone(), v)).collect::<Vec<_>>()
+                    }
+                    v => vec![(k, v)],
                 })
+                // Convert bindings to PlanValues.
+                .map(|(k, v)| {
+                    if let bindings::Value::Unset { .. } = v {
+                        return Ok(None);
+                    }
+                    Ok(Some((
+                        k.into(),
+                        PlanValue::try_from(v).map_err(|e: VE2| Error(e.to_string()))?,
+                    )))
+                })
+                .filter_map(Result::transpose)
                 .collect::<Result<_>>()?,
             bindings::Table::Array(a) => a
                 .into_iter()
                 .map(|entry| {
-                    Ok((
+                    // Filter entries with no value.
+                    let Some(value) = entry.value else {
+                        return Ok(None);
+                    };
+                    if let bindings::Value::Unset { .. } = value {
+                        return Ok(None);
+                    }
+                    Ok(Some((
                         PlanValue::try_from(entry.key).map_err(|e: KE2| Error(e.to_string()))?,
-                        entry
-                            .value
-                            .map(PlanValue::<V, VE>::try_from)
-                            .transpose()
-                            .map_err(|e| Error(e.to_string()))?,
-                    ))
+                        PlanValue::try_from(value).map_err(|e: VE2| Error(e.to_string()))?,
+                    )))
                 })
+                .filter_map(Result::transpose)
                 .collect::<Result<_>>()?,
         }))
     }
@@ -1316,7 +1341,7 @@ where
     V: TryFrom<PlanData, Error = VE> + Clone,
     VE: std::error::Error,
 {
-    pub fn evaluate<'a, O, S, I>(&self, state: &S) -> Result<Vec<(K, Option<V>)>>
+    pub fn evaluate<'a, O, S, I>(&self, state: &S) -> Result<Vec<(K, V)>>
     where
         O: Into<&'a str>,
         S: State<'a, O, I>,
@@ -1324,12 +1349,7 @@ where
     {
         self.0
             .iter()
-            .map(|(key, val)| {
-                Ok((
-                    key.evaluate(state)?,
-                    val.as_ref().map(|v| v.evaluate(state)).transpose()?,
-                ))
-            })
+            .map(|(key, val)| Ok((key.evaluate(state)?, val.evaluate(state)?)))
             .collect()
     }
 

@@ -67,12 +67,12 @@ impl HttpRunner {
                 host: req
                     .url
                     .host()
-                    .ok_or_else(|| Error::from("url is missing host"))?
+                    .ok_or_else(|| Error("url is missing host".to_owned()))?
                     .to_string(),
                 port: req
                     .url
                     .port_or_known_default()
-                    .ok_or_else(|| Error::from("url is missing port"))?,
+                    .ok_or_else(|| Error("url is missing port".to_owned()))?,
                 body: Vec::new(),
                 pause: Vec::new(),
             })
@@ -89,12 +89,12 @@ impl HttpRunner {
                         host: req
                             .url
                             .host()
-                            .ok_or_else(|| Error::from("url is missing host"))?
+                            .ok_or_else(|| Error("url is missing host".to_owned()))?
                             .to_string(),
                         port: req
                             .url
                             .port_or_known_default()
-                            .ok_or_else(|| Error::from("url is missing port"))?,
+                            .ok_or_else(|| Error("url is missing port".to_owned()))?,
                         body: Vec::new(),
                         pause: Vec::new(),
                     },
@@ -122,6 +122,15 @@ impl HttpRunner {
 
 #[async_trait]
 impl Runner for HttpRunner {
+    async fn start(
+        &mut self,
+        size_hint: Option<usize>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        match self {
+            Self::Http1(r) => r.start(size_hint).await,
+        }
+    }
+
     async fn execute(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         match self {
             Self::Http1(r) => r.execute().await,
@@ -151,15 +160,9 @@ impl Runner for HttpRunner {
                     },
                     protocol: "HTTP/1.1".to_string(),
                 }),
-                _ => return Err(Error::from("unexpected output")),
+                _ => return Err(Error("unexpected output".to_owned())),
             },
             inner,
         ))
-    }
-
-    fn size_hint(&mut self, size: usize) {
-        match self {
-            Self::Http1(r) => r.size_hint(size),
-        }
     }
 }

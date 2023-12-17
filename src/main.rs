@@ -87,7 +87,11 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                     http.protocol,
                 );
                 for (k, v) in &http.request.headers {
-                    println!(">   {}: {}", k, v);
+                    println!(
+                        ">   {}: {}",
+                        String::from_utf8_lossy(k),
+                        String::from_utf8_lossy(v)
+                    );
                 }
                 println!("> {}", String::from_utf8_lossy(&http.request.body));
             }
@@ -149,7 +153,11 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                     String::from_utf8_lossy(&http.response.protocol)
                 );
                 for (k, v) in &http.response.headers {
-                    println!("<   {}: {}", k, v);
+                    println!(
+                        "<   {}: {}",
+                        String::from_utf8_lossy(k),
+                        String::from_utf8_lossy(v)
+                    );
                 }
                 println!("< {}", String::from_utf8_lossy(&http.response.body));
                 println!("duration: {}ms", http.response.duration.as_millis());

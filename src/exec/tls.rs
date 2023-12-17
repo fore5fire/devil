@@ -95,7 +95,18 @@ impl TlsRunner {
 
 #[async_trait]
 impl Runner for TlsRunner {
+    async fn start(
+        &mut self,
+        size_hint: Option<usize>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // TODO: figure out how restructure things so we can call start before wrapping the
+        // transport. For now, only no supported transport for TLS actually needs start.
+        Ok(())
+    }
+
     async fn execute(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.start(None).await?;
+
         self.stream.write_all(&self.req.body).await?;
         self.stream.flush().await?;
         if let Some(p) = self.req.pause.iter().find(|p| p.after == "request_body") {

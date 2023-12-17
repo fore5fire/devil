@@ -243,8 +243,8 @@ impl From<GraphQlOutput> for Value {
 pub struct GraphQlRequestOutput {
     pub url: Url,
     pub query: String,
-    pub operation: Option<String>,
-    pub params: Option<HashMap<Vec<u8>, Option<serde_json::Value>>>,
+    pub operation: Option<serde_json::Value>,
+    pub params: Option<HashMap<Vec<u8>, serde_json::Value>>,
     pub pause: Vec<PauseOutput>,
 }
 
@@ -254,7 +254,10 @@ impl From<GraphQlRequestOutput> for Value {
             map: Rc::new(HashMap::from([
                 ("url".into(), value.url.to_string().into()),
                 ("query".into(), value.query.clone().into()),
-                ("operation".into(), value.operation.clone().into()),
+                (
+                    "operation".into(),
+                    value.operation.clone().map(OutValue::from).into(),
+                ),
                 (
                     "params".into(),
                     value
@@ -274,7 +277,7 @@ impl From<GraphQlRequestOutput> for Value {
                                                 String::from_utf8_lossy(k.as_slice())
                                                     .as_ref()
                                                     .into(),
-                                                v.map(OutValue::from).into(),
+                                                OutValue::from(v).into(),
                                             )
                                         })
                                         .collect(),
