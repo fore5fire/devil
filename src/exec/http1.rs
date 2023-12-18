@@ -31,37 +31,37 @@ impl AsyncRead for Http1Runner {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         // Read the first bytes of the response as the header.
-        if self.resp.is_none() {
-            let start = self.resp_header_buf.remaining();
-            let mut resp_header_buf = std::mem::take(&mut self.resp_header_buf);
-            let mut header_buf = ReadBuf::new(&mut resp_header_buf);
-            buf.advance(start);
-            let poll = Pin::new(&mut self.stream).poll_read(cx, &mut header_buf);
-            self.resp_header_buf = resp_header_buf;
-            match poll {
-                Poll::Pending => return Poll::Pending,
-                // Data was read - try to process it.
-                Poll::Ready(Ok(())) => match self.receive_header() {
-                    // Not enough data, we'll try again later.
-                    Poll::Pending => return Poll::Pending,
-                    // The full header was read, read the leftover bytes as part of the body.
-                    Poll::Ready(Ok(remaining)) => buf.put(remaining),
-                    Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
-                },
-                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
-            };
-            self.resp_header_buf.extend_from_slice(buf.filled());
-            // We somewhat abuse Poll here by reversing its meaning - if receive_header is pending
-            // that means it needs more bytes in the buffer, if it reads enough then it returns
-            // Ready.
-            match self.receive_header() {
-                Poll::Pending => Poll::Ready(Ok(())),
-                Poll::Ready(Ok(mut remaining)) => Pin::new(&mut self.stream)
-                    .poll_read(cx, &mut tokio::io::ReadBuf::new(remaining.as_mut())),
+        if self.resp.is_some() {
+            return Pin::new(&mut self.stream).poll_read(cx, buf);
+        }
+
+        // TODO: optimize this to avoid the intermediate allocation and write.
+        let mut header_vec = Box::new([0; 1 << 16]);
+        let mut header_buf = ReadBuf::new(header_vec.as_mut());
+        let poll = Pin::new(&mut self.stream).poll_read(cx, &mut header_buf);
+        self.resp_header_buf.put(header_buf.filled());
+        match poll {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+            // Data was read - try to process it.
+            Poll::Ready(Ok(())) => match self.receive_header() {
+                // Not enough data, we'll try again later.
+                Poll::Pending => Poll::Pending,
+                // The full header was read, read the leftover bytes as part of the body.
+                Poll::Ready(Ok(remaining)) if buf.remaining() > remaining.len() => {
+                    buf.put(remaining);
+                    Poll::Ready(Ok(()))
+                }
+                // Not enough room for all the leftover bytes - write what we can to the caller's
+                // buffer and save the rest.
+                Poll::Ready(Ok(remaining)) => {
+                    self.resp_header_buf = remaining;
+                    let bytes_that_fit = self.resp_header_buf.split_to(buf.remaining());
+                    buf.put(bytes_that_fit);
+                    Poll::Ready(Ok(()))
+                }
                 Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
-            }
-        } else {
-            Pin::new(&mut self.stream).poll_read(cx, buf)
+            },
         }
     }
 }
@@ -232,7 +232,7 @@ impl Runner for Http1Runner {
             tokio::time::sleep(p.duration.to_std().unwrap()).await;
         }
         let mut response = Vec::new();
-        self.stream.read_to_end(&mut response).await?;
+        self.read_to_end(&mut response).await?;
         Ok(())
     }
 
