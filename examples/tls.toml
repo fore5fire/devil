@@ -1,5 +1,5 @@
 [simple.tls]
 host = "example.com"
-port = "443"
+port = 443
 body = "GET / HTTP/1.0\r\n\r\n"
 

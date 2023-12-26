@@ -9,7 +9,7 @@ pub mod tls;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 
-use crate::{Output, Plan, Step, StepOutput};
+use crate::{Output, Plan, Step, StepOutput, StepPlanOutput, StepPlanOutputs};
 
 use self::runner::{new_runner, Runner};
 
@@ -34,18 +34,40 @@ impl<'a> Executor<'a> {
         let Some((name, step)) = self.steps.pop_front() else {
             return Err(Box::new(Error::Done));
         };
-        let inputs = &State {
+        let mut inputs = State {
             data: &self.outputs,
+            current: StepPlanOutputs::default(),
         };
+        // Reverse iterate the protocol stack for evaluation so that protocols below can access
+        // request fields from higher protocols.
         let mut runner: Option<Box<dyn Runner>> = None;
-        for proto in step.into_stack() {
-            runner = Some(new_runner(runner, proto.evaluate(inputs)?).await?)
+        let requests = step
+            .into_stack()
+            .iter()
+            .rev()
+            .map(|proto| {
+                let req = proto.evaluate(&inputs)?;
+                match &req {
+                    StepPlanOutput::GraphQl(req) => inputs.current.graphql = Some(req.clone()),
+                    StepPlanOutput::Http(req) => inputs.current.http = Some(req.clone()),
+                    StepPlanOutput::Http1(req) => inputs.current.http1 = Some(req.clone()),
+                    StepPlanOutput::Tls(req) => inputs.current.tls = Some(req.clone()),
+                    StepPlanOutput::Tcp(req) => inputs.current.tcp = Some(req.clone()),
+                }
+                Ok(req)
+            })
+            .collect::<crate::Result<Vec<_>>>()?;
+
+        // We built the protocol requests top to bottom, now reverse iterate so we build the
+        // runners bottom to top.
+        for req in requests.into_iter().rev() {
+            runner = Some(new_runner(runner, req).await?)
         }
         let mut runner = runner.expect("no plan should have an empty protocol stack");
-        runner.execute().await?;
+        runner.execute().await;
         let mut output = StepOutput::default();
         loop {
-            let (out, inner) = runner.finish().await?;
+            let (out, inner) = runner.finish().await;
             match out {
                 Output::GraphQl(out) => output.graphql = Some(out),
                 Output::Http(out) => output.http = Some(out),
@@ -66,11 +88,15 @@ impl<'a> Executor<'a> {
 
 struct State<'a> {
     data: &'a HashMap<&'a str, StepOutput>,
+    current: StepPlanOutputs,
 }
 
 impl<'a> crate::State<'a, &'a str, StateIterator<'a>> for State<'a> {
     fn get(&self, name: &'a str) -> Option<&StepOutput> {
         self.data.get(name)
+    }
+    fn current(&self) -> &StepPlanOutputs {
+        &self.current
     }
     fn iter(&self) -> StateIterator<'a> {
         StateIterator {

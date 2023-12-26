@@ -7,11 +7,10 @@ use super::http1::Http1Runner;
 use super::runner::Runner;
 use super::tcp::TcpRunner;
 use super::tls::TlsRunner;
-use crate::Error;
-use crate::HttpOutput;
-use crate::HttpResponse;
-use crate::Output;
-use crate::{HttpRequestOutput, TcpRequestOutput, TlsRequestOutput};
+use crate::{
+    Error, HttpOutput, HttpPlanOutput, HttpRequestOutput, HttpResponse, Output, TcpPlanOutput,
+    TlsPlanOutput,
+};
 
 #[derive(Debug)]
 pub(super) enum HttpRunner {
@@ -59,17 +58,17 @@ impl AsyncWrite for HttpRunner {
 }
 
 impl HttpRunner {
-    pub(super) async fn new(req: HttpRequestOutput) -> crate::Result<Self> {
+    pub(super) async fn new(plan: HttpPlanOutput) -> crate::Result<Self> {
         // For now we always use TCP and possibly TLS. To support HTTP/3 we'll need to decide
         // whether to use UPD and QUIC instead.
         let tcp: Box<dyn Runner> = Box::new(
-            TcpRunner::new(TcpRequestOutput {
-                host: req
+            TcpRunner::new(TcpPlanOutput {
+                host: plan
                     .url
                     .host()
                     .ok_or_else(|| Error("url is missing host".to_owned()))?
                     .to_string(),
-                port: req
+                port: plan
                     .url
                     .port_or_known_default()
                     .ok_or_else(|| Error("url is missing port".to_owned()))?,
@@ -79,19 +78,19 @@ impl HttpRunner {
             .await?,
         );
 
-        let inner = if req.url.scheme() == "http" {
+        let inner = if plan.url.scheme() == "http" {
             tcp
         } else {
             Box::new(
                 TlsRunner::new(
                     tcp,
-                    TlsRequestOutput {
-                        host: req
+                    TlsPlanOutput {
+                        host: plan
                             .url
                             .host()
                             .ok_or_else(|| Error("url is missing host".to_owned()))?
                             .to_string(),
-                        port: req
+                        port: plan
                             .url
                             .port_or_known_default()
                             .ok_or_else(|| Error("url is missing port".to_owned()))?,
@@ -106,13 +105,13 @@ impl HttpRunner {
         Ok(HttpRunner::Http1(Box::new(
             Http1Runner::new(
                 inner as Box<dyn Runner>,
-                crate::Http1RequestOutput {
-                    url: req.url,
-                    method: req.method,
+                crate::Http1PlanOutput {
+                    url: plan.url,
+                    method: plan.method,
                     version_string: Some("HTTP/1.1".into()),
-                    headers: req.headers,
-                    body: req.body,
-                    pause: req.pause,
+                    headers: plan.headers,
+                    body: plan.body,
+                    pause: plan.pause,
                 },
             )
             .await?,
@@ -131,38 +130,55 @@ impl Runner for HttpRunner {
         }
     }
 
-    async fn execute(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn execute(&mut self) {
         match self {
             Self::Http1(r) => r.execute().await,
         }
     }
 
-    async fn finish(self: Box<Self>) -> crate::Result<(Output, Option<Box<dyn Runner>>)> {
+    async fn finish(self: Box<Self>) -> (Output, Option<Box<dyn Runner>>) {
         let (out, inner) = match *self {
-            Self::Http1(r) => r.finish().await?,
+            Self::Http1(r) => r.finish().await,
         };
-        Ok((
+        (
             match out {
                 Output::Http1(out) => Output::Http(HttpOutput {
-                    request: HttpRequestOutput {
-                        url: out.request.url,
-                        method: out.request.method,
-                        headers: out.request.headers,
-                        body: out.request.body,
-                        pause: out.request.pause,
+                    plan: HttpPlanOutput {
+                        url: out.plan.url,
+                        method: out.plan.method,
+                        headers: out.plan.headers,
+                        body: out.plan.body,
+                        pause: out.plan.pause,
                     },
-                    response: HttpResponse {
-                        protocol: out.response.protocol,
-                        status_code: out.response.status_code,
-                        headers: out.response.headers,
-                        body: out.response.body,
-                        duration: out.response.duration,
-                    },
-                    protocol: "HTTP/1.1".to_string(),
+                    request: out.request.map(|req| HttpRequestOutput {
+                        url: req.url,
+                        method: req.method,
+                        headers: req.headers,
+                        body: req.body,
+                        pause: req.pause,
+                        duration: req.duration,
+                        header_duration: req.header_duration,
+                        body_duration: req.body_duration,
+                    }),
+                    response: out.response.map(|resp| HttpResponse {
+                        protocol: resp.protocol,
+                        status_code: resp.status_code,
+                        headers: resp.headers,
+                        body: resp.body,
+                        duration: resp.duration,
+                        header_duration: resp.header_duration,
+                        body_duration: resp.body_duration,
+                    }),
+                    error: out.error.map(|e| crate::HttpError {
+                        kind: e.kind,
+                        message: e.message,
+                    }),
+                    protocol: Some("HTTP/1.1".to_string()),
+                    duration: out.duration,
                 }),
-                _ => return Err(Error("unexpected output".to_owned())),
+                _ => unreachable!(),
             },
             inner,
-        ))
+        )
     }
 }

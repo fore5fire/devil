@@ -119,6 +119,7 @@ it sooner then please contribute! And if you don't see something on the roadmap
 that you'd find useful, open a pull request to add it here.
 
 ### Query Engine
+- Improve pause resolution with async-spin-sleep crate.
 - Parallel Execution
     - Control connection reuse and multiplexing
     - Coordinated pauses (see [HTTP/2 single packet attack](https://portswigger.net/research/smashing-the-state-machine#single-packet-attack))

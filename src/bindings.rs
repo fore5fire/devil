@@ -41,7 +41,7 @@ impl Defaults {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 pub enum ProtocolKind {
     #[serde(rename = "graphql")]
     GraphQl,
@@ -157,7 +157,9 @@ pub enum Step {
 
 impl Step {
     pub fn apply_defaults<'a, I: IntoIterator<Item = Defaults>>(mut self, defaults: I) -> Self {
-        for d in defaults {
+        // Apply defaults with a matching selector.
+        let kind = self.kind();
+        for d in defaults.into_iter().filter(|d| d.matches(kind)) {
             self = self.merge(d);
         }
         self
@@ -168,7 +170,7 @@ impl Step {
         match self {
             Self::GraphQl { graphql, http } => Self::GraphQl {
                 graphql: GraphQl::merge(graphql, default.graphql),
-                http: http.map(|http| http.merge(default.http)),
+                http: Some(http.unwrap_or_default().merge(default.http)),
             },
             Self::GraphQlHttp1 {
                 graphql,
@@ -177,9 +179,9 @@ impl Step {
                 tcp,
             } => Self::GraphQlHttp1 {
                 graphql: graphql.merge(default.graphql),
-                http1: http1.map(|x| x.merge(default.http1)),
-                tls: tls.map(|x| x.merge(default.tls)),
-                tcp: tcp.map(|x| x.merge(default.tcp)),
+                http1: Some(http1.unwrap_or_default().merge(default.http1)),
+                tls: Some(tls.unwrap_or_default().merge(default.tls)),
+                tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
             },
             Self::GraphQlHttp2 {
                 graphql,
@@ -188,9 +190,9 @@ impl Step {
                 tcp,
             } => Self::GraphQlHttp2 {
                 graphql: graphql.merge(default.graphql),
-                http2: http2.map(|x| x.merge(default.http2)),
-                tls: tls.map(|x| x.merge(default.tls)),
-                tcp: tcp.map(|x| x.merge(default.tcp)),
+                http2: Some(http2.unwrap_or_default().merge(default.http2)),
+                tls: Some(tls.unwrap_or_default().merge(default.tls)),
+                tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
             },
 
             Self::GraphQlHttp3 {
@@ -200,31 +202,31 @@ impl Step {
                 udp,
             } => Self::GraphQlHttp3 {
                 graphql: graphql.merge(default.graphql),
-                http3: http3.map(|x| x.merge(default.http3)),
-                quic: quic.map(|x| x.merge(default.quic)),
-                udp: udp.map(|x| x.merge(default.udp)),
+                http3: Some(http3.unwrap_or_default().merge(default.http3)),
+                quic: Some(quic.unwrap_or_default().merge(default.quic)),
+                udp: Some(udp.unwrap_or_default().merge(default.udp)),
             },
             Self::Http { http } => Self::Http {
                 http: http.merge(default.http),
             },
             Self::Http1 { http1, tls, tcp } => Self::Http1 {
                 http1: http1.merge(default.http1),
-                tls: tls.map(|x| x.merge(default.tls)),
-                tcp: tcp.map(|x| x.merge(default.tcp)),
+                tls: Some(tls.unwrap_or_default().merge(default.tls)),
+                tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
             },
             Self::Http2 { http2, tls, tcp } => Self::Http2 {
                 http2: http2.merge(default.http2),
-                tls: tls.map(|x| x.merge(default.tls)),
-                tcp: tcp.map(|x| x.merge(default.tcp)),
+                tls: Some(tls.unwrap_or_default().merge(default.tls)),
+                tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
             },
             Self::Http3 { http3, quic, udp } => Self::Http3 {
                 http3: http3.merge(default.http3),
-                quic: quic.map(|x| x.merge(default.quic)),
-                udp: udp.map(|x| x.merge(default.udp)),
+                quic: Some(quic.unwrap_or_default().merge(default.quic)),
+                udp: Some(udp.unwrap_or_default().merge(default.udp)),
             },
             Self::Tls { tls, tcp } => Self::Tls {
                 tls: tls.merge(default.tls),
-                tcp: tcp.map(|x| x.merge(default.tcp)),
+                tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
             },
             Self::Tcp { tcp } => Self::Tcp {
                 tcp: tcp.merge(default.tcp),
@@ -232,12 +234,30 @@ impl Step {
 
             Self::Dtls { tls, udp } => Self::Dtls {
                 tls: tls.merge(default.tls),
-                udp: udp.map(|x| x.merge(default.udp)),
+                udp: Some(udp.unwrap_or_default().merge(default.udp)),
             },
             Self::Udp { udp } => Self::Udp {
                 udp: udp.merge(default.udp),
             },
             _ => unreachable!(),
+        }
+    }
+
+    fn kind(&self) -> ProtocolKind {
+        match self {
+            Self::GraphQl { .. } => ProtocolKind::GraphQl,
+            Self::GraphQlHttp1 { .. } => ProtocolKind::GraphQlHttp1,
+            Self::GraphQlHttp2 { .. } => ProtocolKind::GraphQlHttp2,
+            Self::GraphQlHttp3 { .. } => ProtocolKind::GraphQlHttp3,
+            Self::Http { .. } => ProtocolKind::Http,
+            Self::Http1 { .. } => ProtocolKind::Http1,
+            Self::Http2 { .. } => ProtocolKind::Http2,
+            Self::Http3 { .. } => ProtocolKind::Http3,
+            Self::Tls { .. } => ProtocolKind::Tls,
+            Self::Dtls { .. } => ProtocolKind::Dtls,
+            Self::Tcp { .. } => ProtocolKind::Tcp,
+            Self::Quic { .. } => ProtocolKind::Quic,
+            Self::Udp { .. } => ProtocolKind::Udp,
         }
     }
 }

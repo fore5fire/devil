@@ -12,6 +12,7 @@ use crate::TlsVersion;
 
 pub trait State<'a, O: Into<&'a str>, I: IntoIterator<Item = O>> {
     fn get(&self, name: &'a str) -> Option<&StepOutput>;
+    fn current(&self) -> &StepPlanOutputs;
     fn iter(&self) -> I;
 }
 
@@ -26,15 +27,55 @@ pub enum Output {
     Tcp(TcpOutput),
 }
 
-#[derive(Debug)]
-pub enum RequestOutput {
-    GraphQl(GraphQlRequestOutput),
-    Http(HttpRequestOutput),
-    Http1(Http1RequestOutput),
-    //Http2(Http2RequestOutput),
-    //Http3(Http3RequestOutput),
-    Tls(TlsRequestOutput),
-    Tcp(TcpRequestOutput),
+#[derive(Debug, Clone)]
+pub enum StepPlanOutput {
+    GraphQl(GraphQlPlanOutput),
+    Http(HttpPlanOutput),
+    Http1(Http1PlanOutput),
+    //Http2(Http2PlanOutput),
+    //Http3(Http3PlanOutput),
+    Tls(TlsPlanOutput),
+    Tcp(TcpPlanOutput),
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct StepPlanOutputs {
+    pub graphql: Option<GraphQlPlanOutput>,
+    pub http: Option<HttpPlanOutput>,
+    pub http1: Option<Http1PlanOutput>,
+    //pub http2: Option<Http2PlanOutput>,
+    //pub http3: Option<Http3PlanOutput>,
+    pub tls: Option<TlsPlanOutput>,
+    pub tcp: Option<TcpPlanOutput>,
+}
+
+impl From<StepPlanOutputs> for Value {
+    fn from(value: StepPlanOutputs) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                (
+                    "graphql".into(),
+                    HashMap::from([("request", Value::from(value.graphql))]).into(),
+                ),
+                (
+                    "http".into(),
+                    HashMap::from([("request", Value::from(value.http))]).into(),
+                ),
+                (
+                    "http1".into(),
+                    HashMap::from([("request", Value::from(value.http1))]).into(),
+                ),
+                (
+                    "tls".into(),
+                    HashMap::from([("request", Value::from(value.tls))]).into(),
+                ),
+                (
+                    "tcp".into(),
+                    HashMap::from([("request", Value::from(value.tcp))]).into(),
+                ),
+            ])),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -50,15 +91,17 @@ pub struct StepOutput {
 
 impl From<StepOutput> for Value {
     fn from(value: StepOutput) -> Self {
-        let mut map = HashMap::with_capacity(4);
-        map.insert("graphql".into(), value.graphql.into());
-        map.insert("http".into(), value.http.into());
-        map.insert("http1".into(), value.http1.into());
-        //map.insert("http2".into(), value.http2.into());
-        //map.insert("http3".into(), value.http3.into());
-        map.insert("tls".into(), value.tls.into());
-        map.insert("tcp".into(), value.tcp.into());
-        Value::Map(Map { map: Rc::new(map) })
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("graphql".into(), value.graphql.into()),
+                ("http".into(), value.http.into()),
+                ("http1".into(), value.http1.into()),
+                //("http2".into(), value.http2.into()),
+                //("http3".into(), value.http3.into()),
+                ("tls".into(), value.tls.into()),
+                ("tcp".into(), value.tcp.into()),
+            ])),
+        })
     }
 }
 
@@ -76,25 +119,31 @@ pub type OutputStack = Vec<ProtocolOutput>;
 
 #[derive(Debug, Clone)]
 pub struct HttpOutput {
-    pub request: HttpRequestOutput,
-    pub response: HttpResponse,
-    pub protocol: String,
+    pub plan: HttpPlanOutput,
+    pub request: Option<HttpRequestOutput>,
+    pub response: Option<HttpResponse>,
+    pub error: Option<HttpError>,
+    pub protocol: Option<String>,
+    pub duration: Duration,
 }
 
 impl From<HttpOutput> for Value {
     fn from(value: HttpOutput) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
+                ("plan".into(), value.plan.into()),
                 ("request".into(), value.request.into()),
                 ("response".into(), value.response.into()),
                 ("protocol".into(), value.protocol.into()),
+                ("error".into(), value.error.into()),
+                ("duration".into(), value.duration.into()),
             ])),
         })
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct HttpRequestOutput {
+pub struct HttpPlanOutput {
     pub url: Url,
     pub method: Option<Vec<u8>>,
     pub headers: Vec<(Vec<u8>, Vec<u8>)>,
@@ -102,15 +151,17 @@ pub struct HttpRequestOutput {
     pub pause: Vec<PauseOutput>,
 }
 
-impl From<HttpRequestOutput> for Value {
-    fn from(value: HttpRequestOutput) -> Self {
+impl From<HttpPlanOutput> for Value {
+    fn from(value: HttpPlanOutput) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("url".into(), value.url.to_string().into()),
                 ("method".into(), value.method.clone().into()),
                 (
                     "headers".into(),
-                    Value::List(Arc::new(value.headers.iter().map(kv_pair_to_map).collect())),
+                    Value::List(Arc::new(
+                        value.headers.into_iter().map(kv_pair_to_map).collect(),
+                    )),
                 ),
                 ("body".into(), value.body.clone().into()),
                 (
@@ -123,56 +174,155 @@ impl From<HttpRequestOutput> for Value {
 }
 
 #[derive(Debug, Clone)]
-pub struct HttpResponse {
-    pub protocol: Vec<u8>,
-    pub status_code: u16,
+pub struct HttpRequestOutput {
+    pub url: Url,
+    pub method: Option<Vec<u8>>,
     pub headers: Vec<(Vec<u8>, Vec<u8>)>,
     pub body: Vec<u8>,
-    pub duration: std::time::Duration,
+    pub pause: Vec<PauseOutput>,
+    pub duration: Duration,
+    pub header_duration: Option<Duration>,
+    pub body_duration: Option<Duration>,
+}
+
+impl From<HttpRequestOutput> for Value {
+    fn from(value: HttpRequestOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("url".into(), value.url.to_string().into()),
+                ("method".into(), value.method.clone().into()),
+                (
+                    "headers".into(),
+                    Value::List(Arc::new(
+                        value.headers.into_iter().map(kv_pair_to_map).collect(),
+                    )),
+                ),
+                ("body".into(), value.body.clone().into()),
+                (
+                    "pause".into(),
+                    Value::List(Arc::new(value.pause.into_iter().map(Value::from).collect())),
+                ),
+                ("duration".into(), value.duration.into()),
+                ("header_duration".into(), value.header_duration.into()),
+                ("body_duration".into(), value.body_duration.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct HttpResponse {
+    pub protocol: Option<Vec<u8>>,
+    pub status_code: Option<u16>,
+    pub headers: Option<Vec<(Vec<u8>, Vec<u8>)>>,
+    pub body: Option<Vec<u8>>,
+    pub duration: Duration,
+    pub header_duration: Option<Duration>,
+    pub body_duration: Option<Duration>,
 }
 
 impl From<HttpResponse> for Value {
     fn from(value: HttpResponse) -> Self {
-        let mut map = HashMap::with_capacity(6);
-        map.insert(
-            "protocol".into(),
-            Value::Bytes(Arc::new(value.protocol.clone())),
-        );
-        map.insert("status_code".into(), Value::UInt(value.status_code.into()));
-        map.insert(
-            "headers".into(),
-            Value::List(Arc::new(value.headers.iter().map(kv_pair_to_map).collect())),
-        );
-        map.insert("body".into(), Value::Bytes(Arc::new(value.body.clone())));
-        map.insert(
-            "duration".into(),
-            // Unwrap conversion since duration is bounded by program runtime.
-            Value::Duration(chrono::Duration::from_std(value.duration).unwrap()),
-        );
-        Value::Map(Map { map: Rc::new(map) })
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("protocol".into(), value.protocol.clone().into()),
+                (
+                    "status_code".into(),
+                    value
+                        .status_code
+                        .clone()
+                        .map(|status_code| Value::UInt(status_code.into()))
+                        .into(),
+                ),
+                (
+                    "headers".into(),
+                    value
+                        .headers
+                        .clone()
+                        .map(|headers| {
+                            Value::List(Arc::new(headers.into_iter().map(kv_pair_to_map).collect()))
+                        })
+                        .into(),
+                ),
+                ("body".into(), value.body.clone().into()),
+                ("duration".into(), value.duration.into()),
+                ("header_duration".into(), value.header_duration.into()),
+                ("body_duration".into(), value.body_duration.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct HttpError {
+    pub kind: String,
+    pub message: String,
+}
+
+impl From<HttpError> for Value {
+    fn from(value: HttpError) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("kind".into(), value.kind.into()),
+                ("message".into(), value.message.into()),
+            ])),
+        })
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Http1Output {
-    pub request: Http1RequestOutput,
-    pub response: Http1Response,
+    pub plan: Http1PlanOutput,
+    pub request: Option<Http1RequestOutput>,
+    pub response: Option<Http1Response>,
+    pub error: Option<Http1Error>,
+    pub duration: Duration,
 }
 
 impl From<Http1Output> for Value {
     fn from(value: Http1Output) -> Self {
-        let mut map: HashMap<Key, Value> = HashMap::with_capacity(5);
-        map.insert("url".into(), value.request.url.to_string().into());
-        map.insert("method".into(), value.request.method.clone().into());
-        map.insert(
-            "headers".into(),
-            Value::List(Arc::new(
-                value.request.headers.iter().map(kv_pair_to_map).collect(),
-            )),
-        );
-        map.insert("body".into(), value.request.body.clone().into());
-        map.insert("response".into(), value.response.into());
-        Value::Map(Map { map: Rc::new(map) })
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("plan".into(), value.plan.into()),
+                ("request".into(), value.request.into()),
+                ("response".into(), value.response.into()),
+                ("error".into(), value.error.into()),
+                ("duration".into(), value.duration.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Http1PlanOutput {
+    pub url: Url,
+    pub method: Option<Vec<u8>>,
+    pub version_string: Option<Vec<u8>>,
+    pub headers: Vec<(Vec<u8>, Vec<u8>)>,
+    pub body: Vec<u8>,
+    pub pause: Vec<PauseOutput>,
+}
+
+impl From<Http1PlanOutput> for Value {
+    fn from(value: Http1PlanOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("url".into(), value.url.to_string().into()),
+                ("method".into(), value.method.clone().into()),
+                ("version_string".into(), value.version_string.clone().into()),
+                (
+                    "headers".into(),
+                    Value::List(Arc::new(
+                        value.headers.into_iter().map(kv_pair_to_map).collect(),
+                    )),
+                ),
+                ("body".into(), value.body.clone().into()),
+                (
+                    "pause".into(),
+                    Value::List(Arc::new(value.pause.into_iter().map(Value::from).collect())),
+                ),
+            ])),
+        })
     }
 }
 
@@ -184,56 +334,184 @@ pub struct Http1RequestOutput {
     pub headers: Vec<(Vec<u8>, Vec<u8>)>,
     pub body: Vec<u8>,
     pub pause: Vec<PauseOutput>,
+    pub duration: Duration,
+    pub header_duration: Option<Duration>,
+    pub body_duration: Option<Duration>,
+    pub time_to_first_byte: Option<Duration>,
+}
+
+impl From<Http1RequestOutput> for Value {
+    fn from(value: Http1RequestOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("url".into(), value.url.to_string().into()),
+                ("method".into(), value.method.clone().into()),
+                ("version_string".into(), value.version_string.clone().into()),
+                (
+                    "headers".into(),
+                    Value::List(Arc::new(
+                        value.headers.into_iter().map(kv_pair_to_map).collect(),
+                    )),
+                ),
+                ("body".into(), value.body.clone().into()),
+                (
+                    "pause".into(),
+                    Value::List(Arc::new(value.pause.into_iter().map(Value::from).collect())),
+                ),
+                ("duration".into(), value.duration.into()),
+                ("header_duration".into(), value.header_duration.into()),
+                ("body_duration".into(), value.body_duration.into()),
+                ("time_to_first_byte".into(), value.time_to_first_byte.into()),
+            ])),
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct Http1Response {
-    pub protocol: Vec<u8>,
-    pub status_code: u16,
-    pub status_reason: Vec<u8>,
-    pub headers: Vec<(Vec<u8>, Vec<u8>)>,
-    pub body: Vec<u8>,
-    pub duration: std::time::Duration,
+    pub protocol: Option<Vec<u8>>,
+    pub status_code: Option<u16>,
+    pub status_reason: Option<Vec<u8>>,
+    pub headers: Option<Vec<(Vec<u8>, Vec<u8>)>>,
+    pub body: Option<Vec<u8>>,
+    pub duration: Duration,
+    pub header_duration: Option<Duration>,
+    pub body_duration: Option<Duration>,
+    pub time_to_first_byte: Option<Duration>,
 }
 
 impl From<Http1Response> for Value {
     fn from(value: Http1Response) -> Self {
-        let mut map = HashMap::with_capacity(6);
-        map.insert(
-            "protocol".into(),
-            Value::Bytes(Arc::new(value.protocol.clone())),
-        );
-        map.insert("status_code".into(), Value::UInt(value.status_code.into()));
-        map.insert(
-            "status_reason".into(),
-            Value::Bytes(Arc::new(value.status_reason.clone())),
-        );
-        map.insert(
-            "headers".into(),
-            Value::List(Arc::new(value.headers.iter().map(kv_pair_to_map).collect())),
-        );
-        map.insert("body".into(), Value::Bytes(Arc::new(value.body.clone())));
-        map.insert(
-            "duration".into(),
-            // Unwrap conversion since duration is bounded by program runtime.
-            Value::Duration(chrono::Duration::from_std(value.duration).unwrap()),
-        );
-        Value::Map(Map { map: Rc::new(map) })
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                (
+                    "protocol".into(),
+                    value
+                        .protocol
+                        .clone()
+                        .map(|protocol| Value::Bytes(Arc::new(protocol)))
+                        .into(),
+                ),
+                (
+                    "status_code".into(),
+                    value
+                        .status_code
+                        .clone()
+                        .map(|status_code| Value::UInt(status_code.into()))
+                        .into(),
+                ),
+                ("status_reason".into(), value.status_reason.clone().into()),
+                (
+                    "headers".into(),
+                    value
+                        .headers
+                        .clone()
+                        .map(|headers| {
+                            Value::List(Arc::new(headers.into_iter().map(kv_pair_to_map).collect()))
+                        })
+                        .into(),
+                ),
+                ("body".into(), value.body.clone().into()),
+                ("duration".into(), value.duration.into()),
+                ("header_duration".into(), value.header_duration.into()),
+                ("body_duration".into(), value.body_duration.into()),
+                ("time_to_first_byte".into(), value.time_to_first_byte.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Http1Error {
+    pub kind: String,
+    pub message: String,
+}
+
+impl From<Http1Error> for Value {
+    fn from(value: Http1Error) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("kind".into(), value.kind.into()),
+                ("message".into(), value.message.into()),
+            ])),
+        })
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct GraphQlOutput {
-    pub request: GraphQlRequestOutput,
-    pub response: GraphQlResponse,
+    pub plan: GraphQlPlanOutput,
+    pub request: Option<GraphQlRequestOutput>,
+    pub response: Option<GraphQlResponse>,
+    pub error: Option<GraphQlError>,
+    pub duration: Duration,
 }
 
 impl From<GraphQlOutput> for Value {
     fn from(value: GraphQlOutput) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
+                ("plan".into(), value.plan.into()),
                 ("request".into(), value.request.into()),
                 ("response".into(), value.response.into()),
+                ("error".into(), value.error.into()),
+                ("duration".into(), value.duration.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GraphQlPlanOutput {
+    pub url: Url,
+    pub query: String,
+    pub operation: Option<serde_json::Value>,
+    pub params: Option<HashMap<Vec<u8>, serde_json::Value>>,
+    pub pause: Vec<PauseOutput>,
+}
+
+impl From<GraphQlPlanOutput> for Value {
+    fn from(value: GraphQlPlanOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("url".into(), value.url.to_string().into()),
+                ("query".into(), value.query.clone().into()),
+                (
+                    "operation".into(),
+                    value.operation.clone().map(OutValue::from).into(),
+                ),
+                (
+                    "params".into(),
+                    value
+                        .params
+                        .map(|params| {
+                            Value::Map(Map {
+                                map: Rc::new(
+                                    params
+                                        .clone()
+                                        .into_iter()
+                                        .map(|(k, v)| {
+                                            (
+                                                // FIXME: We allow non-utf8 keys, but cel will only
+                                                // represent utf8 or numeric keys... We probably
+                                                // need to detect and base64 encode these or
+                                                // something for cel eventually.
+                                                String::from_utf8_lossy(k.as_slice())
+                                                    .as_ref()
+                                                    .into(),
+                                                OutValue::from(v).into(),
+                                            )
+                                        })
+                                        .collect(),
+                                ),
+                            })
+                        })
+                        .unwrap_or(Value::Null),
+                ),
+                (
+                    "pause".into(),
+                    Value::List(Arc::new(value.pause.into_iter().map(Value::from).collect())),
+                ),
             ])),
         })
     }
@@ -246,6 +524,7 @@ pub struct GraphQlRequestOutput {
     pub operation: Option<serde_json::Value>,
     pub params: Option<HashMap<Vec<u8>, serde_json::Value>>,
     pub pause: Vec<PauseOutput>,
+    pub duration: Duration,
 }
 
 impl From<GraphQlRequestOutput> for Value {
@@ -286,6 +565,11 @@ impl From<GraphQlRequestOutput> for Value {
                         })
                         .unwrap_or(Value::Null),
                 ),
+                (
+                    "pause".into(),
+                    Value::List(Arc::new(value.pause.into_iter().map(Value::from).collect())),
+                ),
+                ("duration".into(), value.duration.into()),
             ])),
         })
     }
@@ -296,8 +580,11 @@ pub struct GraphQlResponse {
     pub data: OutValue,
     pub errors: OutValue,
     pub full: OutValue,
-    pub duration: Duration,
+    // This is a hack - find a better way to respresent the raw output for GraphQL in a
+    // transport-independant way that can be directly used in cel. Probably just make OutValue
+    // implement Display and drop this field completely.
     pub json: serde_json::Value,
+    pub duration: Duration,
 }
 
 impl From<GraphQlResponse> for Value {
@@ -314,33 +601,59 @@ impl From<GraphQlResponse> for Value {
 }
 
 #[derive(Debug, Clone)]
-pub struct TlsOutput {
-    pub request: TlsRequestOutput,
-    pub response: TlsResponse,
-    pub version: TlsVersion,
+pub struct GraphQlError {
+    pub kind: String,
+    pub message: String,
 }
 
-impl From<TlsOutput> for Value {
-    fn from(value: TlsOutput) -> Self {
+impl From<GraphQlError> for Value {
+    fn from(value: GraphQlError) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
-                ("request".into(), value.request.into()),
-                ("response".into(), value.response.into()),
+                ("kind".into(), value.kind.into()),
+                ("message".into(), value.message.into()),
             ])),
         })
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct TlsRequestOutput {
+pub struct TlsOutput {
+    pub plan: TlsPlanOutput,
+    pub request: Option<TlsRequestOutput>,
+    pub response: Option<TlsResponse>,
+    pub error: Option<TlsError>,
+    pub version: Option<TlsVersion>,
+    pub duration: Duration,
+    pub handshake_duration: Option<Duration>,
+}
+
+impl From<TlsOutput> for Value {
+    fn from(value: TlsOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("plan".into(), value.plan.into()),
+                ("request".into(), value.request.into()),
+                ("response".into(), value.response.into()),
+                ("error".into(), value.error.into()),
+                ("version".into(), value.version.as_ref().into()),
+                ("duration".into(), value.duration.into()),
+                ("handshake_duration".into(), value.handshake_duration.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TlsPlanOutput {
     pub host: String,
     pub port: u16,
     pub body: Vec<u8>,
     pub pause: Vec<PauseOutput>,
 }
 
-impl From<TlsRequestOutput> for Value {
-    fn from(value: TlsRequestOutput) -> Self {
+impl From<TlsPlanOutput> for Value {
+    fn from(value: TlsPlanOutput) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("host".into(), value.host.into()),
@@ -356,9 +669,38 @@ impl From<TlsRequestOutput> for Value {
 }
 
 #[derive(Debug, Clone)]
+pub struct TlsRequestOutput {
+    pub host: String,
+    pub port: u16,
+    pub body: Vec<u8>,
+    pub pause: Vec<PauseOutput>,
+    pub time_to_first_byte: Option<Duration>,
+    pub time_to_last_byte: Option<Duration>,
+}
+
+impl From<TlsRequestOutput> for Value {
+    fn from(value: TlsRequestOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("host".into(), value.host.into()),
+                ("port".into(), u64::from(value.port).into()),
+                ("body".into(), value.body.into()),
+                (
+                    "pause".into(),
+                    Value::List(Arc::new(value.pause.into_iter().map(Value::from).collect())),
+                ),
+                ("time_to_first_byte".into(), value.time_to_first_byte.into()),
+                ("time_to_last_byte".into(), value.time_to_last_byte.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct TlsResponse {
     pub body: Vec<u8>,
-    pub duration: Duration,
+    pub time_to_first_byte: Option<Duration>,
+    pub time_to_last_byte: Option<Duration>,
 }
 
 impl From<TlsResponse> for Value {
@@ -366,7 +708,25 @@ impl From<TlsResponse> for Value {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("body".into(), value.body.into()),
-                ("duration".into(), value.duration.into()),
+                ("time_to_first_byte".into(), value.time_to_first_byte.into()),
+                ("time_to_last_byte".into(), value.time_to_last_byte.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TlsError {
+    pub kind: String,
+    pub message: String,
+}
+
+impl From<TlsError> for Value {
+    fn from(value: TlsError) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("kind".into(), value.kind.into()),
+                ("message".into(), value.message.into()),
             ])),
         })
     }
@@ -374,16 +734,48 @@ impl From<TlsResponse> for Value {
 
 #[derive(Debug, Clone)]
 pub struct TcpOutput {
-    pub request: TcpRequestOutput,
-    pub response: TcpResponse,
+    pub plan: TcpPlanOutput,
+    pub request: Option<TcpRequestOutput>,
+    pub response: Option<TcpResponse>,
+    pub error: Option<TcpError>,
+    pub duration: Duration,
+    pub handshake_duration: Option<Duration>,
 }
 
 impl From<TcpOutput> for Value {
     fn from(value: TcpOutput) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
+                ("plan".into(), value.plan.into()),
                 ("request".into(), value.request.into()),
                 ("response".into(), value.response.into()),
+                ("error".into(), value.error.into()),
+                ("duration".into(), value.duration.into()),
+                ("handshake_duration".into(), value.handshake_duration.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TcpPlanOutput {
+    pub host: String,
+    pub port: u16,
+    pub body: Vec<u8>,
+    pub pause: Vec<PauseOutput>,
+}
+
+impl From<TcpPlanOutput> for Value {
+    fn from(value: TcpPlanOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("host".into(), Value::String(Arc::new(value.host))),
+                ("port".into(), (value.port as u64).into()),
+                ("body".into(), Value::Bytes(Arc::new(value.body))),
+                (
+                    "pause".into(),
+                    Value::List(Arc::new(value.pause.into_iter().map(Value::from).collect())),
+                ),
             ])),
         })
     }
@@ -395,14 +787,22 @@ pub struct TcpRequestOutput {
     pub port: u16,
     pub body: Vec<u8>,
     pub pause: Vec<PauseOutput>,
+    pub time_to_first_byte: Option<Duration>,
+    pub time_to_last_byte: Option<Duration>,
 }
 impl From<TcpRequestOutput> for Value {
     fn from(value: TcpRequestOutput) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
-                ("host".into(), Value::Bytes(Arc::new(value.body.clone()))),
+                ("host".into(), Value::String(Arc::new(value.host))),
                 ("port".into(), (value.port as u64).into()),
-                ("body".into(), Value::Bytes(Arc::new(value.body.clone()))),
+                ("body".into(), Value::Bytes(Arc::new(value.body))),
+                (
+                    "pause".into(),
+                    Value::List(Arc::new(value.pause.into_iter().map(Value::from).collect())),
+                ),
+                ("time_to_first_byte".into(), value.time_to_first_byte.into()),
+                ("time_to_last_byte".into(), value.time_to_last_byte.into()),
             ])),
         })
     }
@@ -411,7 +811,8 @@ impl From<TcpRequestOutput> for Value {
 #[derive(Debug, Clone)]
 pub struct TcpResponse {
     pub body: Vec<u8>,
-    pub duration: Duration,
+    pub time_to_first_byte: Option<Duration>,
+    pub time_to_last_byte: Option<Duration>,
 }
 
 impl From<TcpResponse> for Value {
@@ -419,8 +820,23 @@ impl From<TcpResponse> for Value {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("body".into(), Value::Bytes(Arc::new(value.body.clone()))),
-                ("duration".into(), value.duration.into()),
+                ("time_to_first_byte".into(), value.time_to_first_byte.into()),
+                ("time_to_last_byte".into(), value.time_to_last_byte.into()),
             ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TcpError {
+    pub kind: String,
+    pub message: String,
+}
+
+impl From<TcpError> for Value {
+    fn from(value: TcpError) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([("kind".into(), value.kind.into())])),
         })
     }
 }
@@ -558,10 +974,12 @@ impl From<PauseOutput> for Value {
     }
 }
 
-fn kv_pair_to_map(pair: &(Vec<u8>, Vec<u8>)) -> Value {
-    let mut map = HashMap::with_capacity(2);
-    let pair = pair.clone();
-    map.insert("key".into(), pair.0.into());
-    map.insert("value".into(), pair.1.into());
-    Value::Map(Map { map: Rc::new(map) })
+fn kv_pair_to_map(pair: (Vec<u8>, Vec<u8>)) -> Value {
+    //let pair = pair.clone();
+    Value::Map(Map {
+        map: Rc::new(HashMap::from([
+            ("key".into(), pair.0.into()),
+            ("value".into(), pair.1.into()),
+        ])),
+    })
 }

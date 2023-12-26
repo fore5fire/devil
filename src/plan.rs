@@ -1,12 +1,10 @@
-use crate::{
-    bindings::{self, Defaults, ProtocolKind},
-    Error, RequestOutput, Result, State,
-};
+use crate::{bindings, Error, Result, State, StepPlanOutput};
 use base64::Engine;
 use cel_interpreter::{Context, Program};
 use chrono::Duration;
 use go_parse_duration::parse_duration;
 use indexmap::IndexMap;
+use std::sync::OnceLock;
 use std::{collections::HashMap, ops::Deref, rc::Rc, sync::Arc};
 use url::Url;
 
@@ -22,36 +20,16 @@ impl<'a> Plan {
     }
 
     pub fn from_binding(mut plan: bindings::Plan) -> Result<Self> {
+        static IMPLICIT_DEFUALTS: OnceLock<bindings::Plan> = OnceLock::new();
+
         // Apply the implicit defaults to the user defaults.
-        plan.courier.defaults.extend([
-            Defaults {
-                selector: Some(bindings::Selector::List(vec![
-                    ProtocolKind::GraphQl,
-                    ProtocolKind::GraphQlHttp1,
-                    ProtocolKind::GraphQlHttp2,
-                    ProtocolKind::GraphQlHttp3,
-                ])),
-
-                http: Some(bindings::Http {
-                    method: Some(bindings::Value::LiteralString("POST".to_owned())),
-                    headers: Some(bindings::Table::Map(HashMap::from([(
-                        "Content-Type".to_owned(),
-                        bindings::Value::LiteralString("application/json".to_owned()),
-                    )]))),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-            Defaults {
-                selector: None,
-                http: Some(bindings::Http {
-                    method: Some(bindings::Value::LiteralString("GET".to_owned())),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-        ]);
-
+        let implicit_defaults = IMPLICIT_DEFUALTS.get_or_init(|| {
+            let raw = include_str!("implicit_defaults.cp.toml");
+            toml::de::from_str::<bindings::Plan>(raw).unwrap()
+        });
+        plan.courier
+            .defaults
+            .extend(implicit_defaults.courier.defaults.clone());
         // Generate final steps.
         let steps: IndexMap<String, Step> = plan
             .steps
@@ -181,7 +159,6 @@ pub struct HttpRequest {
 impl TryFrom<bindings::Http> for HttpRequest {
     type Error = Error;
     fn try_from(binding: bindings::Http) -> Result<Self> {
-        println!("{binding:?}");
         Ok(Self {
             url: binding
                 .url
@@ -206,13 +183,13 @@ impl TryFrom<bindings::Http> for HttpRequest {
 }
 
 impl HttpRequest {
-    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::HttpRequestOutput>
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::HttpPlanOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
-        Ok(crate::HttpRequestOutput {
+        Ok(crate::HttpPlanOutput {
             url: self.url.evaluate(state)?,
             method: self
                 .method
@@ -247,13 +224,13 @@ pub struct Http1Request {
 }
 
 impl Http1Request {
-    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::Http1RequestOutput>
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::Http1PlanOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
-        Ok(crate::Http1RequestOutput {
+        Ok(crate::Http1PlanOutput {
             url: self.url.evaluate(state)?,
             method: self
                 .method
@@ -372,13 +349,13 @@ impl TryFrom<bindings::GraphQl> for GraphQlRequest {
 }
 
 impl GraphQlRequest {
-    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::GraphQlRequestOutput>
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::GraphQlPlanOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
-        Ok(crate::GraphQlRequestOutput {
+        Ok(crate::GraphQlPlanOutput {
             url: self.url.evaluate(state)?,
             query: self.query.evaluate(state)?,
             operation: self
@@ -410,13 +387,13 @@ pub struct TcpRequest {
 }
 
 impl TcpRequest {
-    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::TcpRequestOutput>
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::TcpPlanOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
-        Ok(crate::TcpRequestOutput {
+        Ok(crate::TcpPlanOutput {
             host: self.host.evaluate(state)?,
             port: self.port.evaluate(state)?,
             body: self.body.evaluate(state)?.into(),
@@ -621,13 +598,13 @@ pub struct TlsRequest {
 }
 
 impl TlsRequest {
-    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::TlsRequestOutput>
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::TlsPlanOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
-        Ok(crate::TlsRequestOutput {
+        Ok(crate::TlsPlanOutput {
             host: self.host.evaluate(state)?,
             port: self.port.evaluate(state)?,
             body: self.body.evaluate(state)?.into(),
@@ -1012,22 +989,22 @@ pub enum Protocol {
 }
 
 impl Protocol {
-    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<RequestOutput>
+    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<StepPlanOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
         Ok(match self {
-            Self::GraphQl(proto) => RequestOutput::GraphQl(proto.evaluate(state)?),
-            Self::Http(proto) => RequestOutput::Http(proto.evaluate(state)?),
-            Self::Http1(proto) => RequestOutput::Http1(proto.evaluate(state)?),
-            //Self::HTTp2(proto) => RequestOutput::Http2(proto.evaluate(state)?),
-            //Self::Http3(proto) => RequestOutput::Http3(proto.evaluate(state)?),
-            Self::Tls(proto) => RequestOutput::Tls(proto.evaluate(state)?),
-            Self::Tcp(proto) => RequestOutput::Tcp(proto.evaluate(state)?),
-            //Self::Quic(proto) => RequestOutput::Quic(proto.evaluate(state)?),
-            //Self::Udp(proto) => RequestOutput::Udp(proto.evaluate(state)?),
+            Self::GraphQl(proto) => StepPlanOutput::GraphQl(proto.evaluate(state)?),
+            Self::Http(proto) => StepPlanOutput::Http(proto.evaluate(state)?),
+            Self::Http1(proto) => StepPlanOutput::Http1(proto.evaluate(state)?),
+            //Self::Http2(proto) => ProtocolOutput::Http2(proto.evaluate(state)?),
+            //Self::Http3(proto) => ProtocolOutput::Http3(proto.evaluate(state)?),
+            Self::Tls(proto) => StepPlanOutput::Tls(proto.evaluate(state)?),
+            Self::Tcp(proto) => StepPlanOutput::Tcp(proto.evaluate(state)?),
+            //Self::Quic(proto) => ProtocolOutput::Quic(proto.evaluate(state)?),
+            //Self::Udp(proto) => ProtocolOutput::Udp(proto.evaluate(state)?),
             _ => {
                 return Err(Error(
                     "support for protocol {proto:?} is incomplete".to_owned(),
@@ -1174,6 +1151,10 @@ impl TryFrom<bindings::Value> for PlanValue<Url> {
             bindings::Value::LiteralString(x) => Ok(Self::Literal(
                 Url::parse(&x).map_err(|e| Error(e.to_string()))?,
             )),
+            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
+                cel,
+                vars: vars.unwrap_or_default().into_iter().collect(),
+            }),
             _ => Err(Error(format!("invalid value {binding:?} for url field"))),
         }
     }
@@ -1216,7 +1197,7 @@ impl TryFrom<bindings::Value> for PlanValue<serde_json::Value> {
 
 impl<T, E> PlanValue<T, E>
 where
-    T: TryFrom<PlanData, Error = E> + Clone,
+    T: TryFrom<PlanData, Error = E> + Clone + std::fmt::Debug,
     E: std::error::Error,
 {
     pub fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<T>
@@ -1228,7 +1209,9 @@ where
         match self.to_owned() {
             PlanValue::Literal(s) => Ok(s.clone()),
             Self::Dynamic { cel, vars } => {
-                let program = Program::compile(cel.as_str()).map_err(|e| Error(e.to_string()))?;
+                println!("compiling cel {}", cel);
+                let program = Program::compile(cel.as_str())
+                    .map_err(|e| Error(format!("compile cel {}: {}", cel, e)))?;
                 let mut context = Context::default();
                 context.add_variable(
                     "vars",
@@ -1238,13 +1221,15 @@ where
                         ),
                 );
                 add_state_to_context(state, &mut context);
-                PlanData(
+                let a = PlanData(
                     program
                         .execute(&context)
-                        .map_err(|e| Error(e.to_string()))?,
+                        .map_err(|e| Error(format!("execute cel {}: {}", cel, e)))?,
                 )
                 .try_into()
-                .map_err(|e: E| Error(e.to_string()))
+                .map_err(|e: E| Error(e.to_string()));
+                println!("evaluated cel {}: {:?}", cel, a);
+                a
             }
         }
     }
@@ -1336,9 +1321,9 @@ where
 
 impl<K, KE, V, VE> PlanValueTable<K, KE, V, VE>
 where
-    K: TryFrom<PlanData, Error = KE> + Clone,
+    K: TryFrom<PlanData, Error = KE> + Clone + std::fmt::Debug,
     KE: std::error::Error,
-    V: TryFrom<PlanData, Error = VE> + Clone,
+    V: TryFrom<PlanData, Error = VE> + Clone + std::fmt::Debug,
     VE: std::error::Error,
 {
     pub fn evaluate<'a, O, S, I>(&self, state: &S) -> Result<Vec<(K, V)>>
@@ -1383,9 +1368,14 @@ where
     S: State<'a, O, I>,
     I: IntoIterator<Item = O>,
 {
-    for name in state.iter() {
-        let name = name.into();
-        let output = state.get(name).unwrap();
-        ctx.add_variable(name, output.to_owned());
-    }
+    ctx.add_variable(
+        "steps",
+        state
+            .iter()
+            .into_iter()
+            .map(O::into)
+            .map(|name| (name, state.get(name).unwrap().to_owned()))
+            .collect::<HashMap<_, _>>(),
+    );
+    ctx.add_variable("current", state.current().to_owned())
 }
