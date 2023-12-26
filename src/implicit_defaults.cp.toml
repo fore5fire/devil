@@ -1,0 +1,34 @@
+[[courier.defaults]]
+selector = ["graphql", "graphqlhttp1", "graphqlhttp2", "graphqlhttp3"]
+    [courier.defaults.http]
+    method = "POST"
+    headers.Content-Type = "application/json"
+    [courier.defaults.http1]
+    method = "POST"
+    headers.Content-Type = "application/json"
+    [courier.defaults.http2]
+    method = "POST"
+    headers.Content-Type = "application/json"
+    [courier.defaults.http3]
+    method = "POST"
+    headers.Content-Type = "application/json"
+
+[[courier.defaults]]
+selector = ["graphql"]
+    http.url.cel = "current.graphql.request.url"
+
+[[courier.defaults]]
+selector = ["graphqlhttp1"]
+    http1.url.cel = "current.graphqlhttp1.request.url"
+
+[[courier.defaults]]
+selector = ["graphqlhttp2"]
+    http2.url.cel = "current.graphqlhttp2.request.url"
+
+[[courier.defaults]]
+selector = ["graphqlhttp3"]
+    http3.url.cel = "current.graphqlhttp3.request.url"
+
+[[courier.defaults]]
+    http.method = "GET"
+

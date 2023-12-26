@@ -299,6 +299,7 @@ dependencies = [
  "itertools 0.12.0",
  "nom",
  "rustls",
+ "scopeguard",
  "serde",
  "serde_json",
  "tokio",

@@ -9,6 +9,8 @@ query = '''
         }
     }
 }'''
+[simple.graphql.http1]
+method = "POST"
 
 [get.graphql]
 url = "http://example.com/test"

@@ -11,12 +11,12 @@ struct Args {
     debug: bool,
 
     /// Print responses at a lower level protocol.
-    #[arg(short, long, value_enum)]
-    level: Option<Protocol>,
+    #[arg(short, long, value_enum, value_delimiter = ',')]
+    level: Vec<Protocol>,
 
     /// Print requests at a lower level protocol.
-    #[arg(short = 'L', long, value_enum, default_value_t = Protocol::None)]
-    request_level: Protocol,
+    #[arg(short = 'L', long, value_enum)]
+    request_level: Vec<Protocol>,
 
     /// The path to the query plan.
     #[arg(value_name = "FILE")]
@@ -26,7 +26,6 @@ struct Args {
 #[derive(ValueEnum, Debug, Clone, PartialEq, Eq)]
 #[clap(rename_all = "lower")]
 enum Protocol {
-    None,
     GraphQL,
     HTTP,
     TLS,
@@ -57,121 +56,176 @@ async fn main() -> Result<()> {
 
 fn print_proto(args: &Args, proto: &StepOutput) {
     // TODO: escape or refuse to print dangerous term characters in output.
-    match args.request_level {
-        Protocol::TCP => {
-            if let Some(tcp) = &proto.tcp {
-                println!(
-                    "> {}",
-                    String::from_utf8_lossy(&tcp.request.body).replace("\n", "\n> ")
-                );
-            }
-        }
-        Protocol::TLS => {
-            if let Some(tls) = &proto.tls {
-                println!(
-                    "> {}",
-                    String::from_utf8_lossy(&tls.request.body).replace("\n", "\n> ")
-                );
-            }
-        }
-        Protocol::HTTP => {
-            if let Some(http) = &proto.http {
-                println!(
-                    "> {}{} {}",
-                    http.request
-                        .method
-                        .as_deref()
-                        .map(|x| String::from_utf8_lossy(x) + " ")
-                        .unwrap_or_default(),
-                    http.request.url,
-                    http.protocol,
-                );
-                for (k, v) in &http.request.headers {
+    for level in &args.request_level {
+        match level {
+            Protocol::TCP => {
+                if let Some(req) = proto.tcp.as_ref().map(|tcp| tcp.request.as_ref()).flatten() {
                     println!(
-                        ">   {}: {}",
-                        String::from_utf8_lossy(k),
-                        String::from_utf8_lossy(v)
+                        "> {}",
+                        String::from_utf8_lossy(&req.body).replace("\n", "\n> ")
                     );
                 }
-                println!("> {}", String::from_utf8_lossy(&http.request.body));
             }
-        }
-        Protocol::GraphQL => {
-            if let Some(gql) = &proto.tcp {
-                println!(
-                    "< {}",
-                    String::from_utf8_lossy(&gql.response.body).replace("\n", "\n< ")
-                );
+            Protocol::TLS => {
+                if let Some(req) = proto.tls.as_ref().map(|tls| tls.request.as_ref()).flatten() {
+                    println!(
+                        "> {}",
+                        String::from_utf8_lossy(&req.body).replace("\n", "\n> ")
+                    );
+                }
             }
+            Protocol::HTTP => {
+                if let Some(http) = &proto.http {
+                    println!(
+                        "> {}{} {}",
+                        http.request
+                            .as_ref()
+                            .map(|req| req.method.as_ref())
+                            .flatten()
+                            .as_deref()
+                            .map(|x| String::from_utf8_lossy(x) + " ")
+                            .unwrap_or_default(),
+                        http.request
+                            .as_ref()
+                            .map(|req| req.url.to_string())
+                            .unwrap_or_else(|| "".to_owned()),
+                        http.protocol
+                            .as_ref()
+                            .map(String::as_str)
+                            .unwrap_or_default(),
+                    );
+                    if let Some(req) = &http.request {
+                        for (k, v) in &req.headers {
+                            println!(
+                                ">   {}: {}",
+                                String::from_utf8_lossy(k),
+                                String::from_utf8_lossy(v)
+                            );
+                        }
+                        println!(
+                            "> {}",
+                            String::from_utf8_lossy(&req.body).replace("\n", "\n> ")
+                        );
+                    }
+                }
+            }
+            Protocol::GraphQL => {
+                if let Some(req) = proto
+                    .graphql
+                    .as_ref()
+                    .map(|tcp| tcp.request.as_ref())
+                    .flatten()
+                {
+                    println!("> {}", &req.query.replace("\n", "\n> "));
+                }
+            }
+            _ => {}
         }
-        _ => {}
     }
-    // Default output is at the highest level protocol in the request.
-    let out_level = args.level.clone().unwrap_or_else(|| {
-        if proto.graphql.is_some() {
-            Protocol::GraphQL
+
+    let mut out_level = args.level.as_slice();
+    if out_level.is_empty() {
+        out_level = if proto.graphql.is_some() {
+            &[Protocol::GraphQL]
         //} else if proto.http3.is_some() {
-        //    Protocol::HTTP
+        //    vec![Protocol::HTTP]
         //} else if proto.http2.is_some() {
-        //    Protocol::HTTP
+        //    vec![Protocol::HTTP]
         } else if proto.http1.is_some() {
-            Protocol::HTTP
+            &[Protocol::HTTP]
         } else if proto.http.is_some() {
-            Protocol::HTTP
+            &[Protocol::HTTP]
         } else if proto.tls.is_some() {
-            Protocol::TLS
+            &[Protocol::TLS]
         } else if proto.tcp.is_some() {
-            Protocol::TCP
+            &[Protocol::TCP]
         } else {
-            Protocol::None
+            &[]
         }
-    });
-    match out_level {
-        Protocol::TCP => {
-            if let Some(tcp) = &proto.tcp {
-                println!(
-                    "< {}",
-                    String::from_utf8_lossy(&tcp.response.body).replace("\n", "\n< ")
-                );
-                println!("duration: {}ms", tcp.response.duration.num_milliseconds());
-            }
-        }
-        Protocol::TLS => {
-            if let Some(tls) = &proto.tls {
-                println!(
-                    "< {}",
-                    String::from_utf8_lossy(&tls.response.body).replace("\n", "\n< ")
-                );
-                println!("duration: {}ms", tls.response.duration.num_milliseconds());
-            }
-        }
-        Protocol::HTTP => {
-            if let Some(http) = &proto.http {
-                println!(
-                    "< {} {}",
-                    http.response.status_code,
-                    String::from_utf8_lossy(&http.response.protocol)
-                );
-                for (k, v) in &http.response.headers {
-                    println!(
-                        "<   {}: {}",
-                        String::from_utf8_lossy(k),
-                        String::from_utf8_lossy(v)
-                    );
+    };
+
+    for level in out_level {
+        // Default output is at the highest level protocol in the request.
+        match level {
+            Protocol::TCP => {
+                if let Some(tcp) = &proto.tcp {
+                    if let Some(resp) = &tcp.response {
+                        println!(
+                            "< {}",
+                            String::from_utf8_lossy(&resp.body).replace("\n", "\n< ")
+                        );
+                    }
+                    if let Some(e) = &tcp.error {
+                        println!("{} error: {}", e.kind, e.message);
+                    }
+                    println!("duration: {}ms", tcp.duration.num_milliseconds());
                 }
-                println!("< {}", String::from_utf8_lossy(&http.response.body));
-                println!("duration: {}ms", http.response.duration.as_millis());
             }
-        }
-        Protocol::GraphQL => {
-            if let Some(gql) = &proto.graphql {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&gql.response.json).unwrap()
-                );
-                println!("duration: {}ms", gql.response.duration.num_milliseconds());
+            Protocol::TLS => {
+                if let Some(tls) = &proto.tls {
+                    if let Some(resp) = &tls.response {
+                        println!(
+                            "< {}",
+                            String::from_utf8_lossy(&resp.body).replace("\n", "\n< ")
+                        );
+                    }
+                    if let Some(e) = &tls.error {
+                        println!("{} error: {}", e.kind, e.message);
+                    }
+                    println!("duration: {}ms", tls.duration.num_milliseconds());
+                }
             }
+            Protocol::HTTP => {
+                if let Some(http) = &proto.http {
+                    if let Some(resp) = &http.response {
+                        println!(
+                            "< {} {}",
+                            http.response
+                                .as_ref()
+                                .map(|resp| resp.status_code)
+                                .flatten()
+                                .unwrap_or(0),
+                            http.protocol
+                                .as_ref()
+                                .map(String::as_str)
+                                .unwrap_or_default()
+                        );
+                        if let Some(headers) = &resp.headers {
+                            for (k, v) in headers {
+                                println!(
+                                    "<   {}: {}",
+                                    String::from_utf8_lossy(&k),
+                                    String::from_utf8_lossy(&v)
+                                );
+                            }
+                        }
+                        if let Some(body) = &resp.body {
+                            println!("< {}", String::from_utf8_lossy(&body).replace("\n", "\n< "));
+                        }
+                    }
+                    if let Some(e) = &http.error {
+                        println!("{} error: {}", e.kind, e.message);
+                    }
+                    println!("duration: {}ms", http.duration.num_milliseconds());
+                }
+            }
+            Protocol::GraphQL => {
+                if let Some(gql) = &proto.graphql {
+                    if let Some(resp) = &gql.response {
+                        println!(
+                            "< {}",
+                            serde_json::to_string_pretty(&resp.json)
+                                .unwrap()
+                                .replace("\n", "\n< ")
+                        );
+                    }
+                    if let Some(e) = &gql.error {
+                        println!("{} error: {}", e.kind, e.message);
+                    }
+                    println!("duration: {}ms", gql.duration.num_milliseconds());
+                }
+            }
+            _ => {}
         }
-        _ => {}
     }
 }
