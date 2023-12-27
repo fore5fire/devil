@@ -1,6 +1,7 @@
 use crate::{bindings, Error, Result, State, StepPlanOutput};
 use base64::Engine;
-use cel_interpreter::{Context, Program};
+use cel_interpreter::extractors::This;
+use cel_interpreter::{Context, FunctionContext, Program, ResolveResult};
 use chrono::Duration;
 use go_parse_duration::parse_duration;
 use indexmap::IndexMap;
@@ -521,7 +522,7 @@ impl TryFrom<PlanData> for Url {
     type Error = Error;
     fn try_from(value: PlanData) -> Result<Self> {
         let cel_interpreter::Value::String(x) = value.0 else {
-            return Err(Error("TLS version must be a string".to_owned()));
+            return Err(Error("URL must be a string".to_owned()));
         };
         Url::parse(&x).map_err(|e| Error(e.to_string()))
     }
@@ -1068,6 +1069,10 @@ impl TryFrom<bindings::Value> for PlanValue<String> {
     fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
             bindings::Value::LiteralString(x) => Ok(Self::Literal(x)),
+            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
+                cel,
+                vars: vars.unwrap_or_default().into_iter().collect(),
+            }),
             _ => Err(Error(format!("invalid value {binding:?} for string field"))),
         }
     }
@@ -1081,6 +1086,10 @@ impl TryFrom<bindings::Value> for PlanValue<u16> {
                     Error("out-of-bounds unsigned 16 bit integer literal".to_owned())
                 })?))
             }
+            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
+                cel,
+                vars: vars.unwrap_or_default().into_iter().collect(),
+            }),
             _ => Err(Error(format!(
                 "invalid value {binding:?} for unsigned 16 bit integer field"
             ))),
@@ -1092,6 +1101,10 @@ impl TryFrom<bindings::Value> for PlanValue<bool> {
     fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
             bindings::Value::LiteralBool(x) => Ok(Self::Literal(x)),
+            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
+                cel,
+                vars: vars.unwrap_or_default().into_iter().collect(),
+            }),
             _ => Err(Error(format!(
                 "invalid value {binding:?} for boolean field"
             ))),
@@ -1108,6 +1121,10 @@ impl TryFrom<bindings::Value> for PlanValue<Vec<u8>> {
                     .decode(data)
                     .map_err(|e| Error(format!("base64 decode: {}", e)))?,
             )),
+            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
+                cel,
+                vars: vars.unwrap_or_default().into_iter().collect(),
+            }),
             _ => Err(Error(format!("invalid value {binding:?} for bytes field"))),
         }
     }
@@ -1121,6 +1138,10 @@ impl TryFrom<bindings::Value> for PlanValue<Duration> {
                     .map(Duration::nanoseconds)
                     .map_err(|_| Error(format!("invalid duration string")))?,
             )),
+            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
+                cel,
+                vars: vars.unwrap_or_default().into_iter().collect(),
+            }),
             _ => Err(Error(format!(
                 "invalid value {binding:?} for duration field"
             ))),
@@ -1137,6 +1158,10 @@ impl TryFrom<bindings::Value> for PlanValue<TlsVersion> {
                     Error("out-of-bounds unsigned 16 bit integer literal".to_owned())
                 })?,
             )),
+            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
+                cel,
+                vars: vars.unwrap_or_default().into_iter().collect(),
+            }),
             _ => Err(Error(format!(
                 "invalid value {binding:?} for tls version field"
             ))),
@@ -1190,6 +1215,10 @@ impl TryFrom<bindings::Value> for PlanValue<serde_json::Value> {
                     .collect::<Result<Vec<_>>>()?
                     .into(),
             )),
+            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
+                cel,
+                vars: vars.unwrap_or_default().into_iter().collect(),
+            }),
             _ => Err(Error(format!("invalid value {binding:?} for json field"))),
         }
     }
@@ -1209,7 +1238,6 @@ where
         match self.to_owned() {
             PlanValue::Literal(s) => Ok(s.clone()),
             Self::Dynamic { cel, vars } => {
-                println!("compiling cel {}", cel);
                 let program = Program::compile(cel.as_str())
                     .map_err(|e| Error(format!("compile cel {}: {}", cel, e)))?;
                 let mut context = Context::default();
@@ -1221,15 +1249,13 @@ where
                         ),
                 );
                 add_state_to_context(state, &mut context);
-                let a = PlanData(
+                PlanData(
                     program
                         .execute(&context)
                         .map_err(|e| Error(format!("execute cel {}: {}", cel, e)))?,
                 )
                 .try_into()
-                .map_err(|e: E| Error(e.to_string()));
-                println!("evaluated cel {}: {:?}", cel, a);
-                a
+                .map_err(|e: E| Error(e.to_string()))
             }
         }
     }
@@ -1377,5 +1403,51 @@ where
             .map(|name| (name, state.get(name).unwrap().to_owned()))
             .collect::<HashMap<_, _>>(),
     );
-    ctx.add_variable("current", state.current().to_owned())
+    ctx.add_variable("current", state.current().to_owned());
+    ctx.add_function("parse_url", url);
+    ctx.add_function("parse_form_urlencoded", form_urlencoded_parts);
+}
+
+fn url(ftx: &FunctionContext, This(url): This<Arc<String>>) -> ResolveResult {
+    let url = Url::parse(&url).map_err(|e| ftx.error(&e.to_string()))?;
+    Ok(url_to_cel(url))
+}
+
+fn url_to_cel(url: Url) -> cel_interpreter::Value {
+    cel_interpreter::Value::Map(cel_interpreter::objects::Map {
+        map: Rc::new(HashMap::from([
+            ("scheme".into(), url.scheme().into()),
+            ("username".into(), url.username().into()),
+            ("password".into(), url.password().into()),
+            ("host".into(), url.host_str().into()),
+            ("port".into(), url.port().map(|x| x as u64).into()),
+            (
+                "port_or_default".into(),
+                url.port_or_known_default().map(|x| x as u64).into(),
+            ),
+            ("path".into(), url.path().into()),
+            (
+                "path_segments".into(),
+                url.path_segments().map(|x| x.collect::<Vec<_>>()).into(),
+            ),
+            ("query".into(), url.query().into()),
+            ("fragment".into(), url.fragment().into()),
+        ])),
+    })
+}
+
+fn form_urlencoded_parts(This(query): This<Arc<String>>) -> Arc<Vec<cel_interpreter::Value>> {
+    Arc::new(
+        form_urlencoded::parse(query.as_bytes())
+            .into_owned()
+            .map(|(k, v)| {
+                cel_interpreter::Value::Map(cel_interpreter::objects::Map {
+                    map: Rc::new(HashMap::from([
+                        ("key".into(), k.into()),
+                        ("value".into(), v.into()),
+                    ])),
+                })
+            })
+            .collect(),
+    )
 }

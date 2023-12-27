@@ -108,6 +108,43 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                         );
                     }
                 }
+                if let Some(http) = &proto.http1 {
+                    println!(
+                        "> {}{}{}",
+                        http.request
+                            .as_ref()
+                            .map(|req| req.method.as_ref())
+                            .flatten()
+                            .as_deref()
+                            .map(|x| String::from_utf8_lossy(x) + " ")
+                            .unwrap_or_default(),
+                        http.request
+                            .as_ref()
+                            .map(|req| req.url.to_string())
+                            .unwrap_or_else(|| "".to_owned()),
+                        http.request
+                            .as_ref()
+                            .map(|req| req
+                                .version_string
+                                .as_ref()
+                                .map(|v| " ".to_owned() + &String::from_utf8_lossy(v))
+                                .unwrap_or_default())
+                            .unwrap_or_default(),
+                    );
+                    if let Some(req) = &http.request {
+                        for (k, v) in &req.headers {
+                            println!(
+                                ">   {}: {}",
+                                String::from_utf8_lossy(k),
+                                String::from_utf8_lossy(v)
+                            );
+                        }
+                        println!(
+                            "> {}",
+                            String::from_utf8_lossy(&req.body).replace("\n", "\n> ")
+                        );
+                    }
+                }
             }
             Protocol::GraphQL => {
                 if let Some(req) = proto
@@ -193,12 +230,42 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                         if let Some(headers) = &resp.headers {
                             for (k, v) in headers {
                                 println!(
-                                    "<   {}: {}",
+                                    "< {}: {}",
                                     String::from_utf8_lossy(&k),
                                     String::from_utf8_lossy(&v)
                                 );
                             }
                         }
+                        println!("< ");
+                        if let Some(body) = &resp.body {
+                            println!("< {}", String::from_utf8_lossy(&body).replace("\n", "\n< "));
+                        }
+                    }
+                    if let Some(e) = &http.error {
+                        println!("{} error: {}", e.kind, e.message);
+                    }
+                    println!("duration: {}ms", http.duration.num_milliseconds());
+                }
+                if let Some(http) = &proto.http1 {
+                    if let Some(resp) = &http.response {
+                        println!(
+                            "< {} {}",
+                            resp.status_code.unwrap_or(0),
+                            resp.protocol
+                                .as_ref()
+                                .map(|x| String::from_utf8_lossy(x))
+                                .unwrap_or_default()
+                        );
+                        if let Some(headers) = &resp.headers {
+                            for (k, v) in headers {
+                                println!(
+                                    "< {}: {}",
+                                    String::from_utf8_lossy(&k),
+                                    String::from_utf8_lossy(&v)
+                                );
+                            }
+                        }
+                        println!("< ");
                         if let Some(body) = &resp.body {
                             println!("< {}", String::from_utf8_lossy(&body).replace("\n", "\n< "));
                         }

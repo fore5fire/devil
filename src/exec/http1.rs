@@ -26,8 +26,8 @@ pub(super) struct Http1Runner {
     first_read: Option<Instant>,
     end_time: Option<Instant>,
     resp_header_buf: BytesMut,
-    req_body_buf: BytesMut,
-    resp_body_buf: BytesMut,
+    req_body_buf: Vec<u8>,
+    resp_body_buf: Vec<u8>,
 }
 
 impl AsyncRead for Http1Runner {
@@ -37,14 +37,18 @@ impl AsyncRead for Http1Runner {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         // If we've already read the header then read and record body bytes.
-        if let Some(resp) = &self.out.response {
-            if resp.header_duration.is_some() {
-                let old_len = buf.filled().len();
-                let poll = Pin::new(&mut self.stream).poll_read(cx, buf);
-                self.resp_body_buf
-                    .extend_from_slice(&buf.filled()[old_len..]);
-                return poll;
-            }
+        if self
+            .out
+            .response
+            .as_ref()
+            .and_then(|resp| resp.header_duration)
+            .is_some()
+        {
+            let old_len = buf.filled().len();
+            let poll = Pin::new(&mut self.stream).poll_read(cx, buf);
+            self.resp_body_buf
+                .extend_from_slice(&buf.filled()[old_len..]);
+            return poll;
         }
 
         // Record the response start time if this is our first read poll and we didn't explicitly
@@ -53,38 +57,42 @@ impl AsyncRead for Http1Runner {
             self.resp_start_time = Some(Instant::now());
         }
 
+        // Don't read in more bytes at a time than we could fit in buf if there's extra after
+        // reading the header.
         // TODO: optimize this to avoid the intermediate allocation and write.
-        let mut header_vec = Box::new([0; 1 << 16]);
-        let mut header_buf = ReadBuf::new(header_vec.as_mut());
-        let poll = Pin::new(&mut self.stream).poll_read(cx, &mut header_buf);
-        self.resp_header_buf.put(header_buf.filled());
-        match poll {
-            Poll::Pending => return Poll::Pending,
-            Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
-            Poll::Ready(Ok(())) => {}
-        }
-        // Data was read - try to process it.
-        if self.first_read.is_none() {
-            self.first_read = Some(Instant::now());
-        }
-        match self.receive_header() {
-            // Not enough data, we'll try again later.
-            Poll::Pending => Poll::Pending,
-            // The full header was read, read the leftover bytes as part of the body.
-            Poll::Ready(Ok(remaining)) if buf.remaining() > remaining.len() => {
-                self.resp_body_buf.extend_from_slice(&remaining);
-                buf.put(remaining);
-                Poll::Ready(Ok(()))
+        let mut header_vec = vec![0; buf.remaining() + 1];
+        loop {
+            let mut header_buf = ReadBuf::new(header_vec.as_mut());
+            let poll = Pin::new(&mut self.stream).poll_read(cx, &mut header_buf);
+            self.resp_header_buf.put_slice(header_buf.filled());
+            match poll {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                // If no data was read then the stream has ended.
+                Poll::Ready(Ok(())) => {
+                    if header_buf.filled().len() == 0 {
+                        return Poll::Ready(Err(std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            "header incomplete".to_owned(),
+                        )));
+                    }
+                }
             }
-            // Not enough room for all the leftover bytes - write what we can to the caller's
-            // buffer and save the rest.
-            Poll::Ready(Ok(remaining)) => {
-                self.resp_header_buf = remaining;
-                let bytes_that_fit = self.resp_header_buf.split_to(buf.remaining());
-                buf.put(bytes_that_fit);
-                Poll::Ready(Ok(()))
+            // Data was read - try to process it.
+            if self.first_read.is_none() {
+                self.first_read = Some(Instant::now());
             }
-            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+            match self.receive_header() {
+                // Not enough data, let's read some more.
+                Poll::Pending => {}
+                // The full header was read, read the leftover bytes as part of the body.
+                Poll::Ready(Ok(remaining)) => {
+                    self.resp_body_buf.extend_from_slice(&remaining);
+                    buf.put(remaining);
+                    return Poll::Ready(Ok(()));
+                }
+                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+            }
         }
     }
 }
@@ -144,8 +152,8 @@ impl Http1Runner {
             first_read: None,
             end_time: None,
             resp_header_buf: BytesMut::new(),
-            req_body_buf: BytesMut::new(),
-            resp_body_buf: BytesMut::new(),
+            req_body_buf: Vec::new(),
+            resp_body_buf: Vec::new(),
         })
     }
 

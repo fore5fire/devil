@@ -55,23 +55,23 @@ impl From<StepPlanOutputs> for Value {
             map: Rc::new(HashMap::from([
                 (
                     "graphql".into(),
-                    HashMap::from([("request", Value::from(value.graphql))]).into(),
+                    HashMap::from([("plan", Value::from(value.graphql))]).into(),
                 ),
                 (
                     "http".into(),
-                    HashMap::from([("request", Value::from(value.http))]).into(),
+                    HashMap::from([("plan", Value::from(value.http))]).into(),
                 ),
                 (
                     "http1".into(),
-                    HashMap::from([("request", Value::from(value.http1))]).into(),
+                    HashMap::from([("plan", Value::from(value.http1))]).into(),
                 ),
                 (
                     "tls".into(),
-                    HashMap::from([("request", Value::from(value.tls))]).into(),
+                    HashMap::from([("plan", Value::from(value.tls))]).into(),
                 ),
                 (
                     "tcp".into(),
-                    HashMap::from([("request", Value::from(value.tcp))]).into(),
+                    HashMap::from([("plan", Value::from(value.tcp))]).into(),
                 ),
             ])),
         })

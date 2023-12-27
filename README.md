@@ -94,7 +94,8 @@ In order of importance:
    command that automatically updates plans for any breaking changes that can't
    be avoided.
 5. Be fast. Time matters a lot for load testing, race conditions, and side
-   channel attacks.
+   channel attacks. Anything that doesn't need to live in the hot-path of
+   running a request should be done elsewhere.
 
 ## Non-goals
 
