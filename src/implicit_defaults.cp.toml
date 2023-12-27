@@ -15,19 +15,34 @@ selector = ["graphql", "graphqlhttp1", "graphqlhttp2", "graphqlhttp3"]
 
 [[courier.defaults]]
 selector = ["graphql"]
-    http.url.cel = "current.graphql.request.url"
+    http.url.cel = "current.graphql.plan.url"
 
 [[courier.defaults]]
 selector = ["graphqlhttp1"]
-    http1.url.cel = "current.graphqlhttp1.request.url"
+    http1.url.cel = "current.graphqlhttp1.plan.url"
 
 [[courier.defaults]]
 selector = ["graphqlhttp2"]
-    http2.url.cel = "current.graphqlhttp2.request.url"
+    http2.url.cel = "current.graphqlhttp2.plan.url"
 
 [[courier.defaults]]
 selector = ["graphqlhttp3"]
-    http3.url.cel = "current.graphqlhttp3.request.url"
+    http3.url.cel = "current.graphqlhttp3.plan.url"
+
+[[courier.defaults]]
+selector = ["http1"]
+    [courier.defaults.tls]
+    host.cel = "current.http1.plan.url.parse_url().host"
+    port.cel = "current.http1.plan.url.parse_url().port_or_default"
+    [courier.defaults.tcp]
+    host.cel = "current.http1.plan.url.parse_url().host"
+    port.cel = "current.http1.plan.url.parse_url().port_or_default"
+
+[[courier.defaults]]
+selector = ["tls"]
+    [courier.defaults.tcp]
+    host.cel = "current.tls.plan.host"
+    port.cel = "current.tls.plan.port"
 
 [[courier.defaults]]
     http.method = "GET"

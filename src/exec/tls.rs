@@ -195,10 +195,11 @@ impl Runner for TlsRunner {
             req.time_to_last_byte = self
                 .last_write
                 .map(|last_write| Duration::from_std(last_write - self.start).unwrap());
+            req.body = writes;
         }
         if !reads.is_empty() {
             self.out.response = Some(TlsResponse {
-                body: writes,
+                body: reads,
                 time_to_first_byte: self
                     .first_read
                     .map(|first_read| Duration::from_std(first_read - self.start).unwrap()),
