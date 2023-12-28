@@ -1,3 +1,5 @@
+courier.version = "0.1"
+
 [http_pause.http]
 url = "https://example.com/"
 pause = [{ after = "open", duration = "500ms" }]

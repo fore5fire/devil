@@ -3,16 +3,17 @@ use std::collections::HashMap;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Plan {
-    #[serde(default)]
     pub courier: Settings,
     #[serde(flatten)]
     pub steps: IndexMap<String, Step>,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Settings {
+    pub version: String,
+    #[serde(default)]
     pub defaults: Vec<Defaults>,
 }
 

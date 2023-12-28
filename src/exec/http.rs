@@ -157,8 +157,8 @@ impl Runner for HttpRunner {
                         body: req.body,
                         pause: req.pause,
                         duration: req.duration,
-                        header_duration: req.header_duration,
                         body_duration: req.body_duration,
+                        time_to_first_byte: req.time_to_first_byte,
                     }),
                     response: out.response.map(|resp| HttpResponse {
                         protocol: resp.protocol,
@@ -167,7 +167,7 @@ impl Runner for HttpRunner {
                         body: resp.body,
                         duration: resp.duration,
                         header_duration: resp.header_duration,
-                        body_duration: resp.body_duration,
+                        time_to_first_byte: resp.time_to_first_byte,
                     }),
                     error: out.error.map(|e| crate::HttpError {
                         kind: e.kind,

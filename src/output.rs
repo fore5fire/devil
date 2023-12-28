@@ -181,8 +181,8 @@ pub struct HttpRequestOutput {
     pub body: Vec<u8>,
     pub pause: Vec<PauseOutput>,
     pub duration: Duration,
-    pub header_duration: Option<Duration>,
     pub body_duration: Option<Duration>,
+    pub time_to_first_byte: Option<Duration>,
 }
 
 impl From<HttpRequestOutput> for Value {
@@ -203,8 +203,8 @@ impl From<HttpRequestOutput> for Value {
                     Value::List(Arc::new(value.pause.into_iter().map(Value::from).collect())),
                 ),
                 ("duration".into(), value.duration.into()),
-                ("header_duration".into(), value.header_duration.into()),
                 ("body_duration".into(), value.body_duration.into()),
+                ("time_to_first_byte".into(), value.time_to_first_byte.into()),
             ])),
         })
     }
@@ -218,7 +218,7 @@ pub struct HttpResponse {
     pub body: Option<Vec<u8>>,
     pub duration: Duration,
     pub header_duration: Option<Duration>,
-    pub body_duration: Option<Duration>,
+    pub time_to_first_byte: Option<Duration>,
 }
 
 impl From<HttpResponse> for Value {
@@ -247,7 +247,7 @@ impl From<HttpResponse> for Value {
                 ("body".into(), value.body.clone().into()),
                 ("duration".into(), value.duration.into()),
                 ("header_duration".into(), value.header_duration.into()),
-                ("body_duration".into(), value.body_duration.into()),
+                ("time_to_first_byte".into(), value.time_to_first_byte.into()),
             ])),
         })
     }
@@ -335,7 +335,6 @@ pub struct Http1RequestOutput {
     pub body: Vec<u8>,
     pub pause: Vec<PauseOutput>,
     pub duration: Duration,
-    pub header_duration: Option<Duration>,
     pub body_duration: Option<Duration>,
     pub time_to_first_byte: Option<Duration>,
 }
@@ -359,7 +358,6 @@ impl From<Http1RequestOutput> for Value {
                     Value::List(Arc::new(value.pause.into_iter().map(Value::from).collect())),
                 ),
                 ("duration".into(), value.duration.into()),
-                ("header_duration".into(), value.header_duration.into()),
                 ("body_duration".into(), value.body_duration.into()),
                 ("time_to_first_byte".into(), value.time_to_first_byte.into()),
             ])),
@@ -376,7 +374,6 @@ pub struct Http1Response {
     pub body: Option<Vec<u8>>,
     pub duration: Duration,
     pub header_duration: Option<Duration>,
-    pub body_duration: Option<Duration>,
     pub time_to_first_byte: Option<Duration>,
 }
 
@@ -414,7 +411,6 @@ impl From<Http1Response> for Value {
                 ("body".into(), value.body.clone().into()),
                 ("duration".into(), value.duration.into()),
                 ("header_duration".into(), value.header_duration.into()),
-                ("body_duration".into(), value.body_duration.into()),
                 ("time_to_first_byte".into(), value.time_to_first_byte.into()),
             ])),
         })

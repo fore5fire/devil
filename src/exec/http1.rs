@@ -21,8 +21,11 @@ pub(super) struct Http1Runner {
     out: Http1Output,
     stream: Box<dyn Runner>,
     start_time: Instant,
+    req_header_start_time: Option<Instant>,
+    req_body_start_time: Option<Instant>,
     req_end_time: Option<Instant>,
     resp_start_time: Option<Instant>,
+    resp_header_end_time: Option<Instant>,
     first_read: Option<Instant>,
     end_time: Option<Instant>,
     resp_header_buf: BytesMut,
@@ -87,6 +90,7 @@ impl AsyncRead for Http1Runner {
                 Poll::Pending => {}
                 // The full header was read, read the leftover bytes as part of the body.
                 Poll::Ready(Ok(remaining)) => {
+                    self.resp_header_end_time = Some(Instant::now());
                     self.resp_body_buf.extend_from_slice(&remaining);
                     buf.put(remaining);
                     return Poll::Ready(Ok(()));
@@ -105,6 +109,9 @@ impl AsyncWrite for Http1Runner {
     ) -> Poll<Result<usize, std::io::Error>> {
         let poll = Pin::new(&mut self.stream).poll_write(cx, buf);
         if poll.is_ready() {
+            if self.req_body_start_time.is_none() {
+                self.req_body_start_time = Some(Instant::now());
+            }
             self.get_mut().req_body_buf.extend_from_slice(&buf);
         }
         poll
@@ -122,7 +129,7 @@ impl AsyncWrite for Http1Runner {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
         let poll = Pin::new(&mut self.stream).poll_shutdown(cx);
-        if let Poll::Ready(Ok(())) = &poll {
+        if poll.is_ready() {
             self.end_time = Some(Instant::now());
         }
         poll
@@ -147,8 +154,11 @@ impl Http1Runner {
             },
             stream,
             start_time,
+            req_header_start_time: None,
+            req_body_start_time: None,
             req_end_time: None,
             resp_start_time: None,
+            resp_header_end_time: None,
             first_read: None,
             end_time: None,
             resp_header_buf: BytesMut::new(),
@@ -230,18 +240,19 @@ impl Http1Runner {
                     }),
                     status_reason: resp.reason.map(Vec::from),
                     body: None,
-                    duration: chrono::Duration::zero(),
-                    body_duration: None,
+                    duration: Duration::zero(),
                     header_duration: None,
-                    time_to_first_byte: self.first_read.map(|first_read| {
-                        Duration::from_std(
+                    time_to_first_byte: self
+                        .first_read
+                        .map(|first_read| {
                             first_read
                                 - self.resp_start_time.expect(
                                     "response start time should be set before header is processed",
-                                ),
-                        )
-                        .unwrap()
-                    }),
+                                )
+                        })
+                        .map(Duration::from_std)
+                        .transpose()
+                        .unwrap(),
                 });
                 match result {
                     httparse::Status::Partial => Poll::Pending,
@@ -278,6 +289,22 @@ impl Runner for Http1Runner {
                 .push(("Content-Length".into(), format!("{size}").into()));
         }
         let mut header = self.compute_header();
+
+        self.stream
+            .start(Some(header.len() + size_hint.unwrap_or(0)))
+            .await?;
+
+        self.req_header_start_time = Some(Instant::now());
+        // Write directly to the transport instead of self so we don't record the header as the
+        // body.
+        self.stream.write_all_buf(&mut header).await?;
+
+        if let Some(p) = self.out.plan.pause.iter().find(|p| p.after == "headers") {
+            self.stream.flush().await?;
+            println!("pausing after {} for {:?}", p.after, p.duration);
+            tokio::time::sleep(p.duration.to_std().unwrap()).await;
+        }
+
         self.out.request = Some(Http1RequestOutput {
             url: self.out.plan.url.clone(),
             headers: self.out.plan.headers.clone(),
@@ -287,20 +314,8 @@ impl Runner for Http1Runner {
             body: Vec::new(),
             duration: Duration::zero(),
             body_duration: None,
-            header_duration: None,
             time_to_first_byte: None,
         });
-        self.stream.write_all_buf(&mut header).await?;
-        if let Some(p) = self.out.plan.pause.iter().find(|p| p.after == "headers") {
-            self.stream.flush().await?;
-            println!("pausing after {} for {:?}", p.after, p.duration);
-            tokio::time::sleep(p.duration.to_std().unwrap()).await;
-        }
-        // Write directly to the transport isntead of self so we don't record the header as the
-        // body.
-        self.stream
-            .start(Some(header.len() + size_hint.unwrap_or(0)))
-            .await?;
         Ok(())
     }
 
@@ -360,6 +375,18 @@ impl Runner for Http1Runner {
             req.duration =
                 Duration::from_std(self.req_end_time.unwrap_or(end_time) - self.start_time)
                     .unwrap();
+            req.body_duration = self
+                .req_body_start_time
+                .map(|start| self.resp_start_time.unwrap_or(end_time) - start)
+                .map(Duration::from_std)
+                .transpose()
+                .unwrap();
+            req.time_to_first_byte = self
+                .req_header_start_time
+                .map(|header_start| header_start - self.start_time)
+                .map(Duration::from_std)
+                .transpose()
+                .unwrap();
             req.body = self.req_body_buf.to_vec();
         }
 
@@ -373,6 +400,12 @@ impl Runner for Http1Runner {
                         .expect("response start time should be recorded when response is set"),
             )
             .unwrap();
+            resp.header_duration = self
+                .resp_header_end_time
+                .map(|end| end - self.resp_start_time.expect("response start time should be set if the response header has been received"))
+                .map(Duration::from_std)
+                .transpose()
+                .unwrap();
         }
 
         self.out.duration = Duration::from_std(end_time - self.start_time).unwrap();
