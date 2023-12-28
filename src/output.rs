@@ -125,6 +125,7 @@ pub struct HttpOutput {
     pub error: Option<HttpError>,
     pub protocol: Option<String>,
     pub duration: Duration,
+    pub pause: PauseOutput<HttpPauseOutput>,
 }
 
 impl From<HttpOutput> for Value {
@@ -137,6 +138,7 @@ impl From<HttpOutput> for Value {
                 ("protocol".into(), value.protocol.into()),
                 ("error".into(), value.error.into()),
                 ("duration".into(), value.duration.into()),
+                ("pause".into(), value.pause.into()),
             ])),
         })
     }
@@ -148,7 +150,7 @@ pub struct HttpPlanOutput {
     pub method: Option<Vec<u8>>,
     pub headers: Vec<(Vec<u8>, Vec<u8>)>,
     pub body: Vec<u8>,
-    pub pause: Vec<PauseOutput>,
+    pub pause: PauseOutput<HttpPauseOutput>,
 }
 
 impl From<HttpPlanOutput> for Value {
@@ -156,18 +158,38 @@ impl From<HttpPlanOutput> for Value {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("url".into(), value.url.to_string().into()),
-                ("method".into(), value.method.clone().into()),
+                ("method".into(), value.method.into()),
                 (
                     "headers".into(),
                     Value::List(Arc::new(
                         value.headers.into_iter().map(kv_pair_to_map).collect(),
                     )),
                 ),
-                ("body".into(), value.body.clone().into()),
-                (
-                    "pause".into(),
-                    Value::List(Arc::new(value.pause.into_iter().map(Value::from).collect())),
-                ),
+                ("body".into(), value.body.into()),
+                ("pause".into(), value.pause.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct HttpPauseOutput {
+    pub open: Vec<PauseValueOutput>,
+    pub request_header: Vec<PauseValueOutput>,
+    pub request_body: Vec<PauseValueOutput>,
+    pub response_header: Vec<PauseValueOutput>,
+    pub response_body: Vec<PauseValueOutput>,
+}
+
+impl From<HttpPauseOutput> for Value {
+    fn from(value: HttpPauseOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("open".into(), value.open.into()),
+                ("request_header".into(), value.request_header.into()),
+                ("request_body".into(), value.request_body.into()),
+                ("response_header".into(), value.response_header.into()),
+                ("response_body".into(), value.response_body.into()),
             ])),
         })
     }
@@ -179,7 +201,6 @@ pub struct HttpRequestOutput {
     pub method: Option<Vec<u8>>,
     pub headers: Vec<(Vec<u8>, Vec<u8>)>,
     pub body: Vec<u8>,
-    pub pause: Vec<PauseOutput>,
     pub duration: Duration,
     pub body_duration: Option<Duration>,
     pub time_to_first_byte: Option<Duration>,
@@ -198,10 +219,6 @@ impl From<HttpRequestOutput> for Value {
                     )),
                 ),
                 ("body".into(), value.body.clone().into()),
-                (
-                    "pause".into(),
-                    Value::List(Arc::new(value.pause.into_iter().map(Value::from).collect())),
-                ),
                 ("duration".into(), value.duration.into()),
                 ("body_duration".into(), value.body_duration.into()),
                 ("time_to_first_byte".into(), value.time_to_first_byte.into()),
@@ -277,6 +294,7 @@ pub struct Http1Output {
     pub response: Option<Http1Response>,
     pub error: Option<Http1Error>,
     pub duration: Duration,
+    pub pause: PauseOutput<Http1PauseOutput>,
 }
 
 impl From<Http1Output> for Value {
@@ -288,6 +306,7 @@ impl From<Http1Output> for Value {
                 ("response".into(), value.response.into()),
                 ("error".into(), value.error.into()),
                 ("duration".into(), value.duration.into()),
+                ("pause".into(), value.pause.into()),
             ])),
         })
     }
@@ -300,7 +319,7 @@ pub struct Http1PlanOutput {
     pub version_string: Option<Vec<u8>>,
     pub headers: Vec<(Vec<u8>, Vec<u8>)>,
     pub body: Vec<u8>,
-    pub pause: Vec<PauseOutput>,
+    pub pause: PauseOutput<Http1PauseOutput>,
 }
 
 impl From<Http1PlanOutput> for Value {
@@ -308,8 +327,8 @@ impl From<Http1PlanOutput> for Value {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("url".into(), value.url.to_string().into()),
-                ("method".into(), value.method.clone().into()),
-                ("version_string".into(), value.version_string.clone().into()),
+                ("method".into(), value.method.into()),
+                ("version_string".into(), value.version_string.into()),
                 (
                     "headers".into(),
                     Value::List(Arc::new(
@@ -317,10 +336,30 @@ impl From<Http1PlanOutput> for Value {
                     )),
                 ),
                 ("body".into(), value.body.clone().into()),
-                (
-                    "pause".into(),
-                    Value::List(Arc::new(value.pause.into_iter().map(Value::from).collect())),
-                ),
+                ("pause".into(), value.pause.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Http1PauseOutput {
+    pub open: Vec<PauseValueOutput>,
+    pub request_header: Vec<PauseValueOutput>,
+    pub request_body: Vec<PauseValueOutput>,
+    pub response_header: Vec<PauseValueOutput>,
+    pub response_body: Vec<PauseValueOutput>,
+}
+
+impl From<Http1PauseOutput> for Value {
+    fn from(value: Http1PauseOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("open".into(), value.open.into()),
+                ("request_header".into(), value.request_header.into()),
+                ("request_body".into(), value.request_body.into()),
+                ("response_header".into(), value.response_header.into()),
+                ("response_body".into(), value.response_body.into()),
             ])),
         })
     }
@@ -333,7 +372,6 @@ pub struct Http1RequestOutput {
     pub version_string: Option<Vec<u8>>,
     pub headers: Vec<(Vec<u8>, Vec<u8>)>,
     pub body: Vec<u8>,
-    pub pause: Vec<PauseOutput>,
     pub duration: Duration,
     pub body_duration: Option<Duration>,
     pub time_to_first_byte: Option<Duration>,
@@ -353,10 +391,6 @@ impl From<Http1RequestOutput> for Value {
                     )),
                 ),
                 ("body".into(), value.body.clone().into()),
-                (
-                    "pause".into(),
-                    Value::List(Arc::new(value.pause.into_iter().map(Value::from).collect())),
-                ),
                 ("duration".into(), value.duration.into()),
                 ("body_duration".into(), value.body_duration.into()),
                 ("time_to_first_byte".into(), value.time_to_first_byte.into()),
@@ -441,6 +475,7 @@ pub struct GraphQlOutput {
     pub response: Option<GraphQlResponse>,
     pub error: Option<GraphQlError>,
     pub duration: Duration,
+    pub pause: PauseOutput<GraphQlPauseOutput>,
 }
 
 impl From<GraphQlOutput> for Value {
@@ -452,7 +487,19 @@ impl From<GraphQlOutput> for Value {
                 ("response".into(), value.response.into()),
                 ("error".into(), value.error.into()),
                 ("duration".into(), value.duration.into()),
+                ("pause".into(), value.pause.into()),
             ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GraphQlPauseOutput {}
+
+impl From<GraphQlPauseOutput> for Value {
+    fn from(value: GraphQlPauseOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([])),
         })
     }
 }
@@ -463,7 +510,7 @@ pub struct GraphQlPlanOutput {
     pub query: String,
     pub operation: Option<serde_json::Value>,
     pub params: Option<HashMap<Vec<u8>, serde_json::Value>>,
-    pub pause: Vec<PauseOutput>,
+    pub pause: PauseOutput<GraphQlPauseOutput>,
 }
 
 impl From<GraphQlPlanOutput> for Value {
@@ -471,10 +518,10 @@ impl From<GraphQlPlanOutput> for Value {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("url".into(), value.url.to_string().into()),
-                ("query".into(), value.query.clone().into()),
+                ("query".into(), value.query.into()),
                 (
                     "operation".into(),
-                    value.operation.clone().map(OutValue::from).into(),
+                    value.operation.map(OutValue::from).into(),
                 ),
                 (
                     "params".into(),
@@ -504,10 +551,7 @@ impl From<GraphQlPlanOutput> for Value {
                         })
                         .unwrap_or(Value::Null),
                 ),
-                (
-                    "pause".into(),
-                    Value::List(Arc::new(value.pause.into_iter().map(Value::from).collect())),
-                ),
+                ("pause".into(), value.pause.into()),
             ])),
         })
     }
@@ -519,7 +563,6 @@ pub struct GraphQlRequestOutput {
     pub query: String,
     pub operation: Option<serde_json::Value>,
     pub params: Option<HashMap<Vec<u8>, serde_json::Value>>,
-    pub pause: Vec<PauseOutput>,
     pub duration: Duration,
 }
 
@@ -528,10 +571,10 @@ impl From<GraphQlRequestOutput> for Value {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("url".into(), value.url.to_string().into()),
-                ("query".into(), value.query.clone().into()),
+                ("query".into(), value.query.into()),
                 (
                     "operation".into(),
-                    value.operation.clone().map(OutValue::from).into(),
+                    value.operation.map(OutValue::from).into(),
                 ),
                 (
                     "params".into(),
@@ -560,10 +603,6 @@ impl From<GraphQlRequestOutput> for Value {
                             })
                         })
                         .unwrap_or(Value::Null),
-                ),
-                (
-                    "pause".into(),
-                    Value::List(Arc::new(value.pause.into_iter().map(Value::from).collect())),
                 ),
                 ("duration".into(), value.duration.into()),
             ])),
@@ -622,6 +661,7 @@ pub struct TlsOutput {
     pub version: Option<TlsVersion>,
     pub duration: Duration,
     pub handshake_duration: Option<Duration>,
+    pub pause: PauseOutput<TlsPauseOutput>,
 }
 
 impl From<TlsOutput> for Value {
@@ -635,6 +675,26 @@ impl From<TlsOutput> for Value {
                 ("version".into(), value.version.as_ref().into()),
                 ("duration".into(), value.duration.into()),
                 ("handshake_duration".into(), value.handshake_duration.into()),
+                ("pause".into(), value.pause.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TlsPauseOutput {
+    pub handshake: Vec<PauseValueOutput>,
+    pub first_read: Vec<PauseValueOutput>,
+    pub first_write: Vec<PauseValueOutput>,
+}
+
+impl From<TlsPauseOutput> for Value {
+    fn from(value: TlsPauseOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("handshake".into(), value.handshake.into()),
+                ("first_read".into(), value.first_read.into()),
+                ("first_write".into(), value.first_write.into()),
             ])),
         })
     }
@@ -645,7 +705,7 @@ pub struct TlsPlanOutput {
     pub host: String,
     pub port: u16,
     pub body: Vec<u8>,
-    pub pause: Vec<PauseOutput>,
+    pub pause: PauseOutput<TlsPauseOutput>,
 }
 
 impl From<TlsPlanOutput> for Value {
@@ -655,10 +715,7 @@ impl From<TlsPlanOutput> for Value {
                 ("host".into(), value.host.into()),
                 ("port".into(), u64::from(value.port).into()),
                 ("body".into(), value.body.into()),
-                (
-                    "pause".into(),
-                    Value::List(Arc::new(value.pause.into_iter().map(Value::from).collect())),
-                ),
+                ("pause".into(), value.pause.into()),
             ])),
         })
     }
@@ -669,7 +726,6 @@ pub struct TlsRequestOutput {
     pub host: String,
     pub port: u16,
     pub body: Vec<u8>,
-    pub pause: Vec<PauseOutput>,
     pub time_to_first_byte: Option<Duration>,
     pub time_to_last_byte: Option<Duration>,
 }
@@ -681,10 +737,6 @@ impl From<TlsRequestOutput> for Value {
                 ("host".into(), value.host.into()),
                 ("port".into(), u64::from(value.port).into()),
                 ("body".into(), value.body.into()),
-                (
-                    "pause".into(),
-                    Value::List(Arc::new(value.pause.into_iter().map(Value::from).collect())),
-                ),
                 ("time_to_first_byte".into(), value.time_to_first_byte.into()),
                 ("time_to_last_byte".into(), value.time_to_last_byte.into()),
             ])),
@@ -736,6 +788,7 @@ pub struct TcpOutput {
     pub error: Option<TcpError>,
     pub duration: Duration,
     pub handshake_duration: Option<Duration>,
+    pub pause: PauseOutput<TcpPauseOutput>,
 }
 
 impl From<TcpOutput> for Value {
@@ -748,6 +801,26 @@ impl From<TcpOutput> for Value {
                 ("error".into(), value.error.into()),
                 ("duration".into(), value.duration.into()),
                 ("handshake_duration".into(), value.handshake_duration.into()),
+                ("pause".into(), value.pause.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TcpPauseOutput {
+    pub handshake: Vec<PauseValueOutput>,
+    pub first_read: Vec<PauseValueOutput>,
+    pub first_write: Vec<PauseValueOutput>,
+}
+
+impl From<TcpPauseOutput> for Value {
+    fn from(value: TcpPauseOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("handshake".into(), value.handshake.into()),
+                ("first_read".into(), value.first_read.into()),
+                ("first_write".into(), value.first_write.into()),
             ])),
         })
     }
@@ -758,7 +831,7 @@ pub struct TcpPlanOutput {
     pub host: String,
     pub port: u16,
     pub body: Vec<u8>,
-    pub pause: Vec<PauseOutput>,
+    pub pause: PauseOutput<TcpPauseOutput>,
 }
 
 impl From<TcpPlanOutput> for Value {
@@ -768,10 +841,7 @@ impl From<TcpPlanOutput> for Value {
                 ("host".into(), Value::String(Arc::new(value.host))),
                 ("port".into(), (value.port as u64).into()),
                 ("body".into(), Value::Bytes(Arc::new(value.body))),
-                (
-                    "pause".into(),
-                    Value::List(Arc::new(value.pause.into_iter().map(Value::from).collect())),
-                ),
+                ("pause".into(), value.pause.into()),
             ])),
         })
     }
@@ -782,7 +852,6 @@ pub struct TcpRequestOutput {
     pub host: String,
     pub port: u16,
     pub body: Vec<u8>,
-    pub pause: Vec<PauseOutput>,
     pub time_to_first_byte: Option<Duration>,
     pub time_to_last_byte: Option<Duration>,
 }
@@ -793,10 +862,6 @@ impl From<TcpRequestOutput> for Value {
                 ("host".into(), Value::String(Arc::new(value.host))),
                 ("port".into(), (value.port as u64).into()),
                 ("body".into(), Value::Bytes(Arc::new(value.body))),
-                (
-                    "pause".into(),
-                    Value::List(Arc::new(value.pause.into_iter().map(Value::from).collect())),
-                ),
                 ("time_to_first_byte".into(), value.time_to_first_byte.into()),
                 ("time_to_last_byte".into(), value.time_to_last_byte.into()),
             ])),
@@ -954,17 +1019,34 @@ impl From<OutMap> for Map {
 }
 
 #[derive(Debug, Clone)]
-pub struct PauseOutput {
-    pub after: String,
-    pub duration: Duration,
+pub struct PauseOutput<T> {
+    pub before: T,
+    pub after: T,
 }
 
-impl From<PauseOutput> for Value {
-    fn from(value: PauseOutput) -> Self {
+impl<T: Into<Value>> From<PauseOutput<T>> for Value {
+    fn from(value: PauseOutput<T>) -> Self {
         Self::Map(Map {
             map: Rc::new(HashMap::from([
+                ("before".into(), value.before.into()),
                 ("after".into(), value.after.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PauseValueOutput {
+    pub duration: Duration,
+    pub offset_bytes: i64,
+}
+
+impl From<PauseValueOutput> for Value {
+    fn from(value: PauseValueOutput) -> Self {
+        Self::Map(Map {
+            map: Rc::new(HashMap::from([
                 ("duration".into(), value.duration.into()),
+                ("offset_bytes".into(), value.offset_bytes.into()),
             ])),
         })
     }
