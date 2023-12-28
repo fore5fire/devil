@@ -44,7 +44,16 @@ impl AsyncWrite for TlsRunner {
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<Result<usize, std::io::Error>> {
-        Pin::new(&mut self.stream).poll_write(cx, buf)
+        let poll = Pin::new(&mut self.stream).poll_write(cx, buf);
+        if let Poll::Ready(Ok(_)) = &poll {
+            if self.first_write.is_none() {
+                for p in self.out.plan.pause.after.first_write {
+                    println!("pausing after first write for {:?}", p.duration);
+                    std::thread::sleep(p.duration.to_std().unwrap());
+                }
+            }
+        }
+        poll
     }
 
     fn poll_flush(
@@ -162,16 +171,6 @@ impl Runner for TlsRunner {
                 message: e.to_string(),
             });
             return;
-        }
-        if let Some(p) = self
-            .out
-            .plan
-            .pause
-            .iter()
-            .find(|p| p.after == "request_body")
-        {
-            println!("pausing after {} for {:?}", p.after, p.duration);
-            std::thread::sleep(p.duration.to_std().unwrap());
         }
         let mut response = Vec::new();
         if let Err(e) = self.stream.read_to_end(&mut response).await {

@@ -155,7 +155,6 @@ impl Runner for HttpRunner {
                         method: req.method,
                         headers: req.headers,
                         body: req.body,
-                        pause: req.pause,
                         duration: req.duration,
                         body_duration: req.body_duration,
                         time_to_first_byte: req.time_to_first_byte,

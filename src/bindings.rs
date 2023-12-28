@@ -3,6 +3,10 @@ use std::collections::HashMap;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
+pub trait Merge: std::fmt::Debug + Clone + Serialize + Deserialize<'static> {
+    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self>;
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Plan {
     pub courier: Settings,
@@ -270,7 +274,7 @@ pub struct GraphQl {
     pub params: Option<Table>,
     pub operation: Option<Value>,
     #[serde(default)]
-    pub pause: Vec<Pause>,
+    pub pause: Pause<GraphQlPause>,
 }
 
 impl GraphQl {
@@ -288,6 +292,19 @@ impl GraphQl {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphQlPause {}
+
+impl Merge for GraphQlPause {
+    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
+        let Some(first) = first else { return second };
+        let Some(second) = second else {
+            return Some(first);
+        };
+        Some(first)
+    }
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Http {
     pub url: Option<Value>,
@@ -296,7 +313,7 @@ pub struct Http {
     pub version_string: Option<Value>,
     pub headers: Option<Table>,
     #[serde(default)]
-    pub pause: Vec<Pause>,
+    pub pause: Pause<HttpPause>,
 }
 
 impl Http {
@@ -315,10 +332,37 @@ impl Http {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpPause {
+    pub open: Option<ValueOrArray<PauseValue>>,
+    pub request_header: Option<ValueOrArray<PauseValue>>,
+    pub request_body: Option<ValueOrArray<PauseValue>>,
+    pub response_header: Option<ValueOrArray<PauseValue>>,
+    pub response_body: Option<ValueOrArray<PauseValue>>,
+}
+
+impl Merge for HttpPause {
+    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
+        let Some(first) = first else { return second };
+        let Some(second) = second else {
+            return Some(first);
+        };
+
+        Some(HttpPause {
+            open: ValueOrArray::merge(first.open, second.open),
+            request_header: ValueOrArray::merge(first.request_header, second.request_header),
+            request_body: ValueOrArray::merge(first.request_body, second.request_body),
+            response_header: ValueOrArray::merge(first.response_header, second.response_header),
+            response_body: ValueOrArray::merge(first.response_body, second.response_body),
+        })
+    }
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Http1 {
     #[serde(flatten, default)]
     pub common: Http,
+    pub pause: Pause<Http1Pause>,
 }
 
 impl Http1 {
@@ -328,14 +372,41 @@ impl Http1 {
         };
         Self {
             common: self.common.merge(Some(default.common)),
+            pause: Pause::merge(self.pause, default.pause),
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Http1Pause {
+    pub open: Option<ValueOrArray<PauseValue>>,
+    pub request_header: Option<ValueOrArray<PauseValue>>,
+    pub request_body: Option<ValueOrArray<PauseValue>>,
+    pub response_header: Option<ValueOrArray<PauseValue>>,
+    pub response_body: Option<ValueOrArray<PauseValue>>,
+}
+
+impl Merge for Http1Pause {
+    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
+        let Some(first) = first else { return second };
+        let Some(second) = second else {
+            return Some(first);
+        };
+
+        Some(Http1Pause {
+            open: ValueOrArray::merge(first.open, second.open),
+            request_header: ValueOrArray::merge(first.request_header, second.request_header),
+            request_body: ValueOrArray::merge(first.request_body, second.request_body),
+            response_header: ValueOrArray::merge(first.response_header, second.response_header),
+            response_body: ValueOrArray::merge(first.response_body, second.response_body),
+        })
     }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Http2 {
     #[serde(flatten)]
-    common: Http,
+    pub common: Http,
 }
 
 impl Http2 {
@@ -352,7 +423,7 @@ impl Http2 {
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Http3 {
     #[serde(flatten)]
-    common: Http,
+    pub common: Http,
 }
 
 impl Http3 {
@@ -373,7 +444,7 @@ pub struct Tls {
     pub body: Option<Value>,
     pub version: Option<Value>,
     #[serde(default)]
-    pub pause: Vec<Pause>,
+    pub pause: Pause<TlsPause>,
 }
 
 impl Tls {
@@ -391,13 +462,35 @@ impl Tls {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TlsPause {
+    pub handshake: Option<ValueOrArray<PauseValue>>,
+    pub first_read: Option<ValueOrArray<PauseValue>>,
+    pub first_write: Option<ValueOrArray<PauseValue>>,
+}
+
+impl Merge for TlsPause {
+    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
+        let Some(first) = first else { return second };
+        let Some(second) = second else {
+            return Some(first);
+        };
+
+        Some(TlsPause {
+            handshake: ValueOrArray::merge(first.handshake, second.handshake),
+            first_read: ValueOrArray::merge(first.first_read, second.first_read),
+            first_write: ValueOrArray::merge(first.first_write, second.first_write),
+        })
+    }
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Tcp {
     pub host: Option<Value>,
     pub port: Option<Value>,
     pub body: Option<Value>,
     #[serde(default)]
-    pub pause: Vec<Pause>,
+    pub pause: Pause<TcpPause>,
 }
 
 impl Tcp {
@@ -414,6 +507,28 @@ impl Tcp {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TcpPause {
+    pub handshake: Option<ValueOrArray<PauseValue>>,
+    pub first_read: Option<ValueOrArray<PauseValue>>,
+    pub first_write: Option<ValueOrArray<PauseValue>>,
+}
+
+impl Merge for TcpPause {
+    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
+        let Some(first) = first else { return second };
+        let Some(second) = second else {
+            return Some(first);
+        };
+
+        Some(TcpPause {
+            handshake: ValueOrArray::merge(first.handshake, second.handshake),
+            first_read: ValueOrArray::merge(first.first_read, second.first_read),
+            first_write: ValueOrArray::merge(first.first_write, second.first_write),
+        })
+    }
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Quic {
     pub host: Option<Value>,
@@ -421,7 +536,7 @@ pub struct Quic {
     pub body: Option<Value>,
     pub tls_version: Option<Value>,
     #[serde(default)]
-    pub pause: Vec<Pause>,
+    pub pause: Pause<QuicPause>,
 }
 
 impl Quic {
@@ -439,13 +554,32 @@ impl Quic {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuicPause {
+    pub handshake: Option<ValueOrArray<PauseValue>>,
+}
+
+impl Merge for QuicPause {
+    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
+        let Some(first) = first else { return second };
+        let Some(second) = second else {
+            return Some(first);
+        };
+
+        Some(QuicPause {
+            handshake: ValueOrArray::merge(first.handshake, second.handshake),
+        })
+    }
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Udp {
     pub host: Option<Value>,
     pub port: Option<Value>,
+    pub source_port: Option<Value>,
     pub body: Option<Value>,
     #[serde(default)]
-    pub pause: Vec<Pause>,
+    pub pause: Pause<UdpPause>,
 }
 
 impl Udp {
@@ -456,29 +590,119 @@ impl Udp {
         Self {
             host: Value::merge(self.host, default.host),
             port: Value::merge(self.port, default.port),
+            source_port: Value::merge(self.source_port, default.source_port),
             body: Value::merge(self.body, default.body),
             pause: Pause::merge(self.pause, default.pause),
         }
     }
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct Pause {
-    pub after: Option<Value>,
-    pub duration: Option<Value>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UdpPause {
+    pub first_read: Option<ValueOrArray<PauseValue>>,
+    pub first_write: Option<ValueOrArray<PauseValue>>,
 }
-impl Pause {
+
+impl Merge for UdpPause {
+    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
+        let Some(first) = first else { return second };
+        let Some(second) = second else {
+            return Some(first);
+        };
+
+        Some(UdpPause {
+            first_read: ValueOrArray::merge(first.first_read, second.first_read),
+            first_write: ValueOrArray::merge(first.first_write, second.first_write),
+        })
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Pause<T> {
+    pub before: Option<T>,
+    pub after: Option<T>,
+}
+
+impl<T: Clone> Clone for Pause<T> {
+    fn clone(&self) -> Self {
+        Pause {
+            before: self.before,
+            after: self.after,
+        }
+    }
+}
+impl<T: Clone> Default for Pause<T> {
+    fn default() -> Self {
+        Pause {
+            before: None,
+            after: None,
+        }
+    }
+}
+
+impl<T: Merge> Pause<T> {
     /// Merge two groups of pauses, with first groups taking presedence over second. If the same
     /// after tag is found in both groups, all entries with that after tag second are ignored.
     /// Otherwise, they are appended.
-    fn merge(mut first: Vec<Pause>, second: Vec<Pause>) -> Vec<Pause> {
-        for pause in second {
-            // Only add pauses whose after doesn't match an existing entry.
-            if first.iter().find(|p| p.after == pause.after).is_none() {
-                first.push(pause);
-            }
-        }
+    fn merge(mut first: Pause<T>, second: Pause<T>) -> Pause<T> {
+        first.before = T::merge(first.before, second.before);
+        first.after = T::merge(first.after, second.after);
         first
+    }
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct PauseValue {
+    pub duration: Option<Value>,
+    pub offset_bytes: Option<Value>,
+}
+
+impl Merge for PauseValue {
+    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
+        let Some(first) = first else { return second };
+        let Some(second) = second else {
+            return Some(first);
+        };
+
+        Some(PauseValue {
+            duration: Value::merge(first.duration, second.duration),
+            offset_bytes: Value::merge(first.offset_bytes, second.offset_bytes),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ValueOrArray<T> {
+    Value(T),
+    Array(Vec<T>),
+}
+
+impl<T> Default for ValueOrArray<T> {
+    fn default() -> Self {
+        Self::Array(Vec::new())
+    }
+}
+
+impl<T: Merge> Merge for ValueOrArray<T> {
+    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
+        // Only merge single values.
+        match (first, second) {
+            (Some(Self::Value(first)), Some(Self::Value(second))) => Some(Self::Value(
+                T::merge(Some(first), Some(second))
+                    .expect("merging two set values should return a set value"),
+            )),
+            (Some(first), _) => Some(first),
+            (_, second) => second,
+        }
+    }
+}
+
+impl<T> From<ValueOrArray<T>> for Vec<T> {
+    fn from(value: ValueOrArray<T>) -> Self {
+        match value {
+            ValueOrArray::Value(val) => vec![val],
+            ValueOrArray::Array(vec) => vec,
+        }
     }
 }
 
