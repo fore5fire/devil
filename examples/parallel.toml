@@ -1,3 +1,5 @@
+courier.version = "0.1"
+
 # Parallel requests
 [1a.http]
 group = "1"

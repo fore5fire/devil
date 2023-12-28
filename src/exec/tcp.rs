@@ -181,10 +181,16 @@ impl Runner for TcpRunner {
                 body: reads,
                 time_to_first_byte: self
                     .first_read
-                    .map(|first_read| chrono::Duration::from_std(first_read - self.start).unwrap()),
+                    .map(|first_read| first_read - self.start)
+                    .map(Duration::from_std)
+                    .transpose()
+                    .unwrap(),
                 time_to_last_byte: self
                     .last_read
-                    .map(|last_read| chrono::Duration::from_std(last_read - self.start).unwrap()),
+                    .map(|last_read| last_read - self.start)
+                    .map(Duration::from_std)
+                    .transpose()
+                    .unwrap(),
             });
         }
         self.out.duration =

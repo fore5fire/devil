@@ -1,3 +1,5 @@
+courier.version = "0.1"
+
 # Simple HTTPS GET
 [https_get.http]
 url = "https://example.com/"
