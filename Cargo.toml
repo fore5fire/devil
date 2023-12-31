@@ -18,9 +18,9 @@ cel-interpreter = "0.5.0"
 frunk = { version = "0.4.2", features = ["serde"] }
 frunk_core = "0.4.2"
 serde_json = { version = "1.0.108", features = ["indexmap", "arbitrary_precision", "preserve_order", "unbounded_depth"] }
-rustls = "0.21.8"
-tokio-rustls = "0.24.1"
-webpki-roots = "=0.26.0-alpha.1"
+rustls = "0.22.1"
+tokio-rustls = "0.25.0"
+webpki-roots = "=0.26.0"
 clap = { version = "4.4.8", features = ["derive"] }
 chrono = { version = "0.4.31" }
 url = { version = "2.4.1", features = ["serde"] }
@@ -29,5 +29,4 @@ base64 = "0.21.5"
 itertools = "0.12.0"
 httparse = "1.8.0"
 async-trait = "0.1.74"
-scopeguard = "1.2.0"
 form_urlencoded = "1.2.1"

@@ -4,7 +4,8 @@ use std::{pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::Duration;
-use rustls::OwnedTrustAnchor;
+use rustls::pki_types::ServerName;
+use rustls::RootCertStore;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_rustls::client::TlsStream;
@@ -12,7 +13,8 @@ use tokio_rustls::client::TlsStream;
 use super::runner::Runner;
 use super::tee::Tee;
 use crate::{
-    Output, TlsError, TlsOutput, TlsPlanOutput, TlsRequestOutput, TlsResponse, TlsVersion,
+    Output, PauseOutput, PauseValueOutput, TlsError, TlsOutput, TlsPlanOutput, TlsRequestOutput,
+    TlsResponse, TlsVersion, WithPlannedCapacity,
 };
 
 #[derive(Debug)]
@@ -47,7 +49,7 @@ impl AsyncWrite for TlsRunner {
         let poll = Pin::new(&mut self.stream).poll_write(cx, buf);
         if let Poll::Ready(Ok(_)) = &poll {
             if self.first_write.is_none() {
-                for p in self.out.plan.pause.after.first_write {
+                for p in &self.out.plan.pause.after.first_write {
                     println!("pausing after first write for {:?}", p.duration);
                     std::thread::sleep(p.duration.to_std().unwrap());
                 }
@@ -82,32 +84,39 @@ impl TlsRunner {
         stream: Box<dyn Runner>,
         plan: TlsPlanOutput,
     ) -> crate::Result<TlsRunner> {
-        let mut root_cert_store = rustls::RootCertStore::empty();
-        root_cert_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().map(|ta| {
-            OwnedTrustAnchor::from_subject_spki_name_constraints(
-                ta.subject.to_vec(),
-                ta.subject_public_key_info.to_vec(),
-                ta.name_constraints.clone().map(|nc| nc.to_vec()),
-            )
-        }));
+        let root_cert_store = RootCertStore {
+            roots: webpki_roots::TLS_SERVER_ROOTS.into(),
+        };
         let tls_config = rustls::ClientConfig::builder()
-            .with_safe_defaults()
             .with_root_certificates(root_cert_store)
             .with_no_client_auth();
         let connector = tokio_rustls::TlsConnector::from(Arc::new(tls_config));
-        let domain = rustls::ServerName::try_from(plan.host.as_str())
-            .map_err(|e| crate::Error(e.to_string()))?;
+        // FIXME: Why does rustls ClientConnector require a static lifetime for DNS names?
+        let leaked_name = Box::leak(Box::new(plan.host.clone()));
+        let domain =
+            ServerName::try_from(leaked_name.as_str()).map_err(|e| crate::Error(e.to_string()))?;
+
+        let mut pause = PauseOutput::with_planned_capacity(&plan.pause);
 
         // Perform the TLS handshake.
+        for p in &plan.pause.before.handshake {
+            println!("pausing before tls handshake for {:?}", p.duration);
+            let before = Instant::now();
+            tokio::time::sleep(p.duration.to_std().unwrap()).await;
+            pause.before.handshake.push(PauseValueOutput {
+                duration: Duration::from_std(before.elapsed()).unwrap(),
+                offset_bytes: p.offset_bytes,
+            })
+        }
         let start = Instant::now();
         let connection = connector
             .connect(domain, stream)
             .await
             .map_err(|e| crate::Error(e.to_string()))?;
         let handshake_duration = start.elapsed();
-        if let Some(p) = plan.pause.iter().find(|p| p.after == "open") {
-            println!("pausing after {} for {:?}", p.after, p.duration);
-            std::thread::sleep(p.duration.to_std().unwrap());
+        for p in &plan.pause.after.handshake {
+            println!("pausing after tls handshake for {:?}", p.duration);
+            tokio::time::sleep(p.duration.to_std().unwrap()).await;
         }
         Ok(TlsRunner {
             stream: Tee::new(connection),
@@ -117,7 +126,6 @@ impl TlsRunner {
                     host: plan.host.clone(),
                     port: plan.port,
                     body: Vec::new(),
-                    pause: Vec::new(),
                     time_to_first_byte: None,
                     time_to_last_byte: None,
                 }),
@@ -127,6 +135,7 @@ impl TlsRunner {
                 version: None,
                 duration: Duration::zero(),
                 handshake_duration: Some(Duration::from_std(handshake_duration).unwrap()),
+                pause,
             },
             error: None,
             end_time: None,

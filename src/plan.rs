@@ -118,8 +118,8 @@ pub struct Pause<T> {
 impl<T: Clone> Clone for Pause<T> {
     fn clone(&self) -> Self {
         Pause {
-            before: self.before,
-            after: self.after,
+            before: self.before.clone(),
+            after: self.after.clone(),
         }
     }
 }

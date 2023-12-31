@@ -8,7 +8,10 @@ use chrono::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{lookup_host, TcpStream};
 
-use crate::{Error, Output, TcpError, TcpOutput, TcpPlanOutput, TcpRequestOutput, TcpResponse};
+use crate::{
+    Error, Output, PauseOutput, TcpError, TcpOutput, TcpPlanOutput, TcpRequestOutput, TcpResponse,
+    WithPlannedCapacity,
+};
 
 use super::runner::Runner;
 use super::tee::Tee;
@@ -80,14 +83,20 @@ impl<'a> TcpRunner {
     pub(super) async fn new(plan: TcpPlanOutput) -> crate::Result<TcpRunner> {
         //let addr = ip_for_host(&host).await?;
         let addr = format!("{}:{}", plan.host, plan.port);
+        let mut pause = PauseOutput::with_planned_capacity(&plan.pause);
         let start = Instant::now();
         let stream = TcpStream::connect(addr)
             .await
             .map_err(|e| Error(e.to_string()))?;
         let handshake_duration = start.elapsed();
-        if let Some(p) = plan.pause.iter().find(|p| p.after == "open") {
-            println!("pausing after {} for {:?}", p.after, p.duration);
-            std::thread::sleep(p.duration.to_std().unwrap());
+        for p in &plan.pause.after.handshake {
+            println!("pausing after tcp handshake for {:?}", p.duration);
+            let before = Instant::now();
+            tokio::time::sleep(p.duration.to_std().unwrap()).await;
+            pause.after.handshake.push(crate::PauseValueOutput {
+                duration: Duration::from_std(before.elapsed()).unwrap(),
+                offset_bytes: p.offset_bytes,
+            });
         }
         Ok(TcpRunner {
             out: TcpOutput {
@@ -95,7 +104,6 @@ impl<'a> TcpRunner {
                     host: plan.host.clone(),
                     port: plan.port,
                     body: Vec::new(),
-                    pause: Vec::new(),
                     time_to_first_byte: None,
                     time_to_last_byte: None,
                 }),
@@ -104,6 +112,7 @@ impl<'a> TcpRunner {
                 error: None,
                 duration: Duration::zero(),
                 handshake_duration: Some(Duration::from_std(handshake_duration).unwrap()),
+                pause,
             },
             stream: Tee::new(stream),
             start,
@@ -140,16 +149,6 @@ impl Runner for TcpRunner {
                 message: e.to_string(),
             });
             return;
-        }
-        if let Some(p) = self
-            .out
-            .plan
-            .pause
-            .iter()
-            .find(|p| p.after == "request_body")
-        {
-            println!("pausing after {} for {:?}", p.after, p.duration);
-            std::thread::sleep(p.duration.to_std().unwrap());
         }
         let mut response = Vec::new();
         if let Err(e) = self.stream.read_to_end(&mut response).await {

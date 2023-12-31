@@ -172,7 +172,7 @@ impl From<HttpPlanOutput> for Value {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct HttpPauseOutput {
     pub open: Vec<PauseValueOutput>,
     pub request_header: Vec<PauseValueOutput>,
@@ -192,6 +192,18 @@ impl From<HttpPauseOutput> for Value {
                 ("response_body".into(), value.response_body.into()),
             ])),
         })
+    }
+}
+
+impl WithPlannedCapacity for HttpPauseOutput {
+    fn with_planned_capacity(planned: &Self) -> Self {
+        Self {
+            open: Vec::with_capacity(planned.open.len()),
+            request_header: Vec::with_capacity(planned.request_header.len()),
+            request_body: Vec::with_capacity(planned.request_body.len()),
+            response_header: Vec::with_capacity(planned.response_header.len()),
+            response_body: Vec::with_capacity(planned.response_body.len()),
+        }
     }
 }
 
@@ -342,7 +354,7 @@ impl From<Http1PlanOutput> for Value {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Http1PauseOutput {
     pub open: Vec<PauseValueOutput>,
     pub request_header: Vec<PauseValueOutput>,
@@ -362,6 +374,18 @@ impl From<Http1PauseOutput> for Value {
                 ("response_body".into(), value.response_body.into()),
             ])),
         })
+    }
+}
+
+impl WithPlannedCapacity for Http1PauseOutput {
+    fn with_planned_capacity(planned: &Self) -> Self {
+        Self {
+            open: Vec::with_capacity(planned.open.len()),
+            request_header: Vec::with_capacity(planned.request_header.len()),
+            request_body: Vec::with_capacity(planned.request_body.len()),
+            response_header: Vec::with_capacity(planned.response_header.len()),
+            response_body: Vec::with_capacity(planned.response_body.len()),
+        }
     }
 }
 
@@ -493,7 +517,7 @@ impl From<GraphQlOutput> for Value {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct GraphQlPauseOutput {}
 
 impl From<GraphQlPauseOutput> for Value {
@@ -501,6 +525,12 @@ impl From<GraphQlPauseOutput> for Value {
         Value::Map(Map {
             map: Rc::new(HashMap::from([])),
         })
+    }
+}
+
+impl WithPlannedCapacity for GraphQlPauseOutput {
+    fn with_planned_capacity(planned: &Self) -> Self {
+        Self {}
     }
 }
 
@@ -681,7 +711,7 @@ impl From<TlsOutput> for Value {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TlsPauseOutput {
     pub handshake: Vec<PauseValueOutput>,
     pub first_read: Vec<PauseValueOutput>,
@@ -697,6 +727,16 @@ impl From<TlsPauseOutput> for Value {
                 ("first_write".into(), value.first_write.into()),
             ])),
         })
+    }
+}
+
+impl WithPlannedCapacity for TlsPauseOutput {
+    fn with_planned_capacity(planned: &Self) -> Self {
+        Self {
+            handshake: Vec::with_capacity(planned.handshake.len()),
+            first_read: Vec::with_capacity(planned.first_read.len()),
+            first_write: Vec::with_capacity(planned.first_write.len()),
+        }
     }
 }
 
@@ -807,7 +847,7 @@ impl From<TcpOutput> for Value {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TcpPauseOutput {
     pub handshake: Vec<PauseValueOutput>,
     pub first_read: Vec<PauseValueOutput>,
@@ -823,6 +863,16 @@ impl From<TcpPauseOutput> for Value {
                 ("first_write".into(), value.first_write.into()),
             ])),
         })
+    }
+}
+
+impl WithPlannedCapacity for TcpPauseOutput {
+    fn with_planned_capacity(planned: &Self) -> Self {
+        Self {
+            handshake: Vec::with_capacity(planned.handshake.len()),
+            first_read: Vec::with_capacity(planned.first_read.len()),
+            first_write: Vec::with_capacity(planned.first_write.len()),
+        }
     }
 }
 
@@ -1024,6 +1074,24 @@ pub struct PauseOutput<T> {
     pub after: T,
 }
 
+impl<T: WithPlannedCapacity> WithPlannedCapacity for PauseOutput<T> {
+    fn with_planned_capacity(planned: &Self) -> Self {
+        Self {
+            before: T::with_planned_capacity(&planned.before),
+            after: T::with_planned_capacity(&planned.after),
+        }
+    }
+}
+
+impl<T: Default> Default for PauseOutput<T> {
+    fn default() -> Self {
+        PauseOutput {
+            before: T::default(),
+            after: T::default(),
+        }
+    }
+}
+
 impl<T: Into<Value>> From<PauseOutput<T>> for Value {
     fn from(value: PauseOutput<T>) -> Self {
         Self::Map(Map {
@@ -1060,4 +1128,8 @@ fn kv_pair_to_map(pair: (Vec<u8>, Vec<u8>)) -> Value {
             ("value".into(), pair.1.into()),
         ])),
     })
+}
+
+pub trait WithPlannedCapacity {
+    fn with_planned_capacity(planned: &Self) -> Self;
 }

@@ -14,6 +14,8 @@ use super::runner::Runner;
 use crate::Http1Error;
 use crate::Http1PlanOutput;
 use crate::Http1RequestOutput;
+use crate::PauseOutput;
+use crate::WithPlannedCapacity;
 use crate::{Error, Http1Output, Http1Response, Output};
 
 #[derive(Debug)]
@@ -140,17 +142,14 @@ impl Http1Runner {
     pub(super) async fn new(stream: Box<dyn Runner>, plan: Http1PlanOutput) -> crate::Result<Self> {
         let start_time = Instant::now();
 
-        if let Some(p) = plan.pause.iter().find(|p| p.after == "open") {
-            println!("pausing after {} for {:?}", p.after, p.duration);
-            tokio::time::sleep(p.duration.to_std().unwrap()).await;
-        }
         Ok(Self {
             out: Http1Output {
-                plan,
                 request: None,
                 response: None,
                 error: None,
                 duration: Duration::zero(),
+                pause: PauseOutput::with_planned_capacity(&plan.pause),
+                plan,
             },
             stream,
             start_time,
@@ -290,19 +289,60 @@ impl Runner for Http1Runner {
         }
         let mut header = self.compute_header();
 
+        for p in &self.out.plan.pause.before.open {
+            println!("pausing before http open for {:?}", p.duration);
+            let start = Instant::now();
+            tokio::time::sleep(p.duration.to_std().unwrap()).await;
+            self.out.pause.before.open.push(crate::PauseValueOutput {
+                duration: Duration::from_std(start.elapsed()).unwrap(),
+                offset_bytes: p.offset_bytes,
+            });
+        }
+
         self.stream
             .start(Some(header.len() + size_hint.unwrap_or(0)))
             .await?;
+
+        for p in &self.out.plan.pause.after.open {
+            println!("pausing after http open for {:?}", p.duration);
+            let start = Instant::now();
+            tokio::time::sleep(p.duration.to_std().unwrap()).await;
+            self.out.pause.after.open.push(crate::PauseValueOutput {
+                duration: Duration::from_std(start.elapsed()).unwrap(),
+                offset_bytes: p.offset_bytes,
+            });
+        }
+        for p in &self.out.plan.pause.before.request_header {
+            println!("pausing before http request headers for {:?}", p.duration);
+            let start = Instant::now();
+            tokio::time::sleep(p.duration.to_std().unwrap()).await;
+            self.out
+                .pause
+                .before
+                .request_header
+                .push(crate::PauseValueOutput {
+                    duration: Duration::from_std(start.elapsed()).unwrap(),
+                    offset_bytes: p.offset_bytes,
+                });
+        }
 
         self.req_header_start_time = Some(Instant::now());
         // Write directly to the transport instead of self so we don't record the header as the
         // body.
         self.stream.write_all_buf(&mut header).await?;
 
-        if let Some(p) = self.out.plan.pause.iter().find(|p| p.after == "headers") {
-            self.stream.flush().await?;
-            println!("pausing after {} for {:?}", p.after, p.duration);
+        for p in &self.out.plan.pause.after.request_header {
+            println!("pausing after http request headers for {:?}", p.duration);
+            let start = Instant::now();
             tokio::time::sleep(p.duration.to_std().unwrap()).await;
+            self.out
+                .pause
+                .after
+                .request_header
+                .push(crate::PauseValueOutput {
+                    duration: Duration::from_std(start.elapsed()).unwrap(),
+                    offset_bytes: p.offset_bytes,
+                });
         }
 
         self.out.request = Some(Http1RequestOutput {
@@ -310,7 +350,6 @@ impl Runner for Http1Runner {
             headers: self.out.plan.headers.clone(),
             method: self.out.plan.method.clone(),
             version_string: self.out.plan.version_string.clone(),
-            pause: Vec::new(),
             body: Vec::new(),
             duration: Duration::zero(),
             body_duration: None,
@@ -347,15 +386,18 @@ impl Runner for Http1Runner {
             });
             return;
         }
-        if let Some(p) = self
-            .out
-            .plan
-            .pause
-            .iter()
-            .find(|p| p.after == "request_body")
-        {
-            println!("pausing after {} for {:?}", p.after, p.duration);
+        for p in &self.out.plan.pause.after.request_body {
+            println!("pausing after http request headers for {:?}", p.duration);
+            let start = Instant::now();
             tokio::time::sleep(p.duration.to_std().unwrap()).await;
+            self.out
+                .pause
+                .after
+                .request_body
+                .push(crate::PauseValueOutput {
+                    duration: Duration::from_std(start.elapsed()).unwrap(),
+                    offset_bytes: p.offset_bytes,
+                });
         }
         self.resp_start_time = Some(Instant::now());
         let mut response = Vec::new();
