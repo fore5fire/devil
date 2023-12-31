@@ -6,7 +6,9 @@ use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use super::runner::Runner;
-use crate::{GraphQlError, GraphQlOutput, GraphQlPlanOutput, Output};
+use crate::{
+    GraphQlError, GraphQlOutput, GraphQlPlanOutput, Output, PauseOutput, WithPlannedCapacity,
+};
 
 #[derive(Debug)]
 pub(super) struct GraphQlRunner {
@@ -26,17 +28,14 @@ impl GraphQlRunner {
     ) -> crate::Result<Self> {
         let start_time = Instant::now();
 
-        if let Some(p) = plan.pause.iter().find(|p| p.after == "open") {
-            println!("pausing after {} for {:?}", p.after, p.duration);
-            tokio::time::sleep(p.duration.to_std().unwrap()).await;
-        }
         Ok(Self {
             out: GraphQlOutput {
-                plan,
                 request: None,
                 response: None,
                 error: None,
                 duration: Duration::zero(),
+                pause: PauseOutput::with_planned_capacity(&plan.pause),
+                plan,
             },
             transport,
             start_time,
@@ -124,16 +123,6 @@ impl Runner for GraphQlRunner {
                 message: e.to_string(),
             });
             return;
-        }
-        if let Some(p) = self
-            .out
-            .plan
-            .pause
-            .iter()
-            .find(|p| p.after == "request_body")
-        {
-            println!("pausing after {} for {:?}", p.after, p.duration);
-            tokio::time::sleep(p.duration.to_std().unwrap()).await;
         }
         self.resp_start_time = Some(Instant::now());
         if let Err(e) = self.transport.read_to_end(&mut self.resp).await {

@@ -8,8 +8,8 @@ use super::runner::Runner;
 use super::tcp::TcpRunner;
 use super::tls::TlsRunner;
 use crate::{
-    Error, HttpOutput, HttpPlanOutput, HttpRequestOutput, HttpResponse, Output, TcpPlanOutput,
-    TlsPlanOutput,
+    Error, HttpOutput, HttpPauseOutput, HttpPlanOutput, HttpRequestOutput, HttpResponse, Output,
+    PauseOutput, TcpPlanOutput, TlsPlanOutput,
 };
 
 #[derive(Debug)]
@@ -73,7 +73,7 @@ impl HttpRunner {
                     .port_or_known_default()
                     .ok_or_else(|| Error("url is missing port".to_owned()))?,
                 body: Vec::new(),
-                pause: Vec::new(),
+                pause: PauseOutput::default(),
             })
             .await?,
         );
@@ -95,7 +95,7 @@ impl HttpRunner {
                             .port_or_known_default()
                             .ok_or_else(|| Error("url is missing port".to_owned()))?,
                         body: Vec::new(),
-                        pause: Vec::new(),
+                        pause: PauseOutput::default(),
                     },
                 )
                 .await?,
@@ -111,7 +111,22 @@ impl HttpRunner {
                     version_string: Some("HTTP/1.1".into()),
                     headers: plan.headers,
                     body: plan.body,
-                    pause: plan.pause,
+                    pause: PauseOutput {
+                        before: crate::Http1PauseOutput {
+                            open: plan.pause.before.open,
+                            request_header: plan.pause.before.request_header,
+                            request_body: plan.pause.before.request_body,
+                            response_header: plan.pause.before.response_header,
+                            response_body: plan.pause.before.response_body,
+                        },
+                        after: crate::Http1PauseOutput {
+                            open: plan.pause.after.open,
+                            request_header: plan.pause.after.request_header,
+                            request_body: plan.pause.after.request_body,
+                            response_header: plan.pause.after.response_header,
+                            response_body: plan.pause.after.response_body,
+                        },
+                    },
                 },
             )
             .await?,
@@ -148,7 +163,22 @@ impl Runner for HttpRunner {
                         method: out.plan.method,
                         headers: out.plan.headers,
                         body: out.plan.body,
-                        pause: out.plan.pause,
+                        pause: PauseOutput {
+                            before: HttpPauseOutput {
+                                open: out.plan.pause.before.open,
+                                request_header: out.plan.pause.before.request_header,
+                                request_body: out.plan.pause.before.request_body,
+                                response_header: out.plan.pause.before.response_header,
+                                response_body: out.plan.pause.before.response_body,
+                            },
+                            after: HttpPauseOutput {
+                                open: out.plan.pause.after.open,
+                                request_header: out.plan.pause.after.request_header,
+                                request_body: out.plan.pause.after.request_body,
+                                response_header: out.plan.pause.after.response_header,
+                                response_body: out.plan.pause.after.response_body,
+                            },
+                        },
                     },
                     request: out.request.map(|req| HttpRequestOutput {
                         url: req.url,
@@ -174,6 +204,22 @@ impl Runner for HttpRunner {
                     }),
                     protocol: Some("HTTP/1.1".to_string()),
                     duration: out.duration,
+                    pause: PauseOutput {
+                        before: HttpPauseOutput {
+                            open: out.pause.before.open,
+                            request_header: out.pause.before.request_header,
+                            request_body: out.pause.before.request_body,
+                            response_header: out.pause.before.response_header,
+                            response_body: out.pause.before.response_body,
+                        },
+                        after: HttpPauseOutput {
+                            open: out.pause.after.open,
+                            request_header: out.pause.after.request_header,
+                            request_body: out.pause.after.request_body,
+                            response_header: out.pause.after.response_header,
+                            response_body: out.pause.after.response_body,
+                        },
+                    },
                 }),
                 _ => unreachable!(),
             },
