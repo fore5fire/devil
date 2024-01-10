@@ -105,13 +105,15 @@ binaries, which is a very dangerous feature if users are running plans from the
 internet.
 
 Instead, courier aims to be easily composable with other tools. If you'd like
-to extend the functionality of courier, you should write a tool that imports it
-as a rust library or runs it as a cli binary.
+to extend the functionality of courier, you can write a tool that imports it
+as a rust library, build a server and provide importable step definitions for
+various features, or simply write a wrapper that execs the cli binary.
 
 That said, plugging courier functionality into other tools is great! Plugins
 for popular development and security research tools like VS Code, Vim,
-Burpsuite, and Caido are on the roadmap. If you'd like to see others then
-open an issue to discuss any functionality courier could add to support you.
+Burpsuite, and Caido are on the roadmap. If you're interested in building
+plugins for other tools, open an issue to discuss any functionality courier
+could add to support you.
 
 ## Roadmap
 
