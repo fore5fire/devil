@@ -5,9 +5,11 @@ use crate::{
 use base64::Engine;
 use cel_interpreter::extractors::This;
 use cel_interpreter::{Context, FunctionContext, Program, ResolveResult};
-use chrono::Duration;
+use chrono::{Duration, NaiveDateTime, TimeZone};
 use go_parse_duration::parse_duration;
 use indexmap::IndexMap;
+use std::convert::Infallible;
+use std::fmt::Display;
 use std::sync::OnceLock;
 use std::{collections::HashMap, ops::Deref, rc::Rc, sync::Arc};
 use url::Url;
@@ -677,6 +679,23 @@ impl TryFrom<PlanData> for u16 {
     }
 }
 
+impl TryFrom<PlanData> for u64 {
+    type Error = Error;
+    fn try_from(value: PlanData) -> std::result::Result<Self, Self::Error> {
+        match value.0 {
+            cel_interpreter::Value::UInt(x) => {
+                Ok(u64::try_from(x).map_err(|e| Error(e.to_string()))?)
+            }
+            cel_interpreter::Value::Int(x) => {
+                Ok(u64::try_from(x).map_err(|e| Error(e.to_string()))?)
+            }
+            _ => Err(Error(
+                "invalid type for 64 bit unsigned int value".to_owned(),
+            )),
+        }
+    }
+}
+
 impl TryFrom<PlanData> for i64 {
     type Error = Error;
     fn try_from(value: PlanData) -> std::result::Result<Self, Self::Error> {
@@ -815,6 +834,101 @@ impl From<cel_interpreter::Value> for PlanData {
 impl From<PlanData> for cel_interpreter::Value {
     fn from(value: PlanData) -> Self {
         value.0
+    }
+}
+
+impl From<String> for PlanData {
+    fn from(value: String) -> Self {
+        PlanData(value.into())
+    }
+}
+
+impl TryFrom<toml::value::Datetime> for PlanData {
+    type Error = Error;
+    fn try_from(value: toml::value::Datetime) -> std::result::Result<Self, Self::Error> {
+        use chrono::FixedOffset;
+        use chrono::Offset;
+
+        let date = value
+            .date
+            .map(|date| {
+                chrono::NaiveDate::from_ymd_opt(
+                    date.year as i32,
+                    date.month as u32,
+                    date.day as u32,
+                )
+                .ok_or_else(|| Error("out of bounds date".to_owned()))
+            })
+            .transpose()?
+            .unwrap_or_default();
+
+        let time = value
+            .time
+            .map(|time| {
+                chrono::NaiveTime::from_hms_nano_opt(
+                    time.hour as u32,
+                    time.minute as u32,
+                    time.second as u32,
+                    time.nanosecond,
+                )
+                .ok_or_else(|| Error("out of bounds time".to_owned()))
+            })
+            .transpose()?
+            .unwrap_or_default();
+
+        let datetime = NaiveDateTime::new(date, time);
+
+        let offset = match value.offset {
+            Some(toml::value::Offset::Custom { minutes }) => {
+                FixedOffset::east_opt(minutes as i32 * 60)
+                    .ok_or_else(|| Error("invalid offset".to_owned()))?
+            }
+            Some(toml::value::Offset::Z) => chrono::Utc.fix(),
+            None => chrono::Local
+                .offset_from_local_datetime(&datetime)
+                .single()
+                .ok_or_else(|| Error("ambiguous datetime".to_owned()))?,
+        };
+
+        Ok(PlanData(
+            offset
+                .from_local_datetime(&datetime)
+                .single()
+                .ok_or_else(|| Error("ambiguous datetime".to_owned()))?
+                .into(),
+        ))
+    }
+}
+
+impl TryFrom<toml::Value> for PlanData {
+    type Error = Error;
+    fn try_from(value: toml::Value) -> std::result::Result<Self, Self::Error> {
+        match value {
+            toml::Value::String(s) => Ok(Self(cel_interpreter::Value::String(s.into()))),
+            toml::Value::Integer(s) => Ok(Self(cel_interpreter::Value::Int(s.into()))),
+            toml::Value::Float(s) => Ok(Self(cel_interpreter::Value::Float(s.into()))),
+            toml::Value::Boolean(s) => Ok(Self(cel_interpreter::Value::Bool(s.into()))),
+            toml::Value::Datetime(s) => Ok(Self(PlanData::try_from(s)?.0)),
+            toml::Value::Array(s) => Ok(Self(cel_interpreter::Value::List(Arc::new(
+                s.into_iter()
+                    .map(|x| Ok(PlanData::try_from(x)?.0))
+                    .collect::<Result<_>>()?,
+            )))),
+            toml::Value::Table(s) => Ok(Self(cel_interpreter::Value::Map(
+                cel_interpreter::objects::Map {
+                    map: Rc::new(
+                        s.into_iter()
+                            .map(|(k, v)| {
+                                Ok((
+                                    cel_interpreter::objects::Key::from(k),
+                                    PlanData::try_from(v)?.0,
+                                ))
+                            })
+                            .collect::<Result<_>>()?,
+                    ),
+                },
+            ))),
+        }
     }
 }
 
@@ -1015,9 +1129,183 @@ impl TryFrom<bindings::UdpPause> for UdpPause {
 
 //#[derive(Debug, Default, Clone)]
 //pub struct IPRequest {}
+#[derive(Debug, Clone)]
+pub struct Step {
+    pub protocols: StepProtocols,
+    pub run: Run,
+}
+
+impl Step {
+    pub fn from_bindings(binding: bindings::Step) -> Result<Step> {
+        let protocols = match binding.protocols {
+            bindings::StepProtocols::GraphQl { graphql, http } => StepProtocols::GraphQlHttp {
+                graphql: graphql.try_into()?,
+                http: http.unwrap_or_default().try_into()?,
+            },
+            // If HTTP1, TLS, or TCP is specified we use HTTP1.
+            bindings::StepProtocols::GraphQlHttp1 {
+                graphql,
+                http1,
+                tls,
+                tcp,
+            } => StepProtocols::GraphQlHttp1 {
+                graphql: graphql.try_into()?,
+                http1: http1.unwrap_or_default().try_into()?,
+                tls: tls.map(TlsRequest::try_from).transpose()?,
+                tcp: tcp.unwrap_or_default().try_into()?,
+            },
+            bindings::StepProtocols::GraphQlHttp2 {
+                graphql,
+                http2,
+                tls,
+                tcp,
+            } => StepProtocols::GraphQlHttp2 {
+                graphql: graphql.try_into()?,
+                http2: http2.unwrap_or_default().try_into()?,
+                tls: tls.map(TlsRequest::try_from).transpose()?,
+                tcp: tcp.unwrap_or_default().try_into()?,
+            },
+            bindings::StepProtocols::GraphQlHttp3 {
+                graphql,
+                http3,
+                quic,
+                udp,
+            } => StepProtocols::GraphQlHttp3 {
+                graphql: graphql.try_into()?,
+                http3: http3.unwrap_or_default().try_into()?,
+                quic: quic.unwrap_or_default().try_into()?,
+                udp: udp.unwrap_or_default().try_into()?,
+            },
+            bindings::StepProtocols::Http { http } => StepProtocols::Http {
+                http: http.try_into()?,
+            },
+            bindings::StepProtocols::Http1 { http1, tls, tcp } => StepProtocols::Http1 {
+                http1: http1.try_into()?,
+                tls: tls.map(TlsRequest::try_from).transpose()?,
+                tcp: tcp.unwrap_or_default().try_into()?,
+            },
+            bindings::StepProtocols::Http2 { http2, tls, tcp } => StepProtocols::Http2 {
+                http2: http2.try_into()?,
+                tls: tls.map(TlsRequest::try_from).transpose()?,
+                tcp: tcp.unwrap_or_default().try_into()?,
+            },
+            bindings::StepProtocols::Http3 { http3, quic, udp } => StepProtocols::Http3 {
+                http3: http3.try_into()?,
+                quic: quic.unwrap_or_default().try_into()?,
+                udp: udp.unwrap_or_default().try_into()?,
+            },
+            bindings::StepProtocols::Tls { tls, tcp } => StepProtocols::Tls {
+                tls: tls.try_into()?,
+                tcp: tcp.unwrap_or_default().try_into()?,
+            },
+            bindings::StepProtocols::Dtls { tls, udp } => StepProtocols::Dtls {
+                tls: tls.try_into()?,
+                udp: udp.unwrap_or_default().try_into()?,
+            },
+            bindings::StepProtocols::Tcp { tcp } => StepProtocols::Tcp {
+                tcp: tcp.try_into()?,
+            },
+            bindings::StepProtocols::Quic { quic, udp } => StepProtocols::Quic {
+                quic: quic.try_into()?,
+                udp: udp.unwrap_or_default().try_into()?,
+            },
+            bindings::StepProtocols::Udp { udp } => StepProtocols::Udp {
+                udp: udp.try_into()?,
+            },
+        };
+
+        Ok(Step {
+            protocols,
+            run: binding
+                .run
+                .map(|run| {
+                    Ok::<_, Error>(Run {
+                        run_if: run
+                            .run_if
+                            .map(PlanValue::try_from)
+                            .transpose()?
+                            .unwrap_or(PlanValue::Literal(true)),
+                        run_while: run.run_while.map(PlanValue::try_from).transpose()?,
+                        run_for: run
+                            .run_for
+                            .map(|x| IterablePlanValue::try_from(x))
+                            .transpose()?,
+                        count: run
+                            .count
+                            .map(PlanValue::try_from)
+                            .transpose()?
+                            .unwrap_or(PlanValue::Literal(1)),
+                        parallel: run
+                            .parallel
+                            .map(PlanValue::try_from)
+                            .transpose()?
+                            .unwrap_or_default(),
+                    })
+                })
+                .transpose()?
+                .unwrap_or_default(),
+        })
+    }
+}
 
 #[derive(Debug, Clone)]
-pub enum Step {
+pub struct Run {
+    run_if: PlanValue<bool>,
+    run_while: Option<PlanValue<bool>>,
+    run_for: Option<IterablePlanValue>,
+    count: PlanValue<u64>,
+    parallel: PlanValue<bool>,
+}
+
+impl Default for Run {
+    fn default() -> Self {
+        Run {
+            run_if: PlanValue::Literal(true),
+            run_while: None,
+            run_for: None,
+            count: PlanValue::Literal(1),
+            parallel: PlanValue::Literal(false),
+        }
+    }
+}
+
+impl Evaluate<crate::RunOutput> for Run {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::RunOutput>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O>,
+    {
+        let out = crate::RunOutput {
+            run_if: self.run_if.evaluate(state)?,
+            run_while: self
+                .run_while
+                .clone()
+                .map(|x| x.evaluate(state))
+                .transpose()?,
+            run_for: self
+                .run_for
+                .clone()
+                .map(|x| x.evaluate(state))
+                .transpose()?,
+            count: self.count.evaluate(state)?,
+            parallel: self.parallel.evaluate(state)?,
+        };
+        // Only one of while or for may be used.
+        if out.run_while.is_some() && out.run_for.is_some() {
+            return Err(Error("run.while and run.for cannot both be set".to_owned()));
+        }
+        // While cannot be parallel.
+        if out.parallel && out.run_while.is_some() {
+            return Err(Error("run.while cannot be parallel".to_owned()));
+        }
+
+        Ok(out)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum StepProtocols {
     GraphQlHttp {
         graphql: GraphQlRequest,
         http: HttpRequest,
@@ -1078,86 +1366,7 @@ pub enum Step {
     },
 }
 
-impl Step {
-    pub fn from_bindings(binding: bindings::Step) -> Result<Step> {
-        match binding {
-            bindings::Step::GraphQl { graphql, http } => Ok(Step::GraphQlHttp {
-                graphql: graphql.try_into()?,
-                http: http.unwrap_or_default().try_into()?,
-            }),
-            // If HTTP1, TLS, or TCP is specified we use HTTP1.
-            bindings::Step::GraphQlHttp1 {
-                graphql,
-                http1,
-                tls,
-                tcp,
-            } => Ok(Step::GraphQlHttp1 {
-                graphql: graphql.try_into()?,
-                http1: http1.unwrap_or_default().try_into()?,
-                tls: tls.map(TlsRequest::try_from).transpose()?,
-                tcp: tcp.unwrap_or_default().try_into()?,
-            }),
-            bindings::Step::GraphQlHttp2 {
-                graphql,
-                http2,
-                tls,
-                tcp,
-            } => Ok(Step::GraphQlHttp2 {
-                graphql: graphql.try_into()?,
-                http2: http2.unwrap_or_default().try_into()?,
-                tls: tls.map(TlsRequest::try_from).transpose()?,
-                tcp: tcp.unwrap_or_default().try_into()?,
-            }),
-            bindings::Step::GraphQlHttp3 {
-                graphql,
-                http3,
-                quic,
-                udp,
-            } => Ok(Step::GraphQlHttp3 {
-                graphql: graphql.try_into()?,
-                http3: http3.unwrap_or_default().try_into()?,
-                quic: quic.unwrap_or_default().try_into()?,
-                udp: udp.unwrap_or_default().try_into()?,
-            }),
-            bindings::Step::Http { http } => Ok(Step::Http {
-                http: http.try_into()?,
-            }),
-            bindings::Step::Http1 { http1, tls, tcp } => Ok(Step::Http1 {
-                http1: http1.try_into()?,
-                tls: tls.map(TlsRequest::try_from).transpose()?,
-                tcp: tcp.unwrap_or_default().try_into()?,
-            }),
-            bindings::Step::Http2 { http2, tls, tcp } => Ok(Step::Http2 {
-                http2: http2.try_into()?,
-                tls: tls.map(TlsRequest::try_from).transpose()?,
-                tcp: tcp.unwrap_or_default().try_into()?,
-            }),
-            bindings::Step::Http3 { http3, quic, udp } => Ok(Step::Http3 {
-                http3: http3.try_into()?,
-                quic: quic.unwrap_or_default().try_into()?,
-                udp: udp.unwrap_or_default().try_into()?,
-            }),
-            bindings::Step::Tls { tls, tcp } => Ok(Step::Tls {
-                tls: tls.try_into()?,
-                tcp: tcp.unwrap_or_default().try_into()?,
-            }),
-            bindings::Step::Dtls { tls, udp } => Ok(Step::Dtls {
-                tls: tls.try_into()?,
-                udp: udp.unwrap_or_default().try_into()?,
-            }),
-            bindings::Step::Tcp { tcp } => Ok(Step::Tcp {
-                tcp: tcp.try_into()?,
-            }),
-            bindings::Step::Quic { quic, udp } => Ok(Step::Quic {
-                quic: quic.try_into()?,
-                udp: udp.unwrap_or_default().try_into()?,
-            }),
-            bindings::Step::Udp { udp } => Ok(Step::Udp {
-                udp: udp.try_into()?,
-            }),
-        }
-    }
-
+impl StepProtocols {
     pub fn into_stack(self) -> Vec<Protocol> {
         match self {
             Self::GraphQlHttp { graphql, http } => {
@@ -1341,6 +1550,11 @@ impl From<String> for PlanValue<Vec<u8>> {
         Self::Literal(value.into_bytes())
     }
 }
+impl From<String> for PlanValue<PlanData, Infallible> {
+    fn from(value: String) -> Self {
+        Self::Literal(value.into())
+    }
+}
 
 impl<T, E> TryFrom<bindings::Value> for Option<PlanValue<T, E>>
 where
@@ -1384,6 +1598,25 @@ impl TryFrom<bindings::Value> for PlanValue<u16> {
             }),
             _ => Err(Error(format!(
                 "invalid value {binding:?} for unsigned 16 bit integer field"
+            ))),
+        }
+    }
+}
+impl TryFrom<bindings::Value> for PlanValue<u64> {
+    type Error = Error;
+    fn try_from(binding: bindings::Value) -> Result<Self> {
+        match binding {
+            bindings::Value::LiteralInt(x) => {
+                Ok(Self::Literal(x.try_into().map_err(|_| {
+                    Error("out-of-bounds unsigned 64 bit integer literal".to_owned())
+                })?))
+            }
+            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
+                cel,
+                vars: vars.unwrap_or_default().into_iter().collect(),
+            }),
+            _ => Err(Error(format!(
+                "invalid value {binding:?} for unsigned 64 bit integer field"
             ))),
         }
     }
@@ -1504,7 +1737,7 @@ impl TryFrom<bindings::Value> for PlanValue<serde_json::Value> {
             bindings::Value::LiteralInt(x) => Ok(Self::Literal(x.into())),
             bindings::Value::LiteralFloat(x) => Ok(Self::Literal(x.into())),
             bindings::Value::LiteralBool(x) => Ok(Self::Literal(x.into())),
-            bindings::Value::LiteralStruct { r#struct: x } => Ok(Self::Literal(
+            bindings::Value::LiteralToml { literal: x } => Ok(Self::Literal(
                 serde_json::to_value(x).map_err(|e| Error(e.to_string()))?,
             )),
             bindings::Value::LiteralBase64 { base64 } => Ok(Self::Literal(
@@ -1513,24 +1746,37 @@ impl TryFrom<bindings::Value> for PlanValue<serde_json::Value> {
                     .map_err(|e| Error(format!("base64 decode: {}", e)))?
                     .into(),
             )),
-            bindings::Value::LiteralArray(x) => Ok(Self::Literal(
-                // Dirty hack: recursively try_from and then unwrap to get the json array elements.
-                x.into_iter()
-                    .map(Self::try_from)
-                    .map(|x| {
-                        Ok(match x? {
-                            Self::Literal(l) => l,
-                            Self::Dynamic { .. } => unreachable!(),
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?
-                    .into(),
-            )),
             bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
             _ => Err(Error(format!("invalid value {binding:?} for json field"))),
+        }
+    }
+}
+
+impl TryFrom<bindings::Value> for PlanValue<PlanData, Infallible> {
+    type Error = Error;
+    fn try_from(binding: bindings::Value) -> Result<Self> {
+        match binding {
+            bindings::Value::LiteralString(x) => Ok(PlanValue::Literal(PlanData(x.into()))),
+            bindings::Value::LiteralInt(x) => Ok(PlanValue::Literal(PlanData(x.into()))),
+            bindings::Value::LiteralFloat(x) => Ok(PlanValue::Literal(PlanData(x.into()))),
+            bindings::Value::LiteralBool(x) => Ok(PlanValue::Literal(PlanData(x.into()))),
+            bindings::Value::LiteralDatetime(x) => Ok(PlanValue::Literal(x.try_into()?)),
+            bindings::Value::LiteralToml { literal: x } => {
+                Ok(PlanValue::Literal(PlanData::try_from(x)?))
+            }
+            bindings::Value::LiteralBase64 { base64: x } => {
+                Ok(PlanValue::Literal(PlanData(x.into())))
+            }
+            bindings::Value::ExpressionCel { cel, vars } => Ok(PlanValue::Dynamic {
+                cel,
+                vars: vars.unwrap_or_default().into_iter().collect(),
+            }),
+            bindings::Value::ExpressionVars { .. } | bindings::Value::Unset { .. } => {
+                Err(Error(format!("incomplete value")))
+            }
         }
     }
 }
@@ -1546,28 +1792,11 @@ where
         S: State<'a, O, I>,
         I: IntoIterator<Item = O>,
     {
-        match self.to_owned() {
+        match self {
             PlanValue::Literal(s) => Ok(s.clone()),
-            Self::Dynamic { cel, vars } => {
-                let program = Program::compile(cel.as_str())
-                    .map_err(|e| Error(format!("compile cel {}: {}", cel, e)))?;
-                let mut context = Context::default();
-                context.add_variable(
-                    "vars",
-                    vars.into_iter()
-                        .map(|(name, value)| (name.clone().into(), value.clone().into()))
-                        .collect::<HashMap<cel_interpreter::objects::Key, cel_interpreter::Value>>(
-                        ),
-                );
-                add_state_to_context(state, &mut context);
-                PlanData(
-                    program
-                        .execute(&context)
-                        .map_err(|e| Error(format!("execute cel {}: {}", cel, e)))?,
-                )
+            Self::Dynamic { cel, vars } => exec_cel(cel, vars, state)?
                 .try_into()
-                .map_err(|e: E| Error(e.to_string()))
-            }
+                .map_err(|e: E| Error(e.to_string())),
         }
     }
 }
@@ -1624,10 +1853,10 @@ where
                 // and PlanValues since it's currently duplicated in the bindings merge process for
                 // map -> table conversion.
                 .flat_map(|(k, v)| match v {
-                    bindings::Value::LiteralArray(a) => {
+                    bindings::ValueOrArray::Array(a) => {
                         a.into_iter().map(|v| (k.clone(), v)).collect::<Vec<_>>()
                     }
-                    v => vec![(k, v)],
+                    bindings::ValueOrArray::Value(v) => vec![(k, v)],
                 })
                 // Convert bindings to PlanValues.
                 .map(|(k, v)| {
@@ -1645,20 +1874,147 @@ where
                 .into_iter()
                 .map(|entry| {
                     // Filter entries with no value.
-                    let Some(value) = entry.value else {
-                        return Ok(None);
-                    };
-                    if let bindings::Value::Unset { .. } = value {
+                    if let bindings::Value::Unset { .. } = &entry.value {
                         return Ok(None);
                     }
                     Ok(Some((
                         PlanValue::try_from(entry.key).map_err(|e: KE2| Error(e.to_string()))?,
-                        PlanValue::try_from(value).map_err(|e: VE2| Error(e.to_string()))?,
+                        PlanValue::try_from(entry.value).map_err(|e: VE2| Error(e.to_string()))?,
                     )))
                 })
                 .filter_map(Result::transpose)
                 .collect::<Result<_>>()?,
         }))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum IterablePlanValue {
+    Pairs(Vec<(IterableKey, PlanData)>),
+    Expression {
+        cel: String,
+        vars: Vec<(String, String)>,
+    },
+}
+
+impl Default for IterablePlanValue {
+    fn default() -> Self {
+        Self::Pairs(Vec::new())
+    }
+}
+
+impl TryFrom<bindings::Iterable> for IterablePlanValue {
+    type Error = Error;
+    fn try_from(value: bindings::Iterable) -> std::result::Result<Self, Self::Error> {
+        Ok(match value {
+            bindings::Iterable::Array(a) => IterablePlanValue::Pairs(
+                a.into_iter()
+                    .enumerate()
+                    .map(|(i, v)| {
+                        Ok((
+                            IterableKey::Uint(u64::try_from(i).map_err(|e| Error(e.to_string()))?),
+                            PlanData::try_from(v)?,
+                        ))
+                    })
+                    .collect::<Result<_>>()?,
+            ),
+            bindings::Iterable::Map(m) => IterablePlanValue::Pairs(
+                m.into_iter()
+                    .map(|(k, v)| Ok((IterableKey::String(k.into()), PlanData::try_from(v)?)))
+                    .collect::<Result<_>>()?,
+            ),
+            bindings::Iterable::ExpressionCel { cel, vars } => IterablePlanValue::Expression {
+                cel,
+                vars: vars.unwrap_or_default().into_iter().collect(),
+            },
+            // If default vars were specified but never overriden or given a cel expression, treat
+            // it as empty.
+            bindings::Iterable::ExpressionVars { vars } => Self::default(),
+        })
+    }
+}
+
+impl Evaluate<Vec<(IterableKey, PlanData)>> for IterablePlanValue {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Vec<(IterableKey, PlanData)>>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O>,
+    {
+        match self {
+            Self::Pairs(p) => Ok(p.clone()),
+            Self::Expression { cel, vars } => match exec_cel(cel, vars, state)?.0 {
+                cel_interpreter::Value::List(l) => Arc::try_unwrap(l)
+                    .map_or_else(|arc| arc.as_ref().clone(), |val| val)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, x)| {
+                        Ok((
+                            IterableKey::Uint(u64::try_from(i).map_err(|e| Error(e.to_string()))?),
+                            PlanData(x),
+                        ))
+                    })
+                    .collect::<Result<_>>(),
+                cel_interpreter::Value::Map(m) => Rc::try_unwrap(m.map)
+                    .map_or_else(|arc| arc.as_ref().clone(), |val| val)
+                    .into_iter()
+                    .map(|(k, v)| Ok((k.into(), PlanData(v))))
+                    .collect::<Result<_>>(),
+                _ => Err(Error("type not iterable".to_owned())),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum IterableKey {
+    Int(i64),
+    Uint(u64),
+    Bool(bool),
+    String(Arc<String>),
+}
+
+impl Display for IterableKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Int(x) => write!(f, "{x}"),
+            Self::Uint(x) => write!(f, "{x}"),
+            Self::Bool(x) => write!(f, "{x}"),
+            Self::String(x) => write!(f, "{x}"),
+        }
+    }
+}
+
+impl From<cel_interpreter::objects::Key> for IterableKey {
+    fn from(value: cel_interpreter::objects::Key) -> Self {
+        match value {
+            cel_interpreter::objects::Key::Int(x) => Self::Int(x),
+            cel_interpreter::objects::Key::Uint(x) => Self::Uint(x),
+            cel_interpreter::objects::Key::Bool(x) => Self::Bool(x),
+            cel_interpreter::objects::Key::String(x) => Self::String(x),
+        }
+    }
+}
+
+impl From<IterableKey> for cel_interpreter::objects::Key {
+    fn from(value: IterableKey) -> Self {
+        match value {
+            IterableKey::Int(x) => Self::Int(x),
+            IterableKey::Uint(x) => Self::Uint(x),
+            IterableKey::Bool(x) => Self::Bool(x),
+            IterableKey::String(x) => Self::String(x),
+        }
+    }
+}
+
+impl From<IterableKey> for cel_interpreter::Value {
+    fn from(value: IterableKey) -> Self {
+        match value {
+            IterableKey::Int(x) => Self::Int(x),
+            IterableKey::Uint(x) => Self::UInt(x),
+            IterableKey::Bool(x) => Self::Bool(x),
+            IterableKey::String(x) => Self::String(x),
+        }
     }
 }
 
@@ -1725,10 +2081,23 @@ where
             .iter()
             .into_iter()
             .map(O::into)
-            .map(|name| (name, state.get(name).unwrap().to_owned()))
+            .map(|name| {
+                (
+                    name,
+                    state
+                        .get(name)
+                        .unwrap()
+                        .to_owned()
+                        .into_iter()
+                        .collect::<HashMap<_, _>>(),
+                )
+            })
             .collect::<HashMap<_, _>>(),
     );
     ctx.add_variable("current", state.current().to_owned());
+    ctx.add_variable("for", state.run_for().to_owned());
+    ctx.add_variable("while", state.run_while().to_owned());
+    ctx.add_variable("count", state.run_count().to_owned());
     ctx.add_function("parse_url", url);
     ctx.add_function("parse_form_urlencoded", form_urlencoded_parts);
 }
@@ -1783,4 +2152,25 @@ pub trait Evaluate<T> {
         S: State<'a, O, I>,
         O: Into<&'a str>,
         I: IntoIterator<Item = O>;
+}
+
+fn exec_cel<'a, S, O, I>(cel: &str, vars: &[(String, String)], state: &S) -> Result<PlanData>
+where
+    O: Into<&'a str>,
+    S: State<'a, O, I>,
+    I: IntoIterator<Item = O>,
+{
+    let program =
+        Program::compile(cel).map_err(|e| Error(format!("compile cel {}: {}", cel, e)))?;
+    let mut context = Context::default();
+    context.add_variable(
+        "vars",
+        vars.into_iter()
+            .map(|(name, value)| (name.clone().into(), value.clone().into()))
+            .collect::<HashMap<cel_interpreter::objects::Key, cel_interpreter::Value>>(),
+    );
+    add_state_to_context(state, &mut context);
+    Ok(PlanData(program.execute(&context).map_err(|e| {
+        Error(format!("execute cel {}: {}", cel, e))
+    })?))
 }

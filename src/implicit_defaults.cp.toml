@@ -1,4 +1,4 @@
-courier.version = "0.1"
+courier.version = 0
 
 [[courier.defaults]]
 selector = ["graphql", "graphqlhttp1", "graphqlhttp2", "graphqlhttp3"]

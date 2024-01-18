@@ -1,13 +1,25 @@
-courier.version = "0.1"
+courier.version = 0
 
 [http_pause.http]
 url = "https://example.com/"
 pause.after.open.duration = "500ms"
 pause.after.request_body.duration = "500ms"
 
+[http1_pause.http1]
+url = "https://example.com/test"
+[http1_pause.http1.pause]
+after.open.duration = "10ms"
+after.request_headers.duration = "50us"
+after.response_headers = [{duration = "5ms"}, {duration = "10ms", offset_bytes = 100 }]
+[http1_pause.tcp.pause]
+# Pause after the tcp handshake but before the tls handshake. Could also be
+# done using `http1_pause.tls.pause.before`.
+after.handshake = "1s"
+
+
 [multi_pause.tls]
 host = "example.com"
-port = "443"
+port = 443
 body = "GET / HTTP/1.0\r\n\r\n"
 pause.after.open.duration = "500ms"
 [[multi_pause.tls.pause.after.request_body]]
@@ -19,3 +31,4 @@ duration = "500ms"
 match = "<< >>"
 offset_bytes = 50
 duration = "500ms"
+
