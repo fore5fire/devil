@@ -46,9 +46,12 @@ async fn main() -> Result<()> {
         let plan = Plan::parse(&text)?;
         let mut executor = Executor::new(&plan);
         for (name, _) in plan.steps.iter() {
-            println!("------- executing {} --------", name);
+            println!("------- executing {name} --------");
             let output = executor.next().await?;
-            print_proto(&args, &output);
+            for (key, out) in output.iter() {
+                println!("---- step {key} ----");
+                print_proto(&args, &out);
+            }
         }
     }
     Ok(())

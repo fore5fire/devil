@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +14,7 @@ pub struct Plan {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Settings {
-    pub version: String,
+    pub version: u16,
     #[serde(default)]
     pub defaults: Vec<Defaults>,
 }
@@ -34,6 +32,7 @@ pub struct Defaults {
     pub quic: Option<Quic>,
     pub dtls: Option<Tls>,
     pub udp: Option<Udp>,
+    pub run: Option<Run>,
 }
 
 impl Defaults {
@@ -98,8 +97,30 @@ pub enum Selector {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct Step {
+    #[serde(flatten)]
+    pub protocols: StepProtocols,
+    #[serde(default)]
+    pub run: Option<Run>,
+}
+
+impl Step {
+    pub fn apply_defaults<'a, I: IntoIterator<Item = Defaults>>(self, defaults: I) -> Self {
+        let (run_defaults, proto_defaults): (Vec<_>, Vec<_>) = itertools::multiunzip(
+            defaults
+                .into_iter()
+                .filter_map(|d| Some((d.run.clone(), d))),
+        );
+        Step {
+            run: run_defaults.into_iter().fold(self.run, Run::merge),
+            protocols: self.protocols.apply_defaults(proto_defaults),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum Step {
+pub enum StepProtocols {
     GraphQl {
         graphql: GraphQl,
         http: Option<Http>,
@@ -160,14 +181,14 @@ pub enum Step {
     },
 }
 
-impl Step {
-    pub fn apply_defaults<'a, I: IntoIterator<Item = Defaults>>(mut self, defaults: I) -> Self {
+impl StepProtocols {
+    pub fn apply_defaults<'a, I: IntoIterator<Item = Defaults>>(self, defaults: I) -> Self {
         // Apply defaults with a matching selector.
         let kind = self.kind();
-        for d in defaults.into_iter().filter(|d| d.matches(kind)) {
-            self = self.merge(d);
-        }
-        self
+        defaults
+            .into_iter()
+            .filter(|d| d.matches(kind))
+            .fold(self, Self::merge)
     }
 
     #[inline]
@@ -267,6 +288,36 @@ impl Step {
     }
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Run {
+    #[serde(rename = "if")]
+    pub run_if: Option<Value>,
+    #[serde(rename = "while")]
+    pub run_while: Option<Value>,
+    #[serde(rename = "for")]
+    pub run_for: Option<Iterable>,
+    pub count: Option<Value>,
+    pub parallel: Option<Value>,
+}
+
+impl Run {
+    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
+        let Some(first) = first else {
+            return second;
+        };
+        let Some(second) = second else {
+            return Some(first);
+        };
+        Some(Self {
+            run_if: first.run_if.or(second.run_if),
+            run_for: first.run_for.or(second.run_for),
+            run_while: first.run_while.or(second.run_while),
+            count: first.count.or(second.count),
+            parallel: first.parallel.or(second.parallel),
+        })
+    }
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct GraphQl {
     pub url: Option<Value>,
@@ -301,7 +352,7 @@ impl Merge for GraphQlPause {
         let Some(second) = second else {
             return Some(first);
         };
-        Some(first)
+        Some(GraphQlPause {})
     }
 }
 
@@ -673,6 +724,7 @@ impl Merge for PauseValue {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum ValueOrArray<T> {
     Value(T),
     Array(Vec<T>),
@@ -715,9 +767,8 @@ pub enum Value {
     LiteralFloat(f64),
     LiteralBool(bool),
     LiteralDatetime(toml::value::Datetime),
-    LiteralArray(Vec<Value>),
-    LiteralStruct {
-        r#struct: toml::Table,
+    LiteralToml {
+        literal: toml::Value,
     },
     LiteralBase64 {
         base64: String,
@@ -732,6 +783,12 @@ pub enum Value {
     ExpressionVars {
         vars: IndexMap<String, String>,
     },
+}
+
+impl Default for Value {
+    fn default() -> Self {
+        Self::Unset { unset: true }
+    }
 }
 
 impl Value {
@@ -807,7 +864,7 @@ impl Value {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Table {
-    Map(HashMap<String, Value>),
+    Map(IndexMap<String, ValueOrArray<Value>>),
     Array(Vec<TableEntry>),
 }
 
@@ -833,48 +890,38 @@ impl Table {
                 // TODO: clean this up so its not duplicated converting bindings to plan format,
                 // since this code won't be run if there are no defaults for a Table field.
                 .flat_map(|(key, value)| match value {
-                    Value::LiteralArray(a) => a.into_iter().map(|v| (key.clone(), v)).collect(),
-                    value => vec![(key, value)],
+                    ValueOrArray::Array(a) => a.into_iter().map(|v| (key.clone(), v)).collect(),
+                    ValueOrArray::Value(value) => vec![(key, value)],
                 })
                 .map(|(key, value)| TableEntry {
                     key: Value::LiteralString(key),
-                    value: Some(value),
+                    value,
                 })
                 .collect(),
             Self::Array(a) => a,
         };
-        // Merge second into the table-ized first.
-        match second {
-            Some(Self::Map(m)) => {
-                for (key, value) in m.into_iter() {
-                    // Try to merge with an existing value.
-                    if let Some(entry) = table
-                        .iter_mut()
-                        .find(|x| matches!(&x.key, Value::LiteralString(k) if k.as_str() == key))
-                    {
-                        entry.value = Some(value);
-                        continue;
-                    }
-                    // It can't be merged, so just append it.
-                    table.push(TableEntry {
-                        key: Value::LiteralString(key),
-                        value: Some(value),
-                    });
-                }
-            }
-            Some(Self::Array(a)) => {
-                for row in a.into_iter() {
-                    // Try to merge with an existing value.
-                    if let Some(entry) = table.iter_mut().find(|x| x.key == row.key) {
-                        entry.value = row.value;
-                        continue;
-                    }
-                    // It can't be merged, so just append it.
-                    table.push(row)
-                }
-            }
-            None => {}
-        }
+        // Merge second into the table-ized first, filtering keys already present.
+        table.extend(match second {
+            Some(Self::Map(m)) => m
+                .into_iter()
+                .filter(|(key, _)| {
+                    !table
+                        .iter()
+                        .any(|x| matches!(&x.key, Value::LiteralString(k) if k == key))
+                })
+                .flat_map(|(key, value)| {
+                    Vec::from(value).into_iter().map(move |v| TableEntry {
+                        key: Value::LiteralString(key.clone()),
+                        value: v,
+                    })
+                })
+                .collect(),
+            Some(Self::Array(a)) => a
+                .into_iter()
+                .filter(|x| table.iter().any(|y| x.key == y.key))
+                .collect(),
+            None => Vec::new(),
+        });
         // Re-wrap the array as a Table.
         Some(Self::Array(table))
     }
@@ -883,5 +930,20 @@ impl Table {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableEntry {
     pub key: Value,
-    pub value: Option<Value>,
+    #[serde(default)]
+    pub value: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Iterable {
+    Array(Vec<toml::Value>),
+    Map(IndexMap<String, toml::Value>),
+    ExpressionCel {
+        cel: String,
+        vars: Option<IndexMap<String, String>>,
+    },
+    ExpressionVars {
+        vars: IndexMap<String, String>,
+    },
 }

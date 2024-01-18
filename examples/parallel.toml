@@ -1,4 +1,4 @@
-courier.version = "0.1"
+courier.version = 0
 
 # Parallel requests
 [1a.http]

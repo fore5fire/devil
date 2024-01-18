@@ -6,13 +6,17 @@ use cel_interpreter::{
     Value,
 };
 use chrono::Duration;
+use indexmap::IndexMap;
 use url::Url;
 
 use crate::TlsVersion;
 
 pub trait State<'a, O: Into<&'a str>, I: IntoIterator<Item = O>> {
-    fn get(&self, name: &'a str) -> Option<&StepOutput>;
+    fn get(&self, name: &'a str) -> Option<&IndexMap<crate::IterableKey, StepOutput>>;
     fn current(&self) -> &StepPlanOutputs;
+    fn run_for(&self) -> &Option<RunForOutput>;
+    fn run_while(&self) -> &Option<RunWhileOutput>;
+    fn run_count(&self) -> &Option<RunCountOutput>;
     fn iter(&self) -> I;
 }
 
@@ -1132,4 +1136,56 @@ fn kv_pair_to_map(pair: (Vec<u8>, Vec<u8>)) -> Value {
 
 pub trait WithPlannedCapacity {
     fn with_planned_capacity(planned: &Self) -> Self;
+}
+
+#[derive(Debug, Clone)]
+pub struct RunOutput {
+    pub run_if: bool,
+    pub run_while: Option<bool>,
+    pub run_for: Option<Vec<(crate::IterableKey, crate::PlanData)>>,
+    pub count: u64,
+    pub parallel: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct RunForOutput {
+    pub key: crate::IterableKey,
+    pub value: cel_interpreter::Value,
+}
+
+impl From<RunForOutput> for Value {
+    fn from(value: RunForOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("key".into(), value.key.into()),
+                ("value".into(), value.value),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RunWhileOutput {
+    pub index: u64,
+}
+
+impl From<RunWhileOutput> for Value {
+    fn from(value: RunWhileOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([("index".into(), value.index.into())])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RunCountOutput {
+    pub index: u64,
+}
+
+impl From<RunCountOutput> for Value {
+    fn from(value: RunCountOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([("index".into(), value.index.into())])),
+        })
+    }
 }

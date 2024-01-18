@@ -1,16 +1,5 @@
 courier.version = 0
 
-[pause_example.http]
-url = "https://example.com/test"
-[pause_example.http.pause]
-after.open.duration = "10ms"
-after.request_headers.duration = "50us"
-after.response_headers = [{duration = "5ms"}, {duration = "10ms", offset_bytes = 100 }]
-[pause_example.tcp.pause]
-# Pause after the tcp handshake but before the tls handshake. Could also be
-# done using `pause_example.tls.pause.before`.
-after.handshake = "1s"
-
 [loop_example.http]
 url = "https://example.com/test"
 [loop_example.run]
@@ -18,13 +7,14 @@ count = 3
 
 [parallel_example.http]
 url = "https://example.com/test"
-headers.X-Item.cel = "count.index"
+headers.X-Item.cel = "'abc'"
 [parallel_example.run]
 count = 5
 parallel = true
 
 [while_example.http]
 url = "https://example.com/test"
+headers.X-Item.cel = "while.index"
 [while_example.run]
 while.cel = ""
 
