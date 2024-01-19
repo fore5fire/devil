@@ -50,52 +50,52 @@ impl<'a> Executor<'a> {
         };
 
         let mut output = IndexMap::new();
-        let mut run_config = step.run.evaluate(&inputs)?;
+
         // Check the if condition only before the first iteration.
-        if !run_config.run_if {
+        if !step.run.run_if.evaluate(&inputs)? {
             return Ok(output);
         }
 
-        if let Some(kv_pairs) = run_config.run_for {
-            output.try_reserve(kv_pairs.len())?;
-            let count = run_config.count.try_into()?;
-            for (i, (k, v)) in kv_pairs.into_iter().enumerate() {
+        let parallel = step.run.parallel.evaluate(&inputs)?;
+        // Don't allow parallel execution with while (for now at least).
+        if step.run.run_while.is_some() && parallel {
+            return Err(Box::new(crate::Error(
+                "run.while cannot be used with run.parallel".to_owned(),
+            )));
+        }
+
+        let for_pairs = step.run.run_for.map(|f| f.evaluate(&inputs)).transpose()?;
+        if let Some(pairs) = &for_pairs {
+            output.try_reserve(pairs.len())?;
+        }
+        let mut for_iterator = for_pairs.map(|pairs| pairs.into_iter());
+
+        for i in 0..step.run.count.evaluate(&inputs)? {
+            // Process current item if for is used.
+            let mut key = None;
+            if let Some(pairs) = for_iterator.as_mut() {
+                let Some((k, v)) = pairs.next() else {
+                    break;
+                };
                 inputs.run_for = Some(crate::RunForOutput {
                     key: k.clone(),
                     value: v.into(),
                 });
-                let out = Self::iteration(step.protocols.clone(), &mut inputs).await?;
-                output.insert(k, out);
-                if i >= count {
-                    break;
-                }
+                key = Some(k.clone());
             }
-        } else if let Some(mut cond) = run_config.run_while {
-            let mut i = 0;
-            // Explicitly pre-allocate so we can treat allocation errors as results instead of
-            // panicing.
-            output.try_reserve(1)?;
-            while cond {
-                inputs.run_while = Some(crate::RunWhileOutput { index: i });
-                let out = Self::iteration(step.protocols.clone(), &mut inputs).await?;
-                output.insert(IterableKey::Uint(i), out);
 
-                run_config = step.run.evaluate(&inputs)?;
-                cond = run_config
-                    .run_while
-                    .expect("run_while should be set on further iterations");
-                i += 1;
-                if i >= run_config.count {
+            // Evaluate while condition on each loop if it is set.
+            if let Some(w) = &step.run.run_while {
+                inputs.run_while = Some(crate::RunWhileOutput { index: i });
+                if !w.evaluate(&inputs)? {
                     break;
                 }
+                output.try_reserve(1)?;
             }
-        } else {
-            output.try_reserve(run_config.count.try_into()?)?;
-            for i in 0..run_config.count {
-                inputs.run_count = Some(crate::RunCountOutput { index: i });
-                let out = Self::iteration(step.protocols.clone(), &mut inputs).await?;
-                output.insert(IterableKey::Uint(i), out);
-            }
+
+            inputs.run_count = Some(crate::RunCountOutput { index: i });
+            let out = Self::iteration(step.protocols.clone(), &mut inputs).await?;
+            output.insert(key.unwrap_or(IterableKey::Uint(i)), out);
         }
 
         self.outputs.insert(name, output.clone());

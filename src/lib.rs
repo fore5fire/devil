@@ -1,4 +1,5 @@
 mod bindings;
+mod cel_functions;
 mod error;
 pub mod exec;
 mod output;
