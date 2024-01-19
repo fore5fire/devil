@@ -1,10 +1,9 @@
 use crate::{
-    bindings, Error, GraphQlPauseOutput, Http1PauseOutput, HttpPauseOutput, Result, State,
-    StepPlanOutput, TcpPauseOutput, TlsPauseOutput,
+    bindings, cel_functions, Error, GraphQlPauseOutput, Http1PauseOutput, HttpPauseOutput, Result,
+    State, StepPlanOutput, TcpPauseOutput, TlsPauseOutput,
 };
 use base64::Engine;
-use cel_interpreter::extractors::This;
-use cel_interpreter::{Context, FunctionContext, Program, ResolveResult};
+use cel_interpreter::{Context, Program};
 use chrono::{Duration, NaiveDateTime, TimeZone};
 use go_parse_duration::parse_duration;
 use indexmap::IndexMap;
@@ -1220,6 +1219,21 @@ impl Step {
                 .run
                 .map(|run| {
                     Ok::<_, Error>(Run {
+                        count: run
+                            .count
+                            .map(PlanValue::try_from)
+                            .transpose()?
+                            .unwrap_or_else(|| {
+                                // The default count shouldn't inhibit looping when while or for is
+                                // set, but also shouldn't cause looping if neither are set.
+                                PlanValue::Literal(
+                                    if run.run_while.is_some() || run.run_for.is_some() {
+                                        u64::MAX
+                                    } else {
+                                        1
+                                    },
+                                )
+                            }),
                         run_if: run
                             .run_if
                             .map(PlanValue::try_from)
@@ -1230,11 +1244,6 @@ impl Step {
                             .run_for
                             .map(|x| IterablePlanValue::try_from(x))
                             .transpose()?,
-                        count: run
-                            .count
-                            .map(PlanValue::try_from)
-                            .transpose()?
-                            .unwrap_or(PlanValue::Literal(1)),
                         parallel: run
                             .parallel
                             .map(PlanValue::try_from)
@@ -1250,11 +1259,11 @@ impl Step {
 
 #[derive(Debug, Clone)]
 pub struct Run {
-    run_if: PlanValue<bool>,
-    run_while: Option<PlanValue<bool>>,
-    run_for: Option<IterablePlanValue>,
-    count: PlanValue<u64>,
-    parallel: PlanValue<bool>,
+    pub run_if: PlanValue<bool>,
+    pub run_while: Option<PlanValue<bool>>,
+    pub run_for: Option<IterablePlanValue>,
+    pub count: PlanValue<u64>,
+    pub parallel: PlanValue<bool>,
 }
 
 impl Default for Run {
@@ -2098,52 +2107,13 @@ where
     ctx.add_variable("for", state.run_for().to_owned());
     ctx.add_variable("while", state.run_while().to_owned());
     ctx.add_variable("count", state.run_count().to_owned());
-    ctx.add_function("parse_url", url);
-    ctx.add_function("parse_form_urlencoded", form_urlencoded_parts);
-}
-
-fn url(ftx: &FunctionContext, This(url): This<Arc<String>>) -> ResolveResult {
-    let url = Url::parse(&url).map_err(|e| ftx.error(&e.to_string()))?;
-    Ok(url_to_cel(url))
-}
-
-fn url_to_cel(url: Url) -> cel_interpreter::Value {
-    cel_interpreter::Value::Map(cel_interpreter::objects::Map {
-        map: Rc::new(HashMap::from([
-            ("scheme".into(), url.scheme().into()),
-            ("username".into(), url.username().into()),
-            ("password".into(), url.password().into()),
-            ("host".into(), url.host_str().into()),
-            ("port".into(), url.port().map(|x| x as u64).into()),
-            (
-                "port_or_default".into(),
-                url.port_or_known_default().map(|x| x as u64).into(),
-            ),
-            ("path".into(), url.path().into()),
-            (
-                "path_segments".into(),
-                url.path_segments().map(|x| x.collect::<Vec<_>>()).into(),
-            ),
-            ("query".into(), url.query().into()),
-            ("fragment".into(), url.fragment().into()),
-        ])),
-    })
-}
-
-fn form_urlencoded_parts(This(query): This<Arc<String>>) -> Arc<Vec<cel_interpreter::Value>> {
-    Arc::new(
-        form_urlencoded::parse(query.as_bytes())
-            .into_owned()
-            .map(|(k, v)| {
-                cel_interpreter::Value::Map(cel_interpreter::objects::Map {
-                    map: Rc::new(HashMap::from([
-                        ("key".into(), k.into()),
-                        ("value".into(), v.into()),
-                    ])),
-                })
-            })
-            .collect(),
-    )
+    ctx.add_function("parse_url", cel_functions::url);
+    ctx.add_function(
+        "parse_form_urlencoded",
+        cel_functions::form_urlencoded_parts,
+    );
+    ctx.add_function("bytes", cel_functions::bytes);
+    ctx.add_function("uint", cel_functions::uint);
 }
 
 pub trait Evaluate<T> {

@@ -18,6 +18,7 @@ pub trait State<'a, O: Into<&'a str>, I: IntoIterator<Item = O>> {
     fn run_while(&self) -> &Option<RunWhileOutput>;
     fn run_count(&self) -> &Option<RunCountOutput>;
     fn iter(&self) -> I;
+    // Check for matching singed int indexes too.
 }
 
 #[derive(Debug)]

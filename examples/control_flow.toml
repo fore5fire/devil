@@ -7,28 +7,28 @@ count = 3
 
 [parallel_example.http]
 url = "https://example.com/test"
-headers.X-Item.cel = "'abc'"
+headers.X-Item.cel = "string(count.index)"
 [parallel_example.run]
 count = 5
 parallel = true
 
 [while_example.http]
 url = "https://example.com/test"
-headers.X-Item.cel = "while.index"
+headers.X-Item.cel = "string(while.index)"
 [while_example.run]
-while.cel = ""
+while.cel = "while.index < uint(5)"
 
 [for_each_example.http]
 url = "https://example.com/test"
-headers.X-Index.cel = "for.key"
-headers.X-Item.cel = "for.value"
+headers.X-Index.cel = "string(for.key)"
+headers.X-Item.cel = "string(for.value)"
 [for_each_example.run]
 for = ["foo", 100, "bar"]
 
 [table_for_each_example.http]
 url = "https://example.com/test"
-headers.X-Key.cel = "for.key"
-headers.X-Value.cel = "for.value"
+headers.X-Key.cel = "string(for.key)"
+headers.X-Value.cel = "string(for.value)"
 [table_for_each_example.run]
 for = { k1 = 1, k2 = "value" }
 parallel = true
@@ -36,9 +36,9 @@ parallel = true
 [if_example.http]
 url = "https://example.com/test"
 [if_example.run]
-if.cel = "steps.loop_example[0].http.plan"
+if.cel = "steps.loop_example[0].http.response.status_code == 400"
 
-[after_example.http]
-url = "https://example.com/test"
-[after_example.run]
-after = "pause_example"
+#[after_example.http]
+#url = "https://example.com/test"
+#[after_example.run]
+#after = "pause_example"
