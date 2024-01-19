@@ -9,6 +9,7 @@ pub mod tls;
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 
+use futures::future::try_join_all;
 use indexmap::IndexMap;
 
 use crate::{
@@ -65,37 +66,76 @@ impl<'a> Executor<'a> {
         }
 
         let for_pairs = step.run.run_for.map(|f| f.evaluate(&inputs)).transpose()?;
+
+        let mut count = step.run.count.evaluate(&inputs)?;
         if let Some(pairs) = &for_pairs {
-            output.try_reserve(pairs.len())?;
+            count = count.min(pairs.len().try_into()?)
         }
+        let count_usize: usize = count.try_into()?;
+
+        // Preallocate space when able.
+        if step.run.run_while.is_none() {
+            output.try_reserve(count_usize)?;
+        }
+
         let mut for_iterator = for_pairs.map(|pairs| pairs.into_iter());
 
-        for i in 0..step.run.count.evaluate(&inputs)? {
-            // Process current item if for is used.
-            let mut key = None;
-            if let Some(pairs) = for_iterator.as_mut() {
-                let Some((k, v)) = pairs.next() else {
-                    break;
-                };
-                inputs.run_for = Some(crate::RunForOutput {
-                    key: k.clone(),
-                    value: v.into(),
-                });
-                key = Some(k.clone());
-            }
+        if parallel {
+            let mut states: Vec<_> = (0..count)
+                .map(|i| {
+                    // Process current item if for is used.
+                    let mut key = None;
+                    if let Some(pairs) = for_iterator.as_mut() {
+                        let (k, v) = pairs.next().expect(
+                            "iteration count should be limited by the length of the for iterable",
+                        );
+                        inputs.run_for = Some(crate::RunForOutput {
+                            key: k.clone(),
+                            value: v.into(),
+                        });
+                        key = Some(k.clone());
+                    }
 
-            // Evaluate while condition on each loop if it is set.
-            if let Some(w) = &step.run.run_while {
-                inputs.run_while = Some(crate::RunWhileOutput { index: i });
-                if !w.evaluate(&inputs)? {
-                    break;
+                    inputs.run_count = Some(crate::RunCountOutput { index: i });
+                    (key.unwrap_or(IterableKey::Uint(i)), inputs.clone())
+                })
+                .collect();
+            let ops = try_join_all(
+                states
+                    .iter_mut()
+                    .map(|(key, state)| Self::iteration(key, step.protocols.clone(), state)),
+            )
+            .await?;
+            output.extend(ops.into_iter().map(|(key, out)| (key.to_owned(), out)));
+        } else {
+            for i in 0..count {
+                // Process current item if for is used.
+                let mut key = None;
+                if let Some(pairs) = for_iterator.as_mut() {
+                    let (k, v) = pairs.next().expect(
+                        "iteration count should be limited by the length of the for iterable",
+                    );
+                    inputs.run_for = Some(crate::RunForOutput {
+                        key: k.clone(),
+                        value: v.into(),
+                    });
+                    key = Some(k.clone());
                 }
-                output.try_reserve(1)?;
-            }
+                let key = key.unwrap_or(IterableKey::Uint(i));
 
-            inputs.run_count = Some(crate::RunCountOutput { index: i });
-            let out = Self::iteration(step.protocols.clone(), &mut inputs).await?;
-            output.insert(key.unwrap_or(IterableKey::Uint(i)), out);
+                // Evaluate while condition on each loop if it is set.
+                if let Some(w) = &step.run.run_while {
+                    inputs.run_while = Some(crate::RunWhileOutput { index: i });
+                    if !w.evaluate(&inputs)? {
+                        break;
+                    }
+                    output.try_reserve(1)?;
+                }
+
+                inputs.run_count = Some(crate::RunCountOutput { index: i });
+                let (_, out) = Self::iteration(&key, step.protocols.clone(), &mut inputs).await?;
+                output.insert(key, out);
+            }
         }
 
         self.outputs.insert(name, output.clone());
@@ -103,9 +143,10 @@ impl<'a> Executor<'a> {
     }
 
     async fn iteration(
+        key: &IterableKey,
         protos: StepProtocols,
         inputs: &mut State<'_>,
-    ) -> Result<StepOutput, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<(IterableKey, StepOutput), Box<dyn std::error::Error + Send + Sync>> {
         // Reverse iterate the protocol stack for evaluation so that protocols below can access
         // request fields from higher protocols.
         let mut runner: Option<Box<dyn Runner>> = None;
@@ -148,10 +189,11 @@ impl<'a> Executor<'a> {
             };
             runner = inner;
         }
-        Ok(output)
+        Ok((key.to_owned(), output))
     }
 }
 
+#[derive(Debug, Clone)]
 struct State<'a> {
     data: &'a HashMap<&'a str, IndexMap<crate::IterableKey, StepOutput>>,
     current: StepPlanOutputs,

@@ -1,13 +1,14 @@
 courier.version = 0
 
-[loop_example.http]
+[count_example.http]
 url = "https://example.com/test"
-[loop_example.run]
+[count_example.run]
 count = 3
 
 [parallel_example.http]
 url = "https://example.com/test"
 headers.X-Item.cel = "string(count.index)"
+pause.after.open.duration = "1s"
 [parallel_example.run]
 count = 5
 parallel = true
@@ -29,6 +30,7 @@ for = ["foo", 100, "bar"]
 url = "https://example.com/test"
 headers.X-Key.cel = "string(for.key)"
 headers.X-Value.cel = "string(for.value)"
+pause.after.open.duration = "1s"
 [table_for_each_example.run]
 for = { k1 = 1, k2 = "value" }
 parallel = true
@@ -36,9 +38,9 @@ parallel = true
 [if_example.http]
 url = "https://example.com/test"
 [if_example.run]
-if.cel = "steps.loop_example[0].http.response.status_code == 400"
+if.cel = "steps.count_example[0].http.response.status_code == 400"
 
 #[after_example.http]
 #url = "https://example.com/test"
 #[after_example.run]
-#after = "pause_example"
+#after = "count_example"

@@ -2113,7 +2113,6 @@ where
         cel_functions::form_urlencoded_parts,
     );
     ctx.add_function("bytes", cel_functions::bytes);
-    ctx.add_function("uint", cel_functions::uint);
 }
 
 pub trait Evaluate<T> {

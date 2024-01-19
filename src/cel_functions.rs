@@ -52,29 +52,3 @@ pub fn form_urlencoded_parts(This(query): This<Arc<String>>) -> Arc<Vec<cel_inte
 pub fn bytes(This(string): This<Arc<String>>) -> Arc<Vec<u8>> {
     Arc::new(string.as_ref().clone().into_bytes())
 }
-
-pub fn uint(This(val): This<Value>) -> Result<u64> {
-    match val {
-        Value::UInt(uint) => Ok(uint),
-        Value::Int(int) => u64::try_from(int).map_err(|e| ExecutionError::FunctionError {
-            function: "uint".to_owned(),
-            message: e.to_string(),
-        }),
-        Value::Float(float) => {
-            if float < u64::MIN as f64 || float > u64::MAX as f64 {
-                return Err(ExecutionError::FunctionError {
-                    function: "uint".to_owned(),
-                    message: "double out of bounds for uint".to_owned(),
-                });
-            }
-            Ok(float as u64)
-        }
-        Value::String(string) => string
-            .parse::<u64>()
-            .map_err(|e| ExecutionError::FunctionError {
-                function: "uint".to_owned(),
-                message: e.to_string(),
-            }),
-        target => Err(ExecutionError::UnsupportedTargetType { target }),
-    }
-}
