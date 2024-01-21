@@ -1,17 +1,18 @@
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 
 use async_trait::async_trait;
 use chrono::Duration;
 use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use super::runner::Runner;
+use super::{runner::Runner, Context};
 use crate::{
     GraphQlError, GraphQlOutput, GraphQlPlanOutput, Output, PauseOutput, WithPlannedCapacity,
 };
 
 #[derive(Debug)]
 pub(super) struct GraphQlRunner {
+    ctx: Arc<Context>,
     out: GraphQlOutput,
     http_body: Vec<u8>,
     resp: Vec<u8>,
@@ -23,6 +24,7 @@ pub(super) struct GraphQlRunner {
 
 impl GraphQlRunner {
     pub(super) async fn new(
+        ctx: Arc<Context>,
         transport: Box<dyn Runner>,
         plan: GraphQlPlanOutput,
     ) -> crate::Result<Self> {
@@ -37,6 +39,7 @@ impl GraphQlRunner {
                 pause: PauseOutput::with_planned_capacity(&plan.pause),
                 plan,
             },
+            ctx,
             transport,
             start_time,
             resp_start_time: None,

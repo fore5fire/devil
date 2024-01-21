@@ -707,6 +707,7 @@ impl<T: Merge> Pause<T> {
 pub struct PauseValue {
     pub duration: Option<Value>,
     pub offset_bytes: Option<Value>,
+    pub join: Option<ValueOrArray<String>>,
 }
 
 impl Merge for PauseValue {
@@ -719,6 +720,7 @@ impl Merge for PauseValue {
         Some(PauseValue {
             duration: Value::merge(first.duration, second.duration),
             offset_bytes: Value::merge(first.offset_bytes, second.offset_bytes),
+            join: first.join.or(second.join),
         })
     }
 }

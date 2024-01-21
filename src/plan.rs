@@ -116,6 +116,12 @@ pub struct Pause<T> {
     pub after: T,
 }
 
+impl<T: PauseJoins> PauseJoins for Pause<T> {
+    fn joins(&self) -> impl Iterator<Item = String> {
+        self.before.joins().chain(self.after.joins())
+    }
+}
+
 impl<T: Clone> Clone for Pause<T> {
     fn clone(&self) -> Self {
         Pause {
@@ -180,6 +186,7 @@ impl<T: Evaluate<O>, O> Evaluate<crate::PauseOutput<O>> for Pause<T> {
 pub struct PauseValue {
     duration: PlanValue<Duration>,
     offset_bytes: PlanValue<i64>,
+    join: Vec<String>,
 }
 
 impl TryFrom<bindings::PauseValue> for PauseValue {
@@ -195,6 +202,7 @@ impl TryFrom<bindings::PauseValue> for PauseValue {
                 .map(PlanValue::<i64>::try_from)
                 .transpose()?
                 .unwrap_or_default(),
+            join: binding.join.map(|j| Vec::from(j)).unwrap_or_default(),
         })
     }
 }
@@ -209,6 +217,7 @@ impl Evaluate<crate::PauseValueOutput> for PauseValue {
         Ok(crate::PauseValueOutput {
             duration: self.duration.evaluate(state)?,
             offset_bytes: self.offset_bytes.evaluate(state)?,
+            join: self.join.clone(),
         })
     }
 }
@@ -290,6 +299,19 @@ pub struct HttpPause {
     pub response_body: Vec<PauseValue>,
 }
 
+impl PauseJoins for HttpPause {
+    fn joins(&self) -> impl Iterator<Item = String> {
+        self.open
+            .iter()
+            .flat_map(|x| x.join.iter())
+            .chain(self.request_header.iter().flat_map(|x| x.join.iter()))
+            .chain(self.request_body.iter().flat_map(|x| x.join.iter()))
+            .chain(self.response_header.iter().flat_map(|x| x.join.iter()))
+            .chain(self.response_body.iter().flat_map(|x| x.join.iter()))
+            .map(|x| x.to_owned())
+    }
+}
+
 impl TryFrom<bindings::HttpPause> for HttpPause {
     type Error = Error;
     fn try_from(value: bindings::HttpPause) -> std::result::Result<Self, Self::Error> {
@@ -346,8 +368,8 @@ pub struct Http1Request {
     pub pause: Pause<Http1Pause>,
 }
 
-impl Http1Request {
-    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::Http1PlanOutput>
+impl Evaluate<crate::Http1PlanOutput> for Http1Request {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::Http1PlanOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
@@ -414,6 +436,19 @@ pub struct Http1Pause {
     pub request_body: Vec<PauseValue>,
     pub response_header: Vec<PauseValue>,
     pub response_body: Vec<PauseValue>,
+}
+
+impl PauseJoins for Http1Pause {
+    fn joins(&self) -> impl Iterator<Item = String> {
+        self.open
+            .iter()
+            .flat_map(|x| x.join.iter())
+            .chain(self.request_header.iter().flat_map(|x| x.join.iter()))
+            .chain(self.request_body.iter().flat_map(|x| x.join.iter()))
+            .chain(self.response_header.iter().flat_map(|x| x.join.iter()))
+            .chain(self.response_body.iter().flat_map(|x| x.join.iter()))
+            .map(|x| x.to_owned())
+    }
 }
 
 impl TryFrom<bindings::Http1Pause> for Http1Pause {
@@ -490,6 +525,12 @@ pub struct GraphQlRequest {
     pub pause: Pause<GraphQlPause>,
 }
 
+impl GraphQlRequest {
+    pub fn pause_joins(&self) -> impl Iterator<Item = String> {
+        std::iter::empty()
+    }
+}
+
 impl TryFrom<bindings::GraphQl> for GraphQlRequest {
     type Error = Error;
     fn try_from(binding: bindings::GraphQl) -> Result<Self> {
@@ -512,8 +553,8 @@ impl TryFrom<bindings::GraphQl> for GraphQlRequest {
     }
 }
 
-impl GraphQlRequest {
-    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::GraphQlPlanOutput>
+impl Evaluate<crate::GraphQlPlanOutput> for GraphQlRequest {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::GraphQlPlanOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
@@ -567,8 +608,8 @@ pub struct TcpRequest {
     pub pause: Pause<TcpPause>,
 }
 
-impl TcpRequest {
-    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::TcpPlanOutput>
+impl Evaluate<crate::TcpPlanOutput> for TcpRequest {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::TcpPlanOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
@@ -610,6 +651,17 @@ pub struct TcpPause {
     pub handshake: Vec<PauseValue>,
     pub first_read: Vec<PauseValue>,
     pub first_write: Vec<PauseValue>,
+}
+
+impl PauseJoins for TcpPause {
+    fn joins(&self) -> impl Iterator<Item = String> {
+        self.handshake
+            .iter()
+            .flat_map(|x| x.join.iter())
+            .chain(self.first_read.iter().flat_map(|x| x.join.iter()))
+            .chain(self.first_write.iter().flat_map(|x| x.join.iter()))
+            .map(|x| x.to_owned())
+    }
 }
 
 impl TryFrom<bindings::TcpPause> for TcpPause {
@@ -740,6 +792,7 @@ impl TryFrom<PlanData> for Duration {
                 .map_err(|e| match e {
                     go_parse_duration::Error::ParseError(s) => Error(s),
                 }),
+            cel_interpreter::Value::Duration(x) => Ok(x),
             _ => Err(Error("invalid type for duration value".to_owned())),
         }
     }
@@ -939,8 +992,8 @@ pub struct TlsRequest {
     pub pause: Pause<TlsPause>,
 }
 
-impl TlsRequest {
-    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::TlsPlanOutput>
+impl Evaluate<crate::TlsPlanOutput> for TlsRequest {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::TlsPlanOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
@@ -982,6 +1035,17 @@ pub struct TlsPause {
     pub handshake: Vec<PauseValue>,
     pub first_read: Vec<PauseValue>,
     pub first_write: Vec<PauseValue>,
+}
+
+impl PauseJoins for TlsPause {
+    fn joins(&self) -> impl Iterator<Item = String> {
+        self.handshake
+            .iter()
+            .flat_map(|x| x.join.iter())
+            .chain(self.first_read.iter().flat_map(|x| x.join.iter()))
+            .chain(self.first_write.iter().flat_map(|x| x.join.iter()))
+            .map(|x| x.to_owned())
+    }
 }
 
 impl TryFrom<bindings::TlsPause> for TlsPause {
@@ -1062,6 +1126,15 @@ pub struct QuicPause {
     pub handshake: Vec<PauseValue>,
 }
 
+impl PauseJoins for QuicPause {
+    fn joins(&self) -> impl Iterator<Item = String> {
+        self.handshake
+            .iter()
+            .flat_map(|x| x.join.iter())
+            .map(|x| x.to_owned())
+    }
+}
+
 impl TryFrom<bindings::QuicPause> for QuicPause {
     type Error = Error;
     fn try_from(value: bindings::QuicPause) -> std::result::Result<Self, Self::Error> {
@@ -1108,6 +1181,16 @@ impl TryFrom<bindings::Udp> for UdpRequest {
 pub struct UdpPause {
     pub first_read: Vec<PauseValue>,
     pub first_write: Vec<PauseValue>,
+}
+
+impl PauseJoins for UdpPause {
+    fn joins(&self) -> impl Iterator<Item = String> {
+        self.first_read
+            .iter()
+            .flat_map(|x| x.join.iter())
+            .chain(self.first_write.iter().flat_map(|x| x.join.iter()))
+            .map(|x| x.to_owned())
+    }
 }
 
 impl TryFrom<bindings::UdpPause> for UdpPause {
@@ -1485,6 +1568,66 @@ impl StepProtocols {
             }
         }
     }
+
+    pub fn pause_joins(&self) -> Vec<String> {
+        match self {
+            Self::GraphQlHttp { graphql, http } => {
+                Box::new(graphql.pause_joins().chain(http.pause.joins())).collect()
+            }
+            Self::GraphQlHttp1 {
+                graphql,
+                http1,
+                tls,
+                tcp,
+            } => {
+                let result = graphql
+                    .pause_joins()
+                    .chain(http1.pause.joins())
+                    .chain(tcp.pause.joins());
+                let Some(tls) = tls else {
+                    return result.collect();
+                };
+
+                result.chain(tls.pause.joins()).collect()
+            }
+            Self::GraphQlHttp2 {
+                graphql,
+                http2,
+                tls,
+                tcp,
+            } => {
+                unimplemented!()
+            }
+            Self::GraphQlHttp3 {
+                graphql,
+                http3,
+                quic,
+                udp,
+            } => {
+                unimplemented!()
+            }
+            Self::Http { http } => http.pause.joins().collect(),
+            Self::Http1 { http1, tls, tcp } => {
+                let result = http1.pause.joins().chain(tcp.pause.joins());
+                let Some(tls) = tls else {
+                    return result.collect();
+                };
+
+                result.chain(tls.pause.joins()).collect()
+            }
+            Self::Http2 { http2, tls, tcp } => {
+                unimplemented!()
+            }
+            Self::Http3 { http3, quic, udp } => {
+                unimplemented!()
+            }
+            Self::Tls { tls, tcp } => tls.pause.joins().chain(tcp.pause.joins()).collect(),
+            Self::Dtls { tls, udp } => tls.pause.joins().chain(udp.pause.joins()).collect(),
+            Self::Tcp { tcp } => tcp.pause.joins().collect(),
+            Self::Quic { quic, udp } => quic.pause.joins().chain(udp.pause.joins()).collect(),
+            Self::Udp { udp } => udp.pause.joins().collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1500,8 +1643,8 @@ pub enum Protocol {
     Udp(UdpRequest),
 }
 
-impl Protocol {
-    pub fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<StepPlanOutput>
+impl Evaluate<StepPlanOutput> for Protocol {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<StepPlanOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
@@ -2113,6 +2256,7 @@ where
         cel_functions::form_urlencoded_parts,
     );
     ctx.add_function("bytes", cel_functions::bytes);
+    ctx.add_function("randomDuration", cel_functions::random_duration);
 }
 
 pub trait Evaluate<T> {
@@ -2142,4 +2286,8 @@ where
     Ok(PlanData(program.execute(&context).map_err(|e| {
         Error(format!("execute cel {}: {}", cel, e))
     })?))
+}
+
+trait PauseJoins {
+    fn joins(&self) -> impl Iterator<Item = String>;
 }
