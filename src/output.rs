@@ -1112,6 +1112,7 @@ impl<T: Into<Value>> From<PauseOutput<T>> for Value {
 pub struct PauseValueOutput {
     pub duration: Duration,
     pub offset_bytes: i64,
+    pub join: Vec<String>,
 }
 
 impl From<PauseValueOutput> for Value {

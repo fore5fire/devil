@@ -1,4 +1,5 @@
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::Poll;
 use std::time::Instant;
 
@@ -7,10 +8,12 @@ use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
 use chrono::Duration;
+use futures::future::join_all;
 use tokio::io::ReadBuf;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use super::runner::Runner;
+use super::Context;
 use crate::Http1Error;
 use crate::Http1PlanOutput;
 use crate::Http1RequestOutput;
@@ -22,6 +25,7 @@ use crate::{Error, Http1Output, Http1Response, Output};
 pub(super) struct Http1Runner {
     out: Http1Output,
     stream: Box<dyn Runner>,
+    ctx: Arc<Context>,
     start_time: Instant,
     req_header_start_time: Option<Instant>,
     req_body_start_time: Option<Instant>,
@@ -35,7 +39,7 @@ pub(super) struct Http1Runner {
     resp_body_buf: Vec<u8>,
 }
 
-impl AsyncRead for Http1Runner {
+impl<'a> AsyncRead for Http1Runner {
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -103,7 +107,7 @@ impl AsyncRead for Http1Runner {
     }
 }
 
-impl AsyncWrite for Http1Runner {
+impl<'a> AsyncWrite for Http1Runner {
     fn poll_write(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -139,7 +143,11 @@ impl AsyncWrite for Http1Runner {
 }
 
 impl Http1Runner {
-    pub(super) async fn new(stream: Box<dyn Runner>, plan: Http1PlanOutput) -> crate::Result<Self> {
+    pub(super) async fn new(
+        ctx: Arc<Context>,
+        stream: Box<dyn Runner>,
+        plan: Http1PlanOutput,
+    ) -> crate::Result<Self> {
         let start_time = Instant::now();
 
         Ok(Self {
@@ -151,6 +159,7 @@ impl Http1Runner {
                 pause: PauseOutput::with_planned_capacity(&plan.pause),
                 plan,
             },
+            ctx,
             stream,
             start_time,
             req_header_start_time: None,
@@ -293,9 +302,16 @@ impl Runner for Http1Runner {
             println!("pausing before http open for {:?}", p.duration);
             let start = Instant::now();
             tokio::time::sleep(p.duration.to_std().unwrap()).await;
+            join_all(
+                p.join
+                    .iter()
+                    .map(|join| self.ctx.pause_barrier(join).wait()),
+            )
+            .await;
             self.out.pause.before.open.push(crate::PauseValueOutput {
                 duration: Duration::from_std(start.elapsed()).unwrap(),
                 offset_bytes: p.offset_bytes,
+                join: p.join.clone(),
             });
         }
 
@@ -307,15 +323,28 @@ impl Runner for Http1Runner {
             println!("pausing after http open for {:?}", p.duration);
             let start = Instant::now();
             tokio::time::sleep(p.duration.to_std().unwrap()).await;
+            join_all(
+                p.join
+                    .iter()
+                    .map(|join| self.ctx.pause_barrier(join).wait()),
+            )
+            .await;
             self.out.pause.after.open.push(crate::PauseValueOutput {
                 duration: Duration::from_std(start.elapsed()).unwrap(),
                 offset_bytes: p.offset_bytes,
+                join: p.join.clone(),
             });
         }
         for p in &self.out.plan.pause.before.request_header {
             println!("pausing before http request headers for {:?}", p.duration);
             let start = Instant::now();
             tokio::time::sleep(p.duration.to_std().unwrap()).await;
+            join_all(
+                p.join
+                    .iter()
+                    .map(|join| self.ctx.pause_barrier(join).wait()),
+            )
+            .await;
             self.out
                 .pause
                 .before
@@ -323,6 +352,7 @@ impl Runner for Http1Runner {
                 .push(crate::PauseValueOutput {
                     duration: Duration::from_std(start.elapsed()).unwrap(),
                     offset_bytes: p.offset_bytes,
+                    join: p.join.clone(),
                 });
         }
 
@@ -335,6 +365,12 @@ impl Runner for Http1Runner {
             println!("pausing after http request headers for {:?}", p.duration);
             let start = Instant::now();
             tokio::time::sleep(p.duration.to_std().unwrap()).await;
+            join_all(
+                p.join
+                    .iter()
+                    .map(|join| self.ctx.pause_barrier(join).wait()),
+            )
+            .await;
             self.out
                 .pause
                 .after
@@ -342,6 +378,7 @@ impl Runner for Http1Runner {
                 .push(crate::PauseValueOutput {
                     duration: Duration::from_std(start.elapsed()).unwrap(),
                     offset_bytes: p.offset_bytes,
+                    join: p.join.clone(),
                 });
         }
 
@@ -390,6 +427,12 @@ impl Runner for Http1Runner {
             println!("pausing after http request headers for {:?}", p.duration);
             let start = Instant::now();
             tokio::time::sleep(p.duration.to_std().unwrap()).await;
+            join_all(
+                p.join
+                    .iter()
+                    .map(|join| self.ctx.pause_barrier(join).wait()),
+            )
+            .await;
             self.out
                 .pause
                 .after
@@ -397,6 +440,7 @@ impl Runner for Http1Runner {
                 .push(crate::PauseValueOutput {
                     duration: Duration::from_std(start.elapsed()).unwrap(),
                     offset_bytes: p.offset_bytes,
+                    join: p.join.clone(),
                 });
         }
         self.resp_start_time = Some(Instant::now());

@@ -8,9 +8,12 @@ pub mod tls;
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
+use std::num::TryFromIntError;
+use std::sync::Arc;
 
 use futures::future::try_join_all;
 use indexmap::IndexMap;
+use tokio::sync::Barrier;
 
 use crate::{
     Evaluate, IterableKey, Output, Plan, Step, StepOutput, StepPlanOutput, StepPlanOutputs,
@@ -81,6 +84,15 @@ impl<'a> Executor<'a> {
         let mut for_iterator = for_pairs.map(|pairs| pairs.into_iter());
 
         if parallel {
+            let ctx = Arc::new(Context {
+                pause_barriers: step
+                    .protocols
+                    .pause_joins()
+                    .into_iter()
+                    .map(|key| Ok((key.to_owned(), Barrier::new(count.try_into()?))))
+                    .collect::<Result<HashMap<_, _>, TryFromIntError>>()?,
+            });
+
             let mut states: Vec<_> = (0..count)
                 .map(|i| {
                     // Process current item if for is used.
@@ -100,14 +112,20 @@ impl<'a> Executor<'a> {
                     (key.unwrap_or(IterableKey::Uint(i)), inputs.clone())
                 })
                 .collect();
-            let ops = try_join_all(
-                states
-                    .iter_mut()
-                    .map(|(key, state)| Self::iteration(key, step.protocols.clone(), state)),
-            )
+
+            let ops = try_join_all(states.iter_mut().map(|(key, state)| {
+                Self::iteration(ctx.clone(), key, step.protocols.clone(), state)
+            }))
             .await?;
+
             output.extend(ops.into_iter().map(|(key, out)| (key.to_owned(), out)));
         } else {
+            if !step.protocols.pause_joins().is_empty() {
+                return Err(Box::new(crate::Error(
+                    "join only allowed with parallel steps".to_owned(),
+                )));
+            }
+            let ctx = Arc::new(Context::default());
             for i in 0..count {
                 // Process current item if for is used.
                 let mut key = None;
@@ -133,7 +151,8 @@ impl<'a> Executor<'a> {
                 }
 
                 inputs.run_count = Some(crate::RunCountOutput { index: i });
-                let (_, out) = Self::iteration(&key, step.protocols.clone(), &mut inputs).await?;
+                let (_, out) =
+                    Self::iteration(ctx.clone(), &key, step.protocols.clone(), &mut inputs).await?;
                 output.insert(key, out);
             }
         }
@@ -143,6 +162,7 @@ impl<'a> Executor<'a> {
     }
 
     async fn iteration(
+        ctx: Arc<Context>,
         key: &IterableKey,
         protos: StepProtocols,
         inputs: &mut State<'_>,
@@ -170,7 +190,7 @@ impl<'a> Executor<'a> {
         // We built the protocol requests top to bottom, now reverse iterate so we build the
         // runners bottom to top.
         for req in requests.into_iter().rev() {
-            runner = Some(new_runner(runner, req).await?)
+            runner = Some(new_runner(ctx.clone(), runner, req).await?)
         }
         let mut runner = runner.expect("no plan should have an empty protocol stack");
         runner.execute().await;
@@ -248,3 +268,14 @@ impl Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+#[derive(Debug, Default)]
+pub(super) struct Context {
+    pause_barriers: HashMap<String, Barrier>,
+}
+
+impl Context {
+    pub(super) fn pause_barrier<'a>(&'a self, tag: &str) -> &'a Barrier {
+        &self.pause_barriers[tag]
+    }
+}

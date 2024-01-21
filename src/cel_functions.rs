@@ -1,5 +1,6 @@
 use cel_interpreter::extractors::This;
 use cel_interpreter::{ExecutionError, FunctionContext, ResolveResult, Value};
+use rand::{CryptoRng, Rng};
 use std::{collections::HashMap, rc::Rc, sync::Arc};
 use url::Url;
 
@@ -33,7 +34,7 @@ fn url_to_cel(url: Url) -> cel_interpreter::Value {
     })
 }
 
-pub fn form_urlencoded_parts(This(query): This<Arc<String>>) -> Arc<Vec<cel_interpreter::Value>> {
+pub fn form_urlencoded_parts(This(query): This<Arc<String>>) -> Arc<Vec<Value>> {
     Arc::new(
         form_urlencoded::parse(query.as_bytes())
             .into_owned()
@@ -51,4 +52,23 @@ pub fn form_urlencoded_parts(This(query): This<Arc<String>>) -> Arc<Vec<cel_inte
 
 pub fn bytes(This(string): This<Arc<String>>) -> Arc<Vec<u8>> {
     Arc::new(string.as_ref().clone().into_bytes())
+}
+
+pub fn random_duration(
+    ftx: &FunctionContext,
+    min: i64,
+    max: i64,
+    unit: Arc<String>,
+) -> Result<Value> {
+    let val = rand::thread_rng().gen_range(min..max);
+    Ok(Value::Duration(match unit.as_str() {
+        "d" => chrono::Duration::days(val),
+        "h" => chrono::Duration::hours(val),
+        "m" => chrono::Duration::minutes(val),
+        "s" => chrono::Duration::seconds(val),
+        "ms" => chrono::Duration::milliseconds(val),
+        "us" => chrono::Duration::microseconds(val),
+        "ns" => chrono::Duration::nanoseconds(val),
+        _ => return Err(ftx.error("invalid unit")),
+    }))
 }

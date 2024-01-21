@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::{Output, StepPlanOutput};
 
 use super::{
@@ -17,20 +19,22 @@ pub(crate) trait Runner: Stream + std::fmt::Debug {
 }
 
 pub(super) async fn new_runner(
+    ctx: Arc<super::Context>,
     transport: Option<Box<dyn Runner>>,
     step: StepPlanOutput,
 ) -> crate::Result<Box<dyn Runner>> {
     Ok(match step {
         StepPlanOutput::Tcp(output) => {
             assert!(transport.is_none());
-            Box::new(TcpRunner::new(output).await?) as Box<dyn Runner>
+            Box::new(TcpRunner::new(ctx, output).await?) as Box<dyn Runner>
         }
         StepPlanOutput::Http(output) => {
             assert!(transport.is_none());
-            Box::new(HttpRunner::new(output).await?) as Box<dyn Runner>
+            Box::new(HttpRunner::new(ctx, output).await?) as Box<dyn Runner>
         }
         StepPlanOutput::Tls(output) => Box::new(
             TlsRunner::new(
+                ctx,
                 transport.expect("no plan should have tls as a base protocol"),
                 output,
             )
@@ -38,6 +42,7 @@ pub(super) async fn new_runner(
         ) as Box<dyn Runner>,
         StepPlanOutput::Http1(output) => Box::new(
             Http1Runner::new(
+                ctx,
                 transport.expect("no plan should have http1 as a base protocol"),
                 output,
             )
@@ -45,6 +50,7 @@ pub(super) async fn new_runner(
         ) as Box<dyn Runner>,
         StepPlanOutput::GraphQl(output) => Box::new(
             GraphQlRunner::new(
+                ctx,
                 transport.expect("no plan should have graphql as a base protocol"),
                 output,
             )

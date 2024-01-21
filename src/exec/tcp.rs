@@ -1,10 +1,12 @@
 use std::net::SocketAddr;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::Poll;
 use std::time::Instant;
 
 use async_trait::async_trait;
 use chrono::Duration;
+use futures::future::join_all;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{lookup_host, TcpStream};
 
@@ -15,9 +17,11 @@ use crate::{
 
 use super::runner::Runner;
 use super::tee::Tee;
+use super::Context;
 
 #[derive(Debug)]
 pub(super) struct TcpRunner {
+    ctx: Arc<Context>,
     out: TcpOutput,
     stream: Tee<TcpStream>,
     start: Instant,
@@ -80,7 +84,7 @@ impl AsyncWrite for TcpRunner {
 impl Unpin for TcpRunner {}
 
 impl<'a> TcpRunner {
-    pub(super) async fn new(plan: TcpPlanOutput) -> crate::Result<TcpRunner> {
+    pub(super) async fn new(ctx: Arc<Context>, plan: TcpPlanOutput) -> crate::Result<TcpRunner> {
         //let addr = ip_for_host(&host).await?;
         let addr = format!("{}:{}", plan.host, plan.port);
         let mut pause = PauseOutput::with_planned_capacity(&plan.pause);
@@ -93,9 +97,11 @@ impl<'a> TcpRunner {
             println!("pausing after tcp handshake for {:?}", p.duration);
             let before = Instant::now();
             tokio::time::sleep(p.duration.to_std().unwrap()).await;
+            join_all(p.join.iter().map(|join| ctx.pause_barrier(join).wait()));
             pause.after.handshake.push(crate::PauseValueOutput {
                 duration: Duration::from_std(before.elapsed()).unwrap(),
                 offset_bytes: p.offset_bytes,
+                join: p.join.clone(),
             });
         }
         Ok(TcpRunner {
@@ -114,6 +120,7 @@ impl<'a> TcpRunner {
                 handshake_duration: Some(Duration::from_std(handshake_duration).unwrap()),
                 pause,
             },
+            ctx,
             stream: Tee::new(stream),
             start,
             first_write: None,

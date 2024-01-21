@@ -1,12 +1,13 @@
 use std::pin::Pin;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use super::http1::Http1Runner;
 use super::runner::Runner;
 use super::tcp::TcpRunner;
 use super::tls::TlsRunner;
+use super::{http1::Http1Runner, Context};
 use crate::{
     Error, HttpOutput, HttpPauseOutput, HttpPlanOutput, HttpRequestOutput, HttpResponse, Output,
     PauseOutput, TcpPlanOutput, TlsPlanOutput,
@@ -58,23 +59,26 @@ impl AsyncWrite for HttpRunner {
 }
 
 impl HttpRunner {
-    pub(super) async fn new(plan: HttpPlanOutput) -> crate::Result<Self> {
+    pub(super) async fn new(ctx: Arc<Context>, plan: HttpPlanOutput) -> crate::Result<Self> {
         // For now we always use TCP and possibly TLS. To support HTTP/3 we'll need to decide
         // whether to use UPD and QUIC instead.
         let tcp: Box<dyn Runner> = Box::new(
-            TcpRunner::new(TcpPlanOutput {
-                host: plan
-                    .url
-                    .host()
-                    .ok_or_else(|| Error("url is missing host".to_owned()))?
-                    .to_string(),
-                port: plan
-                    .url
-                    .port_or_known_default()
-                    .ok_or_else(|| Error("url is missing port".to_owned()))?,
-                body: Vec::new(),
-                pause: PauseOutput::default(),
-            })
+            TcpRunner::new(
+                ctx.clone(),
+                TcpPlanOutput {
+                    host: plan
+                        .url
+                        .host()
+                        .ok_or_else(|| Error("url is missing host".to_owned()))?
+                        .to_string(),
+                    port: plan
+                        .url
+                        .port_or_known_default()
+                        .ok_or_else(|| Error("url is missing port".to_owned()))?,
+                    body: Vec::new(),
+                    pause: PauseOutput::default(),
+                },
+            )
             .await?,
         );
 
@@ -83,6 +87,7 @@ impl HttpRunner {
         } else {
             Box::new(
                 TlsRunner::new(
+                    ctx.clone(),
                     tcp,
                     TlsPlanOutput {
                         host: plan
@@ -104,6 +109,7 @@ impl HttpRunner {
 
         Ok(HttpRunner::Http1(Box::new(
             Http1Runner::new(
+                ctx,
                 inner as Box<dyn Runner>,
                 crate::Http1PlanOutput {
                     url: plan.url,

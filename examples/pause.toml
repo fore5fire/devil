@@ -14,8 +14,7 @@ after.response_headers = [{duration = "5ms"}, {duration = "10ms", offset_bytes =
 [http1_pause.tcp.pause]
 # Pause after the tcp handshake but before the tls handshake. Could also be
 # done using `http1_pause.tls.pause.before`.
-after.handshake = "1s"
-
+after.handshake.duration = "1s"
 
 [multi_pause.tls]
 host = "example.com"
@@ -32,3 +31,10 @@ match = "<< >>"
 offset_bytes = 50
 duration = "500ms"
 
+[parallel_join.http]
+url = "https://example.com/"
+pause.after.open.duration.cel = "randomDuration(0, 20, 's')"
+pause.after.open.join = "a"
+[parallel_join.run]
+parallel = true
+count = 5

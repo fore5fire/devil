@@ -4,6 +4,7 @@ use std::{pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::Duration;
+use futures::future::join_all;
 use rustls::pki_types::ServerName;
 use rustls::RootCertStore;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -12,6 +13,7 @@ use tokio_rustls::client::TlsStream;
 
 use super::runner::Runner;
 use super::tee::Tee;
+use super::Context;
 use crate::{
     Output, PauseOutput, PauseValueOutput, TlsError, TlsOutput, TlsPlanOutput, TlsRequestOutput,
     TlsResponse, TlsVersion, WithPlannedCapacity,
@@ -19,6 +21,7 @@ use crate::{
 
 #[derive(Debug)]
 pub(super) struct TlsRunner {
+    ctx: Arc<Context>,
     out: TlsOutput,
     stream: Tee<TlsStream<Box<dyn Runner>>>,
     start: Instant,
@@ -49,10 +52,23 @@ impl AsyncWrite for TlsRunner {
         let poll = Pin::new(&mut self.stream).poll_write(cx, buf);
         if let Poll::Ready(Ok(_)) = &poll {
             if self.first_write.is_none() {
+                let mut pause_results = Vec::new();
                 for p in &self.out.plan.pause.after.first_write {
                     println!("pausing after first write for {:?}", p.duration);
+                    let start = Instant::now();
                     std::thread::sleep(p.duration.to_std().unwrap());
+                    join_all(
+                        p.join
+                            .iter()
+                            .map(|join| self.ctx.pause_barrier(join).wait()),
+                    );
+                    pause_results.push(crate::PauseValueOutput {
+                        duration: Duration::from_std(start.elapsed()).unwrap(),
+                        offset_bytes: p.offset_bytes,
+                        join: p.join.clone(),
+                    });
                 }
+                self.out.pause.after.first_write.extend(pause_results);
             }
         }
         poll
@@ -81,6 +97,7 @@ impl Unpin for TlsRunner {}
 
 impl TlsRunner {
     pub(super) async fn new(
+        ctx: Arc<Context>,
         stream: Box<dyn Runner>,
         plan: TlsPlanOutput,
     ) -> crate::Result<TlsRunner> {
@@ -106,6 +123,7 @@ impl TlsRunner {
             pause.before.handshake.push(PauseValueOutput {
                 duration: Duration::from_std(before.elapsed()).unwrap(),
                 offset_bytes: p.offset_bytes,
+                join: p.join.clone(),
             })
         }
         let start = Instant::now();
@@ -116,9 +134,17 @@ impl TlsRunner {
         let handshake_duration = start.elapsed();
         for p in &plan.pause.after.handshake {
             println!("pausing after tls handshake for {:?}", p.duration);
+            let start = Instant::now();
             tokio::time::sleep(p.duration.to_std().unwrap()).await;
+            join_all(p.join.iter().map(|join| ctx.pause_barrier(join).wait())).await;
+            pause.after.handshake.push(PauseValueOutput {
+                duration: Duration::from_std(start.elapsed()).unwrap(),
+                offset_bytes: p.offset_bytes,
+                join: p.join.clone(),
+            })
         }
         Ok(TlsRunner {
+            ctx,
             stream: Tee::new(connection),
             start,
             out: TlsOutput {
