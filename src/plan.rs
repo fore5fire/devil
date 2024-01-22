@@ -20,7 +20,7 @@ pub struct Plan {
 
 impl<'a> Plan {
     pub fn parse(input: &'a str) -> Result<Self> {
-        let parsed = toml::from_str(input).map_err(|e| Error(e.to_string()))?;
+        let parsed = bindings::Plan::parse(input)?;
         Self::from_binding(parsed)
     }
 
@@ -293,9 +293,9 @@ impl Evaluate<crate::HttpPlanOutput> for HttpRequest {
 #[derive(Debug, Clone, Default)]
 pub struct HttpPause {
     pub open: Vec<PauseValue>,
-    pub request_header: Vec<PauseValue>,
+    pub request_headers: Vec<PauseValue>,
     pub request_body: Vec<PauseValue>,
-    pub response_header: Vec<PauseValue>,
+    pub response_headers: Vec<PauseValue>,
     pub response_body: Vec<PauseValue>,
 }
 
@@ -304,9 +304,9 @@ impl PauseJoins for HttpPause {
         self.open
             .iter()
             .flat_map(|x| x.join.iter())
-            .chain(self.request_header.iter().flat_map(|x| x.join.iter()))
+            .chain(self.request_headers.iter().flat_map(|x| x.join.iter()))
             .chain(self.request_body.iter().flat_map(|x| x.join.iter()))
-            .chain(self.response_header.iter().flat_map(|x| x.join.iter()))
+            .chain(self.response_headers.iter().flat_map(|x| x.join.iter()))
             .chain(self.response_body.iter().flat_map(|x| x.join.iter()))
             .map(|x| x.to_owned())
     }
@@ -320,7 +320,7 @@ impl TryFrom<bindings::HttpPause> for HttpPause {
                 .into_iter()
                 .map(PauseValue::try_from)
                 .collect::<Result<_>>()?,
-            request_header: Vec::from(value.request_header.unwrap_or_default())
+            request_headers: Vec::from(value.request_headers.unwrap_or_default())
                 .into_iter()
                 .map(PauseValue::try_from)
                 .collect::<Result<_>>()?,
@@ -328,7 +328,7 @@ impl TryFrom<bindings::HttpPause> for HttpPause {
                 .into_iter()
                 .map(PauseValue::try_from)
                 .collect::<Result<_>>()?,
-            response_header: Vec::from(value.response_header.unwrap_or_default())
+            response_headers: Vec::from(value.response_headers.unwrap_or_default())
                 .into_iter()
                 .map(PauseValue::try_from)
                 .collect::<Result<_>>()?,
@@ -349,9 +349,9 @@ impl Evaluate<HttpPauseOutput> for HttpPause {
     {
         Ok(HttpPauseOutput {
             open: self.open.evaluate(state)?,
-            request_header: self.request_header.evaluate(state)?,
+            request_headers: self.request_headers.evaluate(state)?,
             request_body: self.request_body.evaluate(state)?,
-            response_header: self.response_header.evaluate(state)?,
+            response_headers: self.response_headers.evaluate(state)?,
             response_body: self.response_body.evaluate(state)?,
         })
     }
@@ -432,9 +432,9 @@ impl TryFrom<bindings::Http1> for Http1Request {
 #[derive(Debug, Clone, Default)]
 pub struct Http1Pause {
     pub open: Vec<PauseValue>,
-    pub request_header: Vec<PauseValue>,
+    pub request_headers: Vec<PauseValue>,
     pub request_body: Vec<PauseValue>,
-    pub response_header: Vec<PauseValue>,
+    pub response_headers: Vec<PauseValue>,
     pub response_body: Vec<PauseValue>,
 }
 
@@ -443,9 +443,9 @@ impl PauseJoins for Http1Pause {
         self.open
             .iter()
             .flat_map(|x| x.join.iter())
-            .chain(self.request_header.iter().flat_map(|x| x.join.iter()))
+            .chain(self.request_headers.iter().flat_map(|x| x.join.iter()))
             .chain(self.request_body.iter().flat_map(|x| x.join.iter()))
-            .chain(self.response_header.iter().flat_map(|x| x.join.iter()))
+            .chain(self.response_headers.iter().flat_map(|x| x.join.iter()))
             .chain(self.response_body.iter().flat_map(|x| x.join.iter()))
             .map(|x| x.to_owned())
     }
@@ -459,7 +459,7 @@ impl TryFrom<bindings::Http1Pause> for Http1Pause {
                 .into_iter()
                 .map(PauseValue::try_from)
                 .collect::<Result<_>>()?,
-            request_header: Vec::from(value.request_header.unwrap_or_default())
+            request_headers: Vec::from(value.request_headers.unwrap_or_default())
                 .into_iter()
                 .map(PauseValue::try_from)
                 .collect::<Result<_>>()?,
@@ -467,7 +467,7 @@ impl TryFrom<bindings::Http1Pause> for Http1Pause {
                 .into_iter()
                 .map(PauseValue::try_from)
                 .collect::<Result<_>>()?,
-            response_header: Vec::from(value.response_header.unwrap_or_default())
+            response_headers: Vec::from(value.response_headers.unwrap_or_default())
                 .into_iter()
                 .map(PauseValue::try_from)
                 .collect::<Result<_>>()?,
@@ -488,9 +488,9 @@ impl Evaluate<Http1PauseOutput> for Http1Pause {
     {
         Ok(Http1PauseOutput {
             open: self.open.evaluate(state)?,
-            request_header: self.request_header.evaluate(state)?,
+            request_headers: self.request_headers.evaluate(state)?,
             request_body: self.request_body.evaluate(state)?,
-            response_header: self.response_header.evaluate(state)?,
+            response_headers: self.response_headers.evaluate(state)?,
             response_body: self.response_body.evaluate(state)?,
         })
     }
@@ -2257,6 +2257,7 @@ where
     );
     ctx.add_function("bytes", cel_functions::bytes);
     ctx.add_function("randomDuration", cel_functions::random_duration);
+    ctx.add_function("randomInt", cel_functions::random_int);
 }
 
 pub trait Evaluate<T> {

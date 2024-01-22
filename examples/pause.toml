@@ -1,40 +1,49 @@
 courier.version = 0
 
-[http_pause.http]
+#[http_pause.http]
+#url = "https://example.com/"
+#pause.after.open.duration = "500ms"
+#pause.after.request_body.duration = "500ms"
+#
+#[http1_pause.http1]
+#url = "https://example.com/test"
+#[http1_pause.http1.pause]
+#after.open.duration = "10ms"
+#after.request_headers.duration = "50us"
+#after.response_headers = [{duration = "5ms"}, {duration = "10ms", offset_bytes = 100 }]
+#[http1_pause.tcp.pause]
+## Pause after the tcp handshake but before the tls handshake. Could also be
+## done using `http1_pause.tls.pause.before`.
+#after.handshake.duration = "1s"
+#
+#[multi_pause.tls]
+#host = "example.com"
+#port = 443
+#body = "GET / HTTP/1.0\r\n\r\n"
+#pause.after.handshake.duration = "500ms"
+#[[multi_pause.tls.pause.after.first_write]]
+#duration = "500ms"
+#[[multi_pause.tls.pause.after.first_write]]
+#offset_bytes = 50
+#duration = "500ms"
+#[multi_pause.tls.pause.after.first_read]
+##match = "<< >>"
+#offset_bytes = 50
+#duration = "500ms"
+
+# Sync parallel requests by pausing until all are ready.
+[parallel_join.http1]
 url = "https://example.com/"
-pause.after.open.duration = "500ms"
-pause.after.request_body.duration = "500ms"
-
-[http1_pause.http1]
-url = "https://example.com/test"
-[http1_pause.http1.pause]
-after.open.duration = "10ms"
-after.request_headers.duration = "50us"
-after.response_headers = [{duration = "5ms"}, {duration = "10ms", offset_bytes = 100 }]
-[http1_pause.tcp.pause]
-# Pause after the tcp handshake but before the tls handshake. Could also be
-# done using `http1_pause.tls.pause.before`.
-after.handshake.duration = "1s"
-
-[multi_pause.tls]
-host = "example.com"
-port = 443
-body = "GET / HTTP/1.0\r\n\r\n"
-pause.after.open.duration = "500ms"
-[[multi_pause.tls.pause.after.request_body]]
-duration = "500ms"
-[[multi_pause.tls.pause.after.request_body]]
-offset_bytes = 50
-duration = "500ms"
-[multi_pause.tls.pause.after.response_headers]
-match = "<< >>"
-offset_bytes = 50
-duration = "500ms"
-
-[parallel_join.http]
-url = "https://example.com/"
-pause.after.open.duration.cel = "randomDuration(0, 20, 's')"
-pause.after.open.join = "a"
+[parallel_join.tcp.pause.before.first_read]
+# Pause each parallel request a different number of seconds.
+duration.cel = "randomDuration(0, 20, 's')"
+# Pause each parallel request at a different spot.
+offset_bytes.cel = "randomInt(0, 20)"
+# Pause each request until all other requests with tag "a" are ready to
+# continue. Note that join can be an array but cannot use cel expressions.
+join = "a"
+# Equivelant to:
+# join = ["a"]
 [parallel_join.run]
 parallel = true
 count = 5

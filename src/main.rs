@@ -21,6 +21,10 @@ struct Args {
     /// The path to the query plan.
     #[arg(value_name = "FILE")]
     file: String,
+
+    /// Compile a query plan but don't execute it.
+    #[arg(long)]
+    dry_run: bool,
 }
 
 #[derive(ValueEnum, Debug, Clone, PartialEq, Eq)]
@@ -33,6 +37,7 @@ enum Protocol {
     UDP,
     QUIC,
     IP,
+    NONE,
 }
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -44,6 +49,13 @@ async fn main() -> Result<()> {
     let text = String::from_utf8(buffer)?;
     {
         let plan = Plan::parse(&text)?;
+        if args.debug {
+            println!("query plan: {:#?}", plan);
+        }
+        if args.dry_run {
+            return Ok(());
+        }
+
         let mut executor = Executor::new(&plan);
         for (name, _) in plan.steps.iter() {
             println!("------- executing {name} --------");

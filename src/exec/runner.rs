@@ -1,60 +1,151 @@
-use std::sync::Arc;
+use std::{pin::pin, sync::Arc};
+
+use futures::future::BoxFuture;
+use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::{Output, StepPlanOutput};
 
 use super::{
-    graphql::GraphQlRunner, http::HttpRunner, http1::Http1Runner, tcp::TcpRunner, tee::Stream,
-    tls::TlsRunner,
+    graphql::GraphQlRunner, http::HttpRunner, http1::Http1Runner, tcp::TcpRunner, tls::TlsRunner,
 };
-use async_trait::async_trait;
 
-#[async_trait]
-pub(crate) trait Runner: Stream + std::fmt::Debug {
-    async fn start(
-        &mut self,
-        size_hint: Option<usize>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
-    async fn execute(&mut self);
-    async fn finish(self: Box<Self>) -> (Output, Option<Box<dyn Runner>>);
+#[derive(Debug)]
+pub(super) enum Runner {
+    GraphQl(Box<GraphQlRunner>),
+    Http(Box<HttpRunner>),
+    Http1(Box<Http1Runner>),
+    Tls(Box<TlsRunner>),
+    Tcp(Box<TcpRunner>),
 }
 
-pub(super) async fn new_runner(
-    ctx: Arc<super::Context>,
-    transport: Option<Box<dyn Runner>>,
-    step: StepPlanOutput,
-) -> crate::Result<Box<dyn Runner>> {
-    Ok(match step {
-        StepPlanOutput::Tcp(output) => {
-            assert!(transport.is_none());
-            Box::new(TcpRunner::new(ctx, output).await?) as Box<dyn Runner>
+impl Runner {
+    pub(super) async fn new(
+        ctx: Arc<super::Context>,
+        transport: Option<Runner>,
+        step: StepPlanOutput,
+    ) -> crate::Result<Self> {
+        Ok(match step {
+            StepPlanOutput::Tcp(output) => {
+                assert!(transport.is_none());
+                Runner::Tcp(Box::new(TcpRunner::new(ctx, output).await?))
+            }
+            StepPlanOutput::Http(output) => {
+                assert!(transport.is_none());
+                Runner::Http(Box::new(HttpRunner::new(ctx, output).await?))
+            }
+            StepPlanOutput::Tls(output) => Runner::Tls(Box::new(
+                TlsRunner::new(
+                    ctx,
+                    transport.expect("no plan should have tls as a base protocol"),
+                    output,
+                )
+                .await?,
+            )),
+
+            StepPlanOutput::Http1(output) => Runner::Http1(Box::new(
+                Http1Runner::new(
+                    ctx,
+                    transport.expect("no plan should have http1 as a base protocol"),
+                    output,
+                )
+                .await?,
+            )),
+            StepPlanOutput::GraphQl(output) => Runner::GraphQl(Box::new(
+                GraphQlRunner::new(
+                    ctx,
+                    transport.expect("no plan should have graphql as a base protocol"),
+                    output,
+                )
+                .await?,
+            )),
+        })
+    }
+    pub fn start(
+        &mut self,
+        size_hint: Option<usize>,
+    ) -> BoxFuture<Result<(), Box<dyn std::error::Error + Send + Sync>>> {
+        match self {
+            Self::Tcp(r) => Box::pin(r.start(size_hint)),
+            Self::Tls(r) => Box::pin(r.start(size_hint)),
+            Self::Http1(r) => Box::pin(r.start(size_hint)),
+            Self::Http(r) => Box::pin(r.start(size_hint)),
+            Self::GraphQl(r) => Box::pin(r.start(size_hint)),
         }
-        StepPlanOutput::Http(output) => {
-            assert!(transport.is_none());
-            Box::new(HttpRunner::new(ctx, output).await?) as Box<dyn Runner>
+    }
+
+    pub async fn execute(&mut self) {
+        match self {
+            Self::Tcp(r) => r.execute().await,
+            Self::Tls(r) => r.execute().await,
+            Self::Http1(r) => r.execute().await,
+            Self::Http(r) => r.execute().await,
+            Self::GraphQl(r) => r.execute().await,
         }
-        StepPlanOutput::Tls(output) => Box::new(
-            TlsRunner::new(
-                ctx,
-                transport.expect("no plan should have tls as a base protocol"),
-                output,
-            )
-            .await?,
-        ) as Box<dyn Runner>,
-        StepPlanOutput::Http1(output) => Box::new(
-            Http1Runner::new(
-                ctx,
-                transport.expect("no plan should have http1 as a base protocol"),
-                output,
-            )
-            .await?,
-        ) as Box<dyn Runner>,
-        StepPlanOutput::GraphQl(output) => Box::new(
-            GraphQlRunner::new(
-                ctx,
-                transport.expect("no plan should have graphql as a base protocol"),
-                output,
-            )
-            .await?,
-        ) as Box<dyn Runner>,
-    })
+    }
+
+    pub async fn finish(self: Self) -> (Output, Option<Runner>) {
+        match self {
+            Self::Tcp(r) => r.finish().await,
+            Self::Tls(r) => r.finish().await,
+            Self::Http1(r) => r.finish().await,
+            Self::Http(r) => r.finish().await,
+            Self::GraphQl(r) => r.finish().await,
+        }
+    }
+}
+
+impl AsyncRead for Runner {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match *self {
+            Self::Tcp(ref mut r) => pin!(r).poll_read(cx, buf),
+            Self::Tls(ref mut r) => pin!(r).poll_read(cx, buf),
+            Self::Http1(ref mut r) => pin!(r).poll_read(cx, buf),
+            Self::Http(ref mut r) => pin!(r).poll_read(cx, buf),
+            Self::GraphQl(ref mut r) => pin!(r).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for Runner {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<Result<usize, std::io::Error>> {
+        match *self {
+            Self::Tcp(ref mut r) => pin!(r).poll_write(cx, buf),
+            Self::Tls(ref mut r) => pin!(r).poll_write(cx, buf),
+            Self::Http1(ref mut r) => pin!(r).poll_write(cx, buf),
+            Self::Http(ref mut r) => pin!(r).poll_write(cx, buf),
+            Self::GraphQl(ref mut r) => pin!(r).poll_write(cx, buf),
+        }
+    }
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        match *self {
+            Self::Tcp(ref mut r) => pin!(r).poll_flush(cx),
+            Self::Tls(ref mut r) => pin!(r).poll_flush(cx),
+            Self::Http1(ref mut r) => pin!(r).poll_flush(cx),
+            Self::Http(ref mut r) => pin!(r).poll_flush(cx),
+            Self::GraphQl(ref mut r) => pin!(r).poll_flush(cx),
+        }
+    }
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        match *self {
+            Self::Tcp(ref mut r) => pin!(r).poll_shutdown(cx),
+            Self::Tls(ref mut r) => pin!(r).poll_shutdown(cx),
+            Self::Http1(ref mut r) => pin!(r).poll_shutdown(cx),
+            Self::Http(ref mut r) => pin!(r).poll_shutdown(cx),
+            Self::GraphQl(ref mut r) => pin!(r).poll_shutdown(cx),
+        }
+    }
 }

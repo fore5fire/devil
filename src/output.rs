@@ -180,9 +180,9 @@ impl From<HttpPlanOutput> for Value {
 #[derive(Debug, Clone, Default)]
 pub struct HttpPauseOutput {
     pub open: Vec<PauseValueOutput>,
-    pub request_header: Vec<PauseValueOutput>,
+    pub request_headers: Vec<PauseValueOutput>,
     pub request_body: Vec<PauseValueOutput>,
-    pub response_header: Vec<PauseValueOutput>,
+    pub response_headers: Vec<PauseValueOutput>,
     pub response_body: Vec<PauseValueOutput>,
 }
 
@@ -191,9 +191,9 @@ impl From<HttpPauseOutput> for Value {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("open".into(), value.open.into()),
-                ("request_header".into(), value.request_header.into()),
+                ("request_headers".into(), value.request_headers.into()),
                 ("request_body".into(), value.request_body.into()),
-                ("response_header".into(), value.response_header.into()),
+                ("response_headers".into(), value.response_headers.into()),
                 ("response_body".into(), value.response_body.into()),
             ])),
         })
@@ -204,9 +204,9 @@ impl WithPlannedCapacity for HttpPauseOutput {
     fn with_planned_capacity(planned: &Self) -> Self {
         Self {
             open: Vec::with_capacity(planned.open.len()),
-            request_header: Vec::with_capacity(planned.request_header.len()),
+            request_headers: Vec::with_capacity(planned.request_headers.len()),
             request_body: Vec::with_capacity(planned.request_body.len()),
-            response_header: Vec::with_capacity(planned.response_header.len()),
+            response_headers: Vec::with_capacity(planned.response_headers.len()),
             response_body: Vec::with_capacity(planned.response_body.len()),
         }
     }
@@ -362,9 +362,9 @@ impl From<Http1PlanOutput> for Value {
 #[derive(Debug, Clone, Default)]
 pub struct Http1PauseOutput {
     pub open: Vec<PauseValueOutput>,
-    pub request_header: Vec<PauseValueOutput>,
+    pub request_headers: Vec<PauseValueOutput>,
     pub request_body: Vec<PauseValueOutput>,
-    pub response_header: Vec<PauseValueOutput>,
+    pub response_headers: Vec<PauseValueOutput>,
     pub response_body: Vec<PauseValueOutput>,
 }
 
@@ -373,9 +373,9 @@ impl From<Http1PauseOutput> for Value {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("open".into(), value.open.into()),
-                ("request_header".into(), value.request_header.into()),
+                ("request_headers".into(), value.request_headers.into()),
                 ("request_body".into(), value.request_body.into()),
-                ("response_header".into(), value.response_header.into()),
+                ("response_headers".into(), value.response_headers.into()),
                 ("response_body".into(), value.response_body.into()),
             ])),
         })
@@ -386,9 +386,9 @@ impl WithPlannedCapacity for Http1PauseOutput {
     fn with_planned_capacity(planned: &Self) -> Self {
         Self {
             open: Vec::with_capacity(planned.open.len()),
-            request_header: Vec::with_capacity(planned.request_header.len()),
+            request_headers: Vec::with_capacity(planned.request_headers.len()),
             request_body: Vec::with_capacity(planned.request_body.len()),
-            response_header: Vec::with_capacity(planned.response_header.len()),
+            response_headers: Vec::with_capacity(planned.response_headers.len()),
             response_body: Vec::with_capacity(planned.response_body.len()),
         }
     }
