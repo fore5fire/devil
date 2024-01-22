@@ -3,12 +3,10 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::time::Instant;
 
-use async_trait::async_trait;
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
 use chrono::Duration;
-use futures::future::join_all;
 use tokio::io::ReadBuf;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -24,7 +22,7 @@ use crate::{Error, Http1Output, Http1Response, Output};
 #[derive(Debug)]
 pub(super) struct Http1Runner {
     out: Http1Output,
-    stream: Box<dyn Runner>,
+    stream: Runner,
     ctx: Arc<Context>,
     start_time: Instant,
     req_header_start_time: Option<Instant>,
@@ -39,7 +37,7 @@ pub(super) struct Http1Runner {
     resp_body_buf: Vec<u8>,
 }
 
-impl<'a> AsyncRead for Http1Runner {
+impl AsyncRead for Http1Runner {
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -107,7 +105,7 @@ impl<'a> AsyncRead for Http1Runner {
     }
 }
 
-impl<'a> AsyncWrite for Http1Runner {
+impl AsyncWrite for Http1Runner {
     fn poll_write(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -145,7 +143,7 @@ impl<'a> AsyncWrite for Http1Runner {
 impl Http1Runner {
     pub(super) async fn new(
         ctx: Arc<Context>,
-        stream: Box<dyn Runner>,
+        stream: Runner,
         plan: Http1PlanOutput,
     ) -> crate::Result<Self> {
         let start_time = Instant::now();
@@ -282,11 +280,8 @@ impl Http1Runner {
             }
         }
     }
-}
 
-#[async_trait]
-impl Runner for Http1Runner {
-    async fn start(
+    pub async fn start(
         &mut self,
         size_hint: Option<usize>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -300,19 +295,6 @@ impl Runner for Http1Runner {
 
         for p in &self.out.plan.pause.before.open {
             println!("pausing before http open for {:?}", p.duration);
-            let start = Instant::now();
-            tokio::time::sleep(p.duration.to_std().unwrap()).await;
-            join_all(
-                p.join
-                    .iter()
-                    .map(|join| self.ctx.pause_barrier(join).wait()),
-            )
-            .await;
-            self.out.pause.before.open.push(crate::PauseValueOutput {
-                duration: Duration::from_std(start.elapsed()).unwrap(),
-                offset_bytes: p.offset_bytes,
-                join: p.join.clone(),
-            });
         }
 
         self.stream
@@ -321,39 +303,9 @@ impl Runner for Http1Runner {
 
         for p in &self.out.plan.pause.after.open {
             println!("pausing after http open for {:?}", p.duration);
-            let start = Instant::now();
-            tokio::time::sleep(p.duration.to_std().unwrap()).await;
-            join_all(
-                p.join
-                    .iter()
-                    .map(|join| self.ctx.pause_barrier(join).wait()),
-            )
-            .await;
-            self.out.pause.after.open.push(crate::PauseValueOutput {
-                duration: Duration::from_std(start.elapsed()).unwrap(),
-                offset_bytes: p.offset_bytes,
-                join: p.join.clone(),
-            });
         }
-        for p in &self.out.plan.pause.before.request_header {
+        for p in &self.out.plan.pause.before.request_headers {
             println!("pausing before http request headers for {:?}", p.duration);
-            let start = Instant::now();
-            tokio::time::sleep(p.duration.to_std().unwrap()).await;
-            join_all(
-                p.join
-                    .iter()
-                    .map(|join| self.ctx.pause_barrier(join).wait()),
-            )
-            .await;
-            self.out
-                .pause
-                .before
-                .request_header
-                .push(crate::PauseValueOutput {
-                    duration: Duration::from_std(start.elapsed()).unwrap(),
-                    offset_bytes: p.offset_bytes,
-                    join: p.join.clone(),
-                });
         }
 
         self.req_header_start_time = Some(Instant::now());
@@ -361,25 +313,8 @@ impl Runner for Http1Runner {
         // body.
         self.stream.write_all_buf(&mut header).await?;
 
-        for p in &self.out.plan.pause.after.request_header {
+        for p in &self.out.plan.pause.after.request_headers {
             println!("pausing after http request headers for {:?}", p.duration);
-            let start = Instant::now();
-            tokio::time::sleep(p.duration.to_std().unwrap()).await;
-            join_all(
-                p.join
-                    .iter()
-                    .map(|join| self.ctx.pause_barrier(join).wait()),
-            )
-            .await;
-            self.out
-                .pause
-                .after
-                .request_header
-                .push(crate::PauseValueOutput {
-                    duration: Duration::from_std(start.elapsed()).unwrap(),
-                    offset_bytes: p.offset_bytes,
-                    join: p.join.clone(),
-                });
         }
 
         self.out.request = Some(Http1RequestOutput {
@@ -395,7 +330,7 @@ impl Runner for Http1Runner {
         Ok(())
     }
 
-    async fn execute(&mut self) {
+    pub async fn execute(&mut self) {
         // Send headers.
         if let Err(e) = self.start(Some(self.out.plan.body.len())).await {
             self.out.error = Some(Http1Error {
@@ -425,23 +360,6 @@ impl Runner for Http1Runner {
         }
         for p in &self.out.plan.pause.after.request_body {
             println!("pausing after http request headers for {:?}", p.duration);
-            let start = Instant::now();
-            tokio::time::sleep(p.duration.to_std().unwrap()).await;
-            join_all(
-                p.join
-                    .iter()
-                    .map(|join| self.ctx.pause_barrier(join).wait()),
-            )
-            .await;
-            self.out
-                .pause
-                .after
-                .request_body
-                .push(crate::PauseValueOutput {
-                    duration: Duration::from_std(start.elapsed()).unwrap(),
-                    offset_bytes: p.offset_bytes,
-                    join: p.join.clone(),
-                });
         }
         self.resp_start_time = Some(Instant::now());
         let mut response = Vec::new();
@@ -454,7 +372,7 @@ impl Runner for Http1Runner {
         }
     }
 
-    async fn finish(mut self: Box<Self>) -> (Output, Option<Box<dyn Runner>>) {
+    pub async fn finish(mut self) -> (Output, Option<Runner>) {
         let end_time = self.end_time.unwrap_or_else(Instant::now);
 
         if let Some(req) = &mut self.out.request {

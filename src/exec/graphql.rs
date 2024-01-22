@@ -1,6 +1,5 @@
 use std::{sync::Arc, time::Instant};
 
-use async_trait::async_trait;
 use chrono::Duration;
 use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -16,7 +15,7 @@ pub(super) struct GraphQlRunner {
     out: GraphQlOutput,
     http_body: Vec<u8>,
     resp: Vec<u8>,
-    transport: Box<dyn Runner>,
+    transport: Runner,
     start_time: Instant,
     resp_start_time: Option<Instant>,
     end_time: Option<Instant>,
@@ -25,7 +24,7 @@ pub(super) struct GraphQlRunner {
 impl GraphQlRunner {
     pub(super) async fn new(
         ctx: Arc<Context>,
-        transport: Box<dyn Runner>,
+        transport: Runner,
         plan: GraphQlPlanOutput,
     ) -> crate::Result<Self> {
         let start_time = Instant::now();
@@ -82,9 +81,8 @@ impl AsyncWrite for GraphQlRunner {
     }
 }
 
-#[async_trait]
-impl Runner for GraphQlRunner {
-    async fn start(
+impl<'a> GraphQlRunner {
+    pub async fn start(
         &mut self,
         _: Option<usize>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -105,7 +103,7 @@ impl Runner for GraphQlRunner {
         Ok(())
     }
 
-    async fn execute(&mut self) {
+    pub async fn execute(&mut self) {
         if let Err(e) = self.start(None).await {
             self.out.error = Some(GraphQlError {
                 kind: "start failed".to_owned(),
@@ -138,7 +136,7 @@ impl Runner for GraphQlRunner {
         self.end_time = Some(Instant::now());
     }
 
-    async fn finish(mut self: Box<Self>) -> (Output, Option<Box<dyn Runner>>) {
+    pub async fn finish(mut self) -> (Output, Option<Runner>) {
         let end_time = Instant::now();
         let resp_body: Option<serde_json::Value> = match serde_json::from_slice(&self.resp) {
             Ok(resp) => Some(resp),

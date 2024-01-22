@@ -3,9 +3,9 @@ use std::{fmt::Debug, ops::DerefMut};
 
 use tokio::io::{self, AsyncRead, AsyncWrite};
 
-pub(crate) trait Stream: AsyncRead + AsyncWrite + Unpin + Debug + Send + 'static {}
+pub(crate) trait Stream: AsyncRead + AsyncWrite + Unpin + Debug + Send {}
 
-impl<T: AsyncRead + AsyncWrite + Unpin + Debug + Send + 'static> Stream for T {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Debug + Send> Stream for T {}
 
 #[derive(Debug)]
 pub(crate) struct Tee<T: Stream> {

@@ -72,3 +72,9 @@ pub fn random_duration(
         _ => return Err(ftx.error("invalid unit")),
     }))
 }
+
+pub fn random_int(ftx: &FunctionContext, min: i64, max: i64) -> Result<Value> {
+    Ok(cel_interpreter::Value::Int(
+        rand::thread_rng().gen_range(min..max),
+    ))
+}

@@ -1,6 +1,7 @@
 pub mod graphql;
 pub mod http;
 pub mod http1;
+mod pause;
 mod runner;
 pub mod tcp;
 mod tee;
@@ -20,7 +21,7 @@ use crate::{
     StepProtocols,
 };
 
-use self::runner::{new_runner, Runner};
+use self::runner::Runner;
 
 pub struct Executor<'a> {
     steps: VecDeque<(&'a str, Step)>,
@@ -89,7 +90,7 @@ impl<'a> Executor<'a> {
                     .protocols
                     .pause_joins()
                     .into_iter()
-                    .map(|key| Ok((key.to_owned(), Barrier::new(count.try_into()?))))
+                    .map(|key| Ok((key.to_owned(), Arc::new(Barrier::new(count.try_into()?)))))
                     .collect::<Result<HashMap<_, _>, TryFromIntError>>()?,
             });
 
@@ -169,7 +170,7 @@ impl<'a> Executor<'a> {
     ) -> Result<(IterableKey, StepOutput), Box<dyn std::error::Error + Send + Sync>> {
         // Reverse iterate the protocol stack for evaluation so that protocols below can access
         // request fields from higher protocols.
-        let mut runner: Option<Box<dyn Runner>> = None;
+        let mut runner: Option<Runner> = None;
         let requests = protos
             .into_stack()
             .iter()
@@ -190,7 +191,7 @@ impl<'a> Executor<'a> {
         // We built the protocol requests top to bottom, now reverse iterate so we build the
         // runners bottom to top.
         for req in requests.into_iter().rev() {
-            runner = Some(new_runner(ctx.clone(), runner, req).await?)
+            runner = Some(Runner::new(ctx.clone(), runner, req).await?)
         }
         let mut runner = runner.expect("no plan should have an empty protocol stack");
         runner.execute().await;
@@ -271,11 +272,11 @@ impl std::error::Error for Error {}
 
 #[derive(Debug, Default)]
 pub(super) struct Context {
-    pause_barriers: HashMap<String, Barrier>,
+    pause_barriers: HashMap<String, Arc<Barrier>>,
 }
 
 impl Context {
-    pub(super) fn pause_barrier<'a>(&'a self, tag: &str) -> &'a Barrier {
-        &self.pause_barriers[tag]
+    pub(super) fn pause_barrier(&self, tag: &str) -> Arc<Barrier> {
+        self.pause_barriers[tag].clone()
     }
 }

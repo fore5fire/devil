@@ -1,7 +1,6 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::runner::Runner;
@@ -15,7 +14,7 @@ use crate::{
 
 #[derive(Debug)]
 pub(super) enum HttpRunner {
-    Http1(Box<Http1Runner>),
+    Http1(Http1Runner),
 }
 
 impl AsyncRead for HttpRunner {
@@ -62,7 +61,7 @@ impl HttpRunner {
     pub(super) async fn new(ctx: Arc<Context>, plan: HttpPlanOutput) -> crate::Result<Self> {
         // For now we always use TCP and possibly TLS. To support HTTP/3 we'll need to decide
         // whether to use UPD and QUIC instead.
-        let tcp: Box<dyn Runner> = Box::new(
+        let tcp = Runner::Tcp(Box::new(
             TcpRunner::new(
                 ctx.clone(),
                 TcpPlanOutput {
@@ -80,12 +79,12 @@ impl HttpRunner {
                 },
             )
             .await?,
-        );
+        ));
 
         let inner = if plan.url.scheme() == "http" {
             tcp
         } else {
-            Box::new(
+            Runner::Tls(Box::new(
                 TlsRunner::new(
                     ctx.clone(),
                     tcp,
@@ -104,13 +103,13 @@ impl HttpRunner {
                     },
                 )
                 .await?,
-            ) as Box<dyn Runner>
+            ))
         };
 
-        Ok(HttpRunner::Http1(Box::new(
+        Ok(HttpRunner::Http1(
             Http1Runner::new(
                 ctx,
-                inner as Box<dyn Runner>,
+                inner,
                 crate::Http1PlanOutput {
                     url: plan.url,
                     method: plan.method,
@@ -120,29 +119,26 @@ impl HttpRunner {
                     pause: PauseOutput {
                         before: crate::Http1PauseOutput {
                             open: plan.pause.before.open,
-                            request_header: plan.pause.before.request_header,
+                            request_headers: plan.pause.before.request_headers,
                             request_body: plan.pause.before.request_body,
-                            response_header: plan.pause.before.response_header,
+                            response_headers: plan.pause.before.response_headers,
                             response_body: plan.pause.before.response_body,
                         },
                         after: crate::Http1PauseOutput {
                             open: plan.pause.after.open,
-                            request_header: plan.pause.after.request_header,
+                            request_headers: plan.pause.after.request_headers,
                             request_body: plan.pause.after.request_body,
-                            response_header: plan.pause.after.response_header,
+                            response_headers: plan.pause.after.response_headers,
                             response_body: plan.pause.after.response_body,
                         },
                     },
                 },
             )
             .await?,
-        )))
+        ))
     }
-}
 
-#[async_trait]
-impl Runner for HttpRunner {
-    async fn start(
+    pub async fn start(
         &mut self,
         size_hint: Option<usize>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -151,14 +147,14 @@ impl Runner for HttpRunner {
         }
     }
 
-    async fn execute(&mut self) {
+    pub async fn execute(&mut self) {
         match self {
             Self::Http1(r) => r.execute().await,
         }
     }
 
-    async fn finish(self: Box<Self>) -> (Output, Option<Box<dyn Runner>>) {
-        let (out, inner) = match *self {
+    pub async fn finish(self) -> (Output, Option<Runner>) {
+        let (out, inner) = match self {
             Self::Http1(r) => r.finish().await,
         };
         (
@@ -172,16 +168,16 @@ impl Runner for HttpRunner {
                         pause: PauseOutput {
                             before: HttpPauseOutput {
                                 open: out.plan.pause.before.open,
-                                request_header: out.plan.pause.before.request_header,
+                                request_headers: out.plan.pause.before.request_headers,
                                 request_body: out.plan.pause.before.request_body,
-                                response_header: out.plan.pause.before.response_header,
+                                response_headers: out.plan.pause.before.response_headers,
                                 response_body: out.plan.pause.before.response_body,
                             },
                             after: HttpPauseOutput {
                                 open: out.plan.pause.after.open,
-                                request_header: out.plan.pause.after.request_header,
+                                request_headers: out.plan.pause.after.request_headers,
                                 request_body: out.plan.pause.after.request_body,
-                                response_header: out.plan.pause.after.response_header,
+                                response_headers: out.plan.pause.after.response_headers,
                                 response_body: out.plan.pause.after.response_body,
                             },
                         },
@@ -213,16 +209,16 @@ impl Runner for HttpRunner {
                     pause: PauseOutput {
                         before: HttpPauseOutput {
                             open: out.pause.before.open,
-                            request_header: out.pause.before.request_header,
+                            request_headers: out.pause.before.request_headers,
                             request_body: out.pause.before.request_body,
-                            response_header: out.pause.before.response_header,
+                            response_headers: out.pause.before.response_headers,
                             response_body: out.pause.before.response_body,
                         },
                         after: HttpPauseOutput {
                             open: out.pause.after.open,
-                            request_header: out.pause.after.request_header,
+                            request_headers: out.pause.after.request_headers,
                             request_body: out.pause.after.request_body,
-                            response_header: out.pause.after.response_header,
+                            response_headers: out.pause.after.response_headers,
                             response_body: out.pause.after.response_body,
                         },
                     },
