@@ -1,20 +1,20 @@
-use std::net::SocketAddr;
-use std::pin::Pin;
+use std::pin::pin;
 use std::sync::Arc;
 use std::task::Poll;
 use std::time::Instant;
 
 use chrono::Duration;
-use futures::FutureExt;
+use futures::TryFutureExt;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::{lookup_host, TcpStream};
+use tokio::net::TcpStream;
 
+use crate::exec::pause::Pause;
 use crate::{
-    Error, Output, PauseOutput, TcpError, TcpOutput, TcpPlanOutput, TcpRequestOutput, TcpResponse,
-    WithPlannedCapacity,
+    Error, Output, PauseOutput, PauseValueOutput, TcpError, TcpOutput, TcpPauseOutput,
+    TcpPlanOutput, TcpRequestOutput, TcpResponse, WithPlannedCapacity,
 };
 
-use super::pause::Pause;
+use super::pause::{PauseSpec, PauseStream};
 use super::runner::Runner;
 use super::tee::Tee;
 use super::Context;
@@ -23,21 +23,244 @@ use super::Context;
 pub(super) struct TcpRunner {
     ctx: Arc<Context>,
     out: TcpOutput,
-    stream: Tee<TcpStream>,
-    start: Instant,
+    state: State,
     first_read: Option<Instant>,
     last_read: Option<Instant>,
     first_write: Option<Instant>,
     last_write: Option<Instant>,
-    end_time: Option<Instant>,
-    error: Option<TcpError>,
-    size_hint: Option<usize>,
-    bytes_read: i64,
-    read_pauses: Vec<Pause>,
-    read_pauses_calculated: bool,
-    bytes_written: usize,
-    write_pauses: Vec<Pause>,
-    write_pauses_calculated: bool,
+}
+
+#[derive(Debug)]
+pub enum State {
+    Pending {
+        addr: String,
+        pause: PauseOutput<TcpPauseOutput>,
+    },
+    Open {
+        start: Instant,
+        stream: PauseStream<Tee<TcpStream>>,
+        size_hint: Option<usize>,
+    },
+    Completed,
+    Invalid,
+}
+
+impl TcpRunner {
+    pub(super) fn new(ctx: Arc<Context>, plan: TcpPlanOutput) -> TcpRunner {
+        TcpRunner {
+            state: State::Pending {
+                addr: format!("{}:{}", plan.host, plan.port),
+                pause: plan.pause.clone(),
+            },
+            out: TcpOutput {
+                request: Some(TcpRequestOutput {
+                    host: plan.host.clone(),
+                    port: plan.port,
+                    body: Vec::new(),
+                    time_to_first_byte: None,
+                    time_to_last_byte: None,
+                }),
+                pause: PauseOutput::with_planned_capacity(&plan.pause),
+                plan,
+                response: None,
+                error: None,
+                duration: Duration::zero(),
+                handshake_duration: None,
+            },
+            ctx,
+            first_read: None,
+            first_write: None,
+            last_read: None,
+            last_write: None,
+        }
+    }
+
+    pub async fn start(
+        &mut self,
+        size_hint: Option<usize>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let state = std::mem::replace(&mut self.state, State::Invalid);
+        let State::Pending { addr, pause } = state else {
+            return Err(Box::new(Error(
+                "attempt to start TcpRunner from invalid state".to_owned(),
+            )));
+        };
+        let start = Instant::now();
+        self.out
+            .pause
+            .before
+            .handshake
+            .reserve_exact(self.out.plan.pause.after.handshake.len());
+        for p in &self.out.plan.pause.before.handshake {
+            println!("pausing before tcp handshake for {:?}", p.duration);
+            self.out
+                .pause
+                .before
+                .handshake
+                .push(Pause::new(&self.ctx, p).await?);
+        }
+        let stream = TcpStream::connect(addr).await.map_err(|e| {
+            self.out.error = Some(TcpError {
+                kind: e.kind().to_string(),
+                message: e.to_string(),
+            });
+            self.state = State::Completed;
+            Error(e.to_string())
+        })?;
+        let handshake_duration = start.elapsed();
+        self.out
+            .pause
+            .after
+            .handshake
+            .reserve_exact(self.out.plan.pause.after.handshake.len());
+        for p in self.out.plan.pause.after.handshake.iter() {
+            println!("pausing after tcp handshake for {:?}", p.duration);
+            self.out
+                .pause
+                .after
+                .handshake
+                .push(Pause::new(&self.ctx, p).await?);
+        }
+
+        self.out.handshake_duration = Some(chrono::Duration::from_std(handshake_duration).unwrap());
+        self.state = State::Open {
+            start,
+            stream: PauseStream::new(
+                self.ctx.clone(),
+                Tee::new(stream),
+                if let Some(size) = size_hint {
+                    vec![
+                        PauseSpec {
+                            group_offset: 0,
+                            plan: pause.before.first_read,
+                        },
+                        PauseSpec {
+                            group_offset: size.try_into().unwrap(),
+                            plan: pause.before.last_read,
+                        },
+                    ]
+                } else {
+                    vec![PauseSpec {
+                        group_offset: 0,
+                        plan: pause.before.first_read,
+                    }]
+                },
+                if let Some(size) = size_hint {
+                    vec![
+                        PauseSpec {
+                            group_offset: 0,
+                            plan: pause.before.first_write,
+                        },
+                        PauseSpec {
+                            group_offset: size.try_into().unwrap(),
+                            plan: pause.before.last_write,
+                        },
+                    ]
+                } else {
+                    vec![PauseSpec {
+                        group_offset: 0,
+                        plan: pause.before.first_write,
+                    }]
+                },
+            ),
+            size_hint,
+        };
+        Ok(())
+    }
+}
+
+impl TcpRunner {
+    pub async fn execute(&mut self) {
+        let State::Open { stream, .. } = &mut self.state else {
+            return;
+        };
+        if let Err(e) = stream.write_all(&self.out.plan.body).await {
+            self.out.error = Some(TcpError {
+                kind: e.kind().to_string(),
+                message: e.to_string(),
+            });
+            self.complete();
+            return;
+        };
+        if let Err(e) = stream.flush().await {
+            self.out.error = Some(TcpError {
+                kind: e.kind().to_string(),
+                message: e.to_string(),
+            });
+            self.complete();
+            return;
+        }
+        let mut response = Vec::new();
+        if let Err(e) = self.read_to_end(&mut response).await {
+            self.out.error = Some(TcpError {
+                kind: e.kind().to_string(),
+                message: e.to_string(),
+            });
+            self.complete();
+            return;
+        }
+    }
+
+    pub fn finish(mut self) -> Output {
+        self.complete();
+        Output::Tcp(self.out)
+    }
+
+    fn complete(&mut self) {
+        let state = std::mem::replace(&mut self.state, State::Completed);
+        let State::Open { start, stream, .. } = state else {
+            return;
+        };
+
+        let end_time = Instant::now();
+
+        // TODO: how to sort out which pause outputs came from first or last?
+        let (stream, mut read_plans, mut write_plans) = stream.finish();
+        let (_, writes, reads) = stream.into_parts();
+
+        if let Some(p) = read_plans.pop() {
+            self.out.pause.before.last_read = p;
+        }
+        if let Some(p) = read_plans.pop() {
+            self.out.pause.before.first_read = p;
+        }
+        if let Some(p) = write_plans.pop() {
+            self.out.pause.before.last_write = p;
+        }
+        if let Some(p) = write_plans.pop() {
+            self.out.pause.before.first_write = p;
+        }
+
+        if let Some(req) = &mut self.out.request {
+            if let Some(first_write) = self.first_write {
+                req.time_to_first_byte =
+                    Some(chrono::Duration::from_std(first_write - start).unwrap());
+            }
+            if let Some(last_write) = self.first_write {
+                req.time_to_last_byte =
+                    Some(chrono::Duration::from_std(last_write - start).unwrap());
+            }
+            req.body = writes;
+        }
+        if !reads.is_empty() {
+            self.out.response = Some(TcpResponse {
+                body: reads,
+                time_to_first_byte: self
+                    .first_read
+                    .map(|first_read| first_read - start)
+                    .map(Duration::from_std)
+                    .transpose()
+                    .unwrap(),
+                time_to_last_byte: self
+                    .last_read
+                    .map(|last_read| last_read - start)
+                    .map(Duration::from_std)
+                    .transpose()
+                    .unwrap(),
+            });
+        }
+        self.out.duration = chrono::Duration::from_std(end_time - start).unwrap();
+    }
 }
 
 impl AsyncRead for TcpRunner {
@@ -46,85 +269,20 @@ impl AsyncRead for TcpRunner {
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
-        // Look for required pauses before reading any more bytes.
-        let mut pauses = std::mem::take(&mut self.read_pauses);
-        if !self.read_pauses_calculated {
-            pauses.extend(
-                self.out
-                    .plan
-                    .pause
-                    .before
-                    .first_read
-                    .iter()
-                    .filter(|p| p.offset_bytes == self.bytes_read)
-                    .map(|p| Pause::new(&self.ctx, p)),
-            );
-            println!(
-                "calculated required pauses: {pauses:?}, time {:?}",
-                Instant::now(),
-            );
-            self.read_pauses_calculated = true
-        }
-
-        // Execute any pending pauses.
-        self.out.pause.before.first_read.reserve(pauses.len());
-        for i in 0..pauses.len() {
-            match pauses[i].poll_unpin(cx) {
-                Poll::Ready(actual) => self.out.pause.before.first_read.push(actual?),
-                Poll::Pending => {
-                    // Remove the completed pauses so we don't double record them.
-                    pauses.drain(0..i);
-                    self.read_pauses = pauses;
-                    return Poll::Pending;
-                }
-            }
-        }
-
-        // Pending pauses finished - save the empty pauses vec so we can reuse its allocated
-        // memory.
-        pauses.clear();
-        self.read_pauses = pauses;
-
-        // Don't read more bytes than we need to get to the next pause.
-        let read_len = self
-            .out
-            .plan
-            .pause
-            .before
-            .first_read
-            .iter()
-            .find(|p| p.offset_bytes > self.bytes_read)
-            .map(|p| p.offset_bytes - self.bytes_read)
-            .map(usize::try_from)
-            .transpose()
-            .expect("bytes to read should fit in a usize")
-            .unwrap_or(usize::MAX);
-        let mut sub_buf = buf.take(read_len);
-
+        let State::Open { stream, .. } = &mut self.state else {
+            return Poll::Ready(Err(std::io::Error::other(Error(format!(
+                "cannot read from stream in {:?} state",
+                self.state
+            )))));
+        };
         // Read some data.
-        let result = Pin::new(&mut self.stream).poll_read(cx, &mut sub_buf);
+        let result = pin!(stream).poll_read(cx, buf);
 
         // Record the time of this read.
         self.last_read = Some(Instant::now());
         if self.first_read.is_none() {
             self.first_read = self.last_read;
         }
-
-        let bytes_read = sub_buf.filled().len();
-
-        // sub_buf started assuming it was fully uninitialized, and any writes to it would have
-        // initialized the shared memory in buf.
-        let sub_buf_initialized = sub_buf.initialized().len();
-        unsafe { buf.assume_init(buf.filled().len() + sub_buf_initialized) }
-        buf.advance(bytes_read);
-
-        // If bytes were read then signal to look for more matching pauses on the next read.
-        if bytes_read > 0 {
-            self.read_pauses_calculated = false;
-        }
-
-        // Record the newly read bytes.
-        self.bytes_read += i64::try_from(bytes_read).expect("too many bytes written");
 
         result
     }
@@ -136,11 +294,19 @@ impl AsyncWrite for TcpRunner {
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<Result<usize, std::io::Error>> {
+        let mut state = std::mem::replace(&mut self.state, State::Invalid);
+        let State::Open { stream, .. } = &mut state else {
+            return Poll::Ready(Err(std::io::Error::other(Error(format!(
+                "cannot write to stream in {:?} state",
+                self.state
+            )))));
+        };
         if self.first_write.is_none() {
             self.first_write = Some(Instant::now());
         }
-        let result = Pin::new(&mut self.stream).poll_write(cx, buf);
+        let result = std::pin::pin!(stream).poll_write(cx, buf);
         self.last_write = Some(Instant::now());
+        self.state = state;
         result
     }
 
@@ -148,145 +314,31 @@ impl AsyncWrite for TcpRunner {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
-        Pin::new(&mut self.stream).poll_flush(cx)
+        let State::Open { stream, .. } = &mut self.state else {
+            return Poll::Ready(Err(std::io::Error::other(Error(format!(
+                "cannot flush stream in {:?} state",
+                self.state
+            )))));
+        };
+        std::pin::pin!(stream).poll_flush(cx)
     }
 
     fn poll_shutdown(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
-        let poll = Pin::new(&mut self.stream).poll_shutdown(cx);
+        let State::Open { stream, .. } = &mut self.state else {
+            return Poll::Ready(Err(std::io::Error::other(Error(format!(
+                "cannot shutdown stream in {:?} state",
+                self.state
+            )))));
+        };
+        let poll = pin!(stream).poll_shutdown(cx);
         if let Poll::Ready(Ok(())) = &poll {
-            self.end_time = Some(Instant::now());
+            self.complete();
         }
         poll
     }
 }
 
 impl Unpin for TcpRunner {}
-
-impl TcpRunner {
-    pub(super) async fn new(ctx: Arc<Context>, plan: TcpPlanOutput) -> crate::Result<TcpRunner> {
-        //let addr = ip_for_host(&host).await?;
-        let addr = format!("{}:{}", plan.host, plan.port);
-        let mut pause = PauseOutput::with_planned_capacity(&plan.pause);
-        let start = Instant::now();
-        let stream = TcpStream::connect(addr)
-            .await
-            .map_err(|e| Error(e.to_string()))?;
-        let handshake_duration = start.elapsed();
-        for p in &plan.pause.after.handshake {
-            println!("pausing after tcp handshake for {:?}", p.duration);
-        }
-        Ok(TcpRunner {
-            out: TcpOutput {
-                request: Some(TcpRequestOutput {
-                    host: plan.host.clone(),
-                    port: plan.port,
-                    body: Vec::new(),
-                    time_to_first_byte: None,
-                    time_to_last_byte: None,
-                }),
-                plan,
-                response: None,
-                error: None,
-                duration: Duration::zero(),
-                handshake_duration: Some(Duration::from_std(handshake_duration).unwrap()),
-                pause,
-            },
-            ctx,
-            stream: Tee::new(stream),
-            start,
-            first_write: None,
-            last_write: None,
-            first_read: None,
-            last_read: None,
-            end_time: None,
-            error: None,
-            bytes_read: 0,
-            bytes_written: 0,
-            read_pauses: Vec::new(),
-            write_pauses: Vec::new(),
-            read_pauses_calculated: false,
-            write_pauses_calculated: false,
-            size_hint: None,
-        })
-    }
-
-    pub async fn start(
-        &mut self,
-        size_hint: Option<usize>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.size_hint = size_hint;
-        Ok(())
-    }
-
-    pub async fn execute(&mut self) {
-        if let Err(e) = self.stream.write_all(&self.out.plan.body).await {
-            self.error = Some(TcpError {
-                kind: e.kind().to_string(),
-                message: e.to_string(),
-            });
-            return;
-        };
-        if let Err(e) = self.stream.flush().await {
-            self.error = Some(TcpError {
-                kind: e.kind().to_string(),
-                message: e.to_string(),
-            });
-            return;
-        }
-        let mut response = Vec::new();
-        if let Err(e) = self.stream.read_to_end(&mut response).await {
-            self.error = Some(TcpError {
-                kind: e.kind().to_string(),
-                message: e.to_string(),
-            });
-            return;
-        }
-    }
-
-    pub async fn finish(mut self) -> (Output, Option<Runner>) {
-        let end_time = Instant::now();
-        let (_, writes, reads) = self.stream.into_parts();
-
-        if let Some(req) = &mut self.out.request {
-            if let Some(first_write) = self.first_write {
-                req.time_to_first_byte =
-                    Some(chrono::Duration::from_std(first_write - self.start).unwrap());
-            }
-            if let Some(last_write) = self.first_write {
-                req.time_to_last_byte =
-                    Some(chrono::Duration::from_std(last_write - self.start).unwrap());
-            }
-            req.body = writes;
-        }
-        if !reads.is_empty() {
-            self.out.response = Some(TcpResponse {
-                body: reads,
-                time_to_first_byte: self
-                    .first_read
-                    .map(|first_read| first_read - self.start)
-                    .map(Duration::from_std)
-                    .transpose()
-                    .unwrap(),
-                time_to_last_byte: self
-                    .last_read
-                    .map(|last_read| last_read - self.start)
-                    .map(Duration::from_std)
-                    .transpose()
-                    .unwrap(),
-            });
-        }
-        self.out.duration =
-            chrono::Duration::from_std(self.end_time.unwrap_or(end_time) - self.start).unwrap();
-        (Output::Tcp(self.out), None)
-    }
-}
-
-async fn ip_for_host(host: &str) -> Result<SocketAddr, Box<dyn std::error::Error + Send + Sync>> {
-    let Some(a) = lookup_host(host).await.map_err(|e| e)?.next() else {
-        return Err("host not found".into());
-    };
-    Ok(a)
-}

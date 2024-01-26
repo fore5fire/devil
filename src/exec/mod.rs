@@ -191,7 +191,7 @@ impl<'a> Executor<'a> {
         // We built the protocol requests top to bottom, now reverse iterate so we build the
         // runners bottom to top.
         for req in requests.into_iter().rev() {
-            runner = Some(Runner::new(ctx.clone(), runner, req).await?)
+            runner = Some(Runner::new(ctx.clone(), runner, req)?)
         }
         let mut runner = runner.expect("no plan should have an empty protocol stack");
         runner.execute().await;

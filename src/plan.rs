@@ -651,6 +651,8 @@ pub struct TcpPause {
     pub handshake: Vec<PauseValue>,
     pub first_read: Vec<PauseValue>,
     pub first_write: Vec<PauseValue>,
+    pub last_read: Vec<PauseValue>,
+    pub last_write: Vec<PauseValue>,
 }
 
 impl PauseJoins for TcpPause {
@@ -660,6 +662,8 @@ impl PauseJoins for TcpPause {
             .flat_map(|x| x.join.iter())
             .chain(self.first_read.iter().flat_map(|x| x.join.iter()))
             .chain(self.first_write.iter().flat_map(|x| x.join.iter()))
+            .chain(self.last_read.iter().flat_map(|x| x.join.iter()))
+            .chain(self.last_write.iter().flat_map(|x| x.join.iter()))
             .map(|x| x.to_owned())
     }
 }
@@ -680,6 +684,14 @@ impl TryFrom<bindings::TcpPause> for TcpPause {
                 .into_iter()
                 .map(PauseValue::try_from)
                 .collect::<Result<_>>()?,
+            last_read: Vec::from(value.last_read.unwrap_or_default())
+                .into_iter()
+                .map(PauseValue::try_from)
+                .collect::<Result<_>>()?,
+            last_write: Vec::from(value.last_write.unwrap_or_default())
+                .into_iter()
+                .map(PauseValue::try_from)
+                .collect::<Result<_>>()?,
         })
     }
 }
@@ -695,6 +707,8 @@ impl Evaluate<TcpPauseOutput> for TcpPause {
             handshake: self.handshake.evaluate(state)?,
             first_read: self.first_read.evaluate(state)?,
             first_write: self.first_write.evaluate(state)?,
+            last_read: self.last_read.evaluate(state)?,
+            last_write: self.last_write.evaluate(state)?,
         })
     }
 }

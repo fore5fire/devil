@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Instant};
 
 use chrono::Duration;
 use serde::Serialize;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::{runner::Runner, Context};
 use crate::{
@@ -16,18 +16,35 @@ pub(super) struct GraphQlRunner {
     http_body: Vec<u8>,
     resp: Vec<u8>,
     transport: Runner,
-    start_time: Instant,
+    state: State,
     resp_start_time: Option<Instant>,
     end_time: Option<Instant>,
 }
 
+#[derive(Debug)]
+enum State {
+    Pending,
+    Running { start_time: Instant },
+}
+
 impl GraphQlRunner {
-    pub(super) async fn new(
+    pub(super) fn new(
         ctx: Arc<Context>,
         transport: Runner,
         plan: GraphQlPlanOutput,
     ) -> crate::Result<Self> {
-        let start_time = Instant::now();
+        let body = GraphQlRequestPayload {
+            query: serde_json::Value::String(plan.query.clone()),
+            operation_name: plan.operation.clone(),
+            variables: plan.params.clone().map(|params| {
+                serde_json::Value::Object(
+                    params
+                        .into_iter()
+                        .map(|(k, v)| (String::from_utf8_lossy(k.as_slice()).to_string(), v))
+                        .collect(),
+                )
+            }),
+        };
 
         Ok(Self {
             out: GraphQlOutput {
@@ -40,44 +57,12 @@ impl GraphQlRunner {
             },
             ctx,
             transport,
-            start_time,
+            state: State::Pending,
             resp_start_time: None,
             end_time: None,
             resp: Vec::new(),
-            http_body: Vec::new(),
+            http_body: serde_json::to_vec(&body).map_err(|e| crate::Error(e.to_string()))?,
         })
-    }
-}
-
-impl AsyncRead for GraphQlRunner {
-    fn poll_read(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        panic!()
-    }
-}
-
-impl AsyncWrite for GraphQlRunner {
-    fn poll_write(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> std::task::Poll<Result<usize, std::io::Error>> {
-        panic!()
-    }
-    fn poll_flush(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), std::io::Error>> {
-        panic!()
-    }
-    fn poll_shutdown(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), std::io::Error>> {
-        panic!()
     }
 }
 
@@ -86,20 +71,10 @@ impl<'a> GraphQlRunner {
         &mut self,
         _: Option<usize>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let body = GraphQlRequestPayload {
-            query: serde_json::Value::String(self.out.plan.query.clone()),
-            operation_name: self.out.plan.operation.clone(),
-            variables: self.out.plan.params.clone().map(|params| {
-                serde_json::Value::Object(
-                    params
-                        .into_iter()
-                        .map(|(k, v)| (String::from_utf8_lossy(k.as_slice()).to_string(), v))
-                        .collect(),
-                )
-            }),
-        };
-        self.http_body = serde_json::to_vec(&body)?;
         self.transport.start(Some(self.http_body.len())).await?;
+        self.state = State::Running {
+            start_time: Instant::now(),
+        };
         Ok(())
     }
 
@@ -136,7 +111,10 @@ impl<'a> GraphQlRunner {
         self.end_time = Some(Instant::now());
     }
 
-    pub async fn finish(mut self) -> (Output, Option<Runner>) {
+    pub fn finish(mut self) -> (Output, Runner) {
+        let State::Running { start_time } = self.state else {
+            return (Output::GraphQl(self.out), self.transport);
+        };
         let end_time = Instant::now();
         let resp_body: Option<serde_json::Value> = match serde_json::from_slice(&self.resp) {
             Ok(resp) => Some(resp),
@@ -172,9 +150,8 @@ impl<'a> GraphQlRunner {
             .unwrap();
         }
         self.out.duration =
-            chrono::Duration::from_std(self.end_time.unwrap_or(end_time) - self.start_time)
-                .unwrap();
-        (Output::GraphQl(self.out), Some(self.transport))
+            chrono::Duration::from_std(self.end_time.unwrap_or(end_time) - start_time).unwrap();
+        (Output::GraphQl(self.out), self.transport)
     }
 }
 
