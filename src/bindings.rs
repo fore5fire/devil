@@ -1021,6 +1021,8 @@ pub struct TcpPause {
     pub handshake: Option<ValueOrArray<PauseValue>>,
     pub first_read: Option<ValueOrArray<PauseValue>>,
     pub first_write: Option<ValueOrArray<PauseValue>>,
+    pub last_read: Option<ValueOrArray<PauseValue>>,
+    pub last_write: Option<ValueOrArray<PauseValue>>,
     #[serde(flatten)]
     pub unrecognized: toml::Table,
 }
@@ -1036,6 +1038,8 @@ impl Merge for TcpPause {
             handshake: ValueOrArray::merge(first.handshake, second.handshake),
             first_read: ValueOrArray::merge(first.first_read, second.first_read),
             first_write: ValueOrArray::merge(first.first_write, second.first_write),
+            last_read: ValueOrArray::merge(first.last_read, second.last_read),
+            last_write: ValueOrArray::merge(first.last_write, second.last_write),
             unrecognized: toml::Table::new(),
         })
     }

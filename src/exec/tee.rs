@@ -3,12 +3,12 @@ use std::{fmt::Debug, ops::DerefMut};
 
 use tokio::io::{self, AsyncRead, AsyncWrite};
 
-pub(crate) trait Stream: AsyncRead + AsyncWrite + Unpin + Debug + Send {}
+pub trait Stream: AsyncRead + AsyncWrite + Unpin + Debug + Send {}
 
 impl<T: AsyncRead + AsyncWrite + Unpin + Debug + Send> Stream for T {}
 
 #[derive(Debug)]
-pub(crate) struct Tee<T: Stream> {
+pub struct Tee<T: Stream> {
     inner: T,
     pub reads: Vec<u8>,
     pub writes: Vec<u8>,

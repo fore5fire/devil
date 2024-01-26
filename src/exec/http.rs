@@ -58,13 +58,33 @@ impl AsyncWrite for HttpRunner {
 }
 
 impl HttpRunner {
-    pub(super) async fn new(ctx: Arc<Context>, plan: HttpPlanOutput) -> crate::Result<Self> {
+    pub(super) fn new(ctx: Arc<Context>, plan: HttpPlanOutput) -> crate::Result<Self> {
         // For now we always use TCP and possibly TLS. To support HTTP/3 we'll need to decide
         // whether to use UPD and QUIC instead.
-        let tcp = Runner::Tcp(Box::new(
-            TcpRunner::new(
+        let tcp = Runner::Tcp(Box::new(TcpRunner::new(
+            ctx.clone(),
+            TcpPlanOutput {
+                host: plan
+                    .url
+                    .host()
+                    .ok_or_else(|| Error("url is missing host".to_owned()))?
+                    .to_string(),
+                port: plan
+                    .url
+                    .port_or_known_default()
+                    .ok_or_else(|| Error("url is missing port".to_owned()))?,
+                body: Vec::new(),
+                pause: PauseOutput::default(),
+            },
+        )));
+
+        let inner = if plan.url.scheme() == "http" {
+            tcp
+        } else {
+            Runner::Tls(Box::new(TlsRunner::new(
                 ctx.clone(),
-                TcpPlanOutput {
+                tcp,
+                TlsPlanOutput {
                     host: plan
                         .url
                         .host()
@@ -77,65 +97,36 @@ impl HttpRunner {
                     body: Vec::new(),
                     pause: PauseOutput::default(),
                 },
-            )
-            .await?,
-        ));
-
-        let inner = if plan.url.scheme() == "http" {
-            tcp
-        } else {
-            Runner::Tls(Box::new(
-                TlsRunner::new(
-                    ctx.clone(),
-                    tcp,
-                    TlsPlanOutput {
-                        host: plan
-                            .url
-                            .host()
-                            .ok_or_else(|| Error("url is missing host".to_owned()))?
-                            .to_string(),
-                        port: plan
-                            .url
-                            .port_or_known_default()
-                            .ok_or_else(|| Error("url is missing port".to_owned()))?,
-                        body: Vec::new(),
-                        pause: PauseOutput::default(),
-                    },
-                )
-                .await?,
-            ))
+            )))
         };
 
-        Ok(HttpRunner::Http1(
-            Http1Runner::new(
-                ctx,
-                inner,
-                crate::Http1PlanOutput {
-                    url: plan.url,
-                    method: plan.method,
-                    version_string: Some("HTTP/1.1".into()),
-                    headers: plan.headers,
-                    body: plan.body,
-                    pause: PauseOutput {
-                        before: crate::Http1PauseOutput {
-                            open: plan.pause.before.open,
-                            request_headers: plan.pause.before.request_headers,
-                            request_body: plan.pause.before.request_body,
-                            response_headers: plan.pause.before.response_headers,
-                            response_body: plan.pause.before.response_body,
-                        },
-                        after: crate::Http1PauseOutput {
-                            open: plan.pause.after.open,
-                            request_headers: plan.pause.after.request_headers,
-                            request_body: plan.pause.after.request_body,
-                            response_headers: plan.pause.after.response_headers,
-                            response_body: plan.pause.after.response_body,
-                        },
+        Ok(HttpRunner::Http1(Http1Runner::new(
+            ctx,
+            inner,
+            crate::Http1PlanOutput {
+                url: plan.url,
+                method: plan.method,
+                version_string: Some("HTTP/1.1".into()),
+                headers: plan.headers,
+                body: plan.body,
+                pause: PauseOutput {
+                    before: crate::Http1PauseOutput {
+                        open: plan.pause.before.open,
+                        request_headers: plan.pause.before.request_headers,
+                        request_body: plan.pause.before.request_body,
+                        response_headers: plan.pause.before.response_headers,
+                        response_body: plan.pause.before.response_body,
+                    },
+                    after: crate::Http1PauseOutput {
+                        open: plan.pause.after.open,
+                        request_headers: plan.pause.after.request_headers,
+                        request_body: plan.pause.after.request_body,
+                        response_headers: plan.pause.after.response_headers,
+                        response_body: plan.pause.after.response_body,
                     },
                 },
-            )
-            .await?,
-        ))
+            },
+        )))
     }
 
     pub async fn start(
@@ -153,9 +144,9 @@ impl HttpRunner {
         }
     }
 
-    pub async fn finish(self) -> (Output, Option<Runner>) {
+    pub fn finish(self) -> (Output, Runner) {
         let (out, inner) = match self {
-            Self::Http1(r) => r.finish().await,
+            Self::Http1(r) => r.finish(),
         };
         (
             match out {

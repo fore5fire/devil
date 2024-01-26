@@ -857,6 +857,8 @@ pub struct TcpPauseOutput {
     pub handshake: Vec<PauseValueOutput>,
     pub first_read: Vec<PauseValueOutput>,
     pub first_write: Vec<PauseValueOutput>,
+    pub last_read: Vec<PauseValueOutput>,
+    pub last_write: Vec<PauseValueOutput>,
 }
 
 impl From<TcpPauseOutput> for Value {
@@ -877,6 +879,8 @@ impl WithPlannedCapacity for TcpPauseOutput {
             handshake: Vec::with_capacity(planned.handshake.len()),
             first_read: Vec::with_capacity(planned.first_read.len()),
             first_write: Vec::with_capacity(planned.first_write.len()),
+            last_read: Vec::with_capacity(planned.last_read.len()),
+            last_write: Vec::with_capacity(planned.last_write.len()),
         }
     }
 }

@@ -21,10 +21,10 @@ use crate::{Error, Http1Output, Http1Response, Output};
 
 #[derive(Debug)]
 pub(super) struct Http1Runner {
-    out: Http1Output,
-    stream: Runner,
     ctx: Arc<Context>,
-    start_time: Instant,
+    out: Http1Output,
+    transport: Runner,
+    state: State,
     req_header_start_time: Option<Instant>,
     req_body_start_time: Option<Instant>,
     req_end_time: Option<Instant>,
@@ -35,6 +35,13 @@ pub(super) struct Http1Runner {
     resp_header_buf: BytesMut,
     req_body_buf: Vec<u8>,
     resp_body_buf: Vec<u8>,
+}
+
+#[derive(Debug)]
+enum State {
+    Pending { header: BytesMut },
+    Running { start_time: Instant },
+    Invalid,
 }
 
 impl AsyncRead for Http1Runner {
@@ -52,7 +59,7 @@ impl AsyncRead for Http1Runner {
             .is_some()
         {
             let old_len = buf.filled().len();
-            let poll = Pin::new(&mut self.stream).poll_read(cx, buf);
+            let poll = Pin::new(&mut self.transport).poll_read(cx, buf);
             self.resp_body_buf
                 .extend_from_slice(&buf.filled()[old_len..]);
             return poll;
@@ -70,7 +77,7 @@ impl AsyncRead for Http1Runner {
         let mut header_vec = vec![0; buf.remaining() + 1];
         loop {
             let mut header_buf = ReadBuf::new(header_vec.as_mut());
-            let poll = Pin::new(&mut self.stream).poll_read(cx, &mut header_buf);
+            let poll = Pin::new(&mut self.transport).poll_read(cx, &mut header_buf);
             self.resp_header_buf.put_slice(header_buf.filled());
             match poll {
                 Poll::Pending => return Poll::Pending,
@@ -111,7 +118,7 @@ impl AsyncWrite for Http1Runner {
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> Poll<Result<usize, std::io::Error>> {
-        let poll = Pin::new(&mut self.stream).poll_write(cx, buf);
+        let poll = Pin::new(&mut self.transport).poll_write(cx, buf);
         if poll.is_ready() {
             if self.req_body_start_time.is_none() {
                 self.req_body_start_time = Some(Instant::now());
@@ -125,14 +132,14 @@ impl AsyncWrite for Http1Runner {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
-        Pin::new(&mut self.stream).poll_flush(cx)
+        Pin::new(&mut self.transport).poll_flush(cx)
     }
 
     fn poll_shutdown(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
-        let poll = Pin::new(&mut self.stream).poll_shutdown(cx);
+        let poll = Pin::new(&mut self.transport).poll_shutdown(cx);
         if poll.is_ready() {
             self.end_time = Some(Instant::now());
         }
@@ -141,14 +148,12 @@ impl AsyncWrite for Http1Runner {
 }
 
 impl Http1Runner {
-    pub(super) async fn new(
-        ctx: Arc<Context>,
-        stream: Runner,
-        plan: Http1PlanOutput,
-    ) -> crate::Result<Self> {
-        let start_time = Instant::now();
-
-        Ok(Self {
+    pub(super) fn new(ctx: Arc<Context>, transport: Runner, plan: Http1PlanOutput) -> Self {
+        Self {
+            ctx,
+            state: State::Pending {
+                header: Self::compute_header(&plan),
+            },
             out: Http1Output {
                 request: None,
                 response: None,
@@ -157,9 +162,7 @@ impl Http1Runner {
                 pause: PauseOutput::with_planned_capacity(&plan.pause),
                 plan,
             },
-            ctx,
-            stream,
-            start_time,
+            transport,
             req_header_start_time: None,
             req_body_start_time: None,
             req_end_time: None,
@@ -170,52 +173,44 @@ impl Http1Runner {
             resp_header_buf: BytesMut::new(),
             req_body_buf: Vec::new(),
             resp_body_buf: Vec::new(),
-        })
+        }
     }
 
     #[inline]
-    fn compute_header(&self) -> BytesMut {
+    fn compute_header(plan: &Http1PlanOutput) -> BytesMut {
         // Build a buffer with the header contents to avoid the overhead of separate writes.
         // TODO: We may actually want to split packets based on info at the HTTP layer, that logic
         // will go here once I figure out the right configuration to express it.
         let mut buf = BytesMut::with_capacity(
-            self.out.plan.method.as_ref().map(Vec::len).unwrap_or(0)
+            plan.method.as_ref().map(Vec::len).unwrap_or(0)
                 + 1
-                + self.out.plan.url.path().len()
-                + self.out.plan.url.query().map(|x| x.len() + 1).unwrap_or(0)
+                + plan.url.path().len()
+                + plan.url.query().map(|x| x.len() + 1).unwrap_or(0)
                 + 1
-                + self
-                    .out
-                    .plan
-                    .version_string
-                    .as_ref()
-                    .map(Vec::len)
-                    .unwrap_or(0)
+                + plan.version_string.as_ref().map(Vec::len).unwrap_or(0)
                 + 2
-                + self
-                    .out
-                    .plan
+                + plan
                     .headers
                     .iter()
                     .fold(0, |sum, (k, v)| sum + k.len() + 2 + v.len() + 2)
                 + 2
-                + self.out.plan.body.len(),
+                + plan.body.len(),
         );
-        if let Some(m) = &self.out.plan.method {
+        if let Some(m) = &plan.method {
             buf.put_slice(m);
         }
         buf.put_u8(b' ');
-        buf.put_slice(self.out.plan.url.path().as_bytes());
-        if let Some(q) = self.out.plan.url.query() {
+        buf.put_slice(plan.url.path().as_bytes());
+        if let Some(q) = plan.url.query() {
             buf.put_u8(b'?');
             buf.put_slice(q.as_bytes());
         }
         buf.put_u8(b' ');
-        if let Some(p) = &self.out.plan.version_string {
+        if let Some(p) = &plan.version_string {
             buf.put_slice(p);
         }
         buf.put(b"\r\n".as_slice());
-        for (k, v) in &self.out.plan.headers {
+        for (k, v) in &plan.headers {
             buf.put_slice(k.as_slice());
             buf.put_slice(b": ");
             buf.put_slice(v.as_slice());
@@ -263,9 +258,11 @@ impl Http1Runner {
                 match result {
                     httparse::Status::Partial => Poll::Pending,
                     httparse::Status::Complete(body_start) => {
-                        self.out.response.as_mut().unwrap().header_duration = Some(
-                            Duration::from_std(header_complete_time - self.start_time).unwrap(),
-                        );
+                        let State::Running { start_time } = self.state else {
+                            panic!("header recieved in incorrect state: {:?}", self.state);
+                        };
+                        self.out.response.as_mut().unwrap().header_duration =
+                            Some(Duration::from_std(header_complete_time - start_time).unwrap());
                         // Return the bytes we didn't read.
                         self.resp_header_buf.advance(body_start);
                         Poll::Ready(Ok(std::mem::take(&mut self.resp_header_buf)))
@@ -285,21 +282,24 @@ impl Http1Runner {
         &mut self,
         size_hint: Option<usize>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        if let Some(size) = size_hint {
-            self.out
-                .plan
-                .headers
-                .push(("Content-Length".into(), format!("{size}").into()));
-        }
-        let mut header = self.compute_header();
+        let state = std::mem::replace(&mut self.state, State::Invalid);
+        let State::Pending { mut header } = state else {
+            return Err(Box::new(Error(
+                "attempt to start Http1Runner from invalid state".to_owned(),
+            )));
+        };
 
         for p in &self.out.plan.pause.before.open {
             println!("pausing before http open for {:?}", p.duration);
         }
 
-        self.stream
+        self.transport
             .start(Some(header.len() + size_hint.unwrap_or(0)))
             .await?;
+
+        self.state = State::Running {
+            start_time: Instant::now(),
+        };
 
         for p in &self.out.plan.pause.after.open {
             println!("pausing after http open for {:?}", p.duration);
@@ -311,7 +311,7 @@ impl Http1Runner {
         self.req_header_start_time = Some(Instant::now());
         // Write directly to the transport instead of self so we don't record the header as the
         // body.
-        self.stream.write_all_buf(&mut header).await?;
+        self.transport.write_all_buf(&mut header).await?;
 
         for p in &self.out.plan.pause.after.request_headers {
             println!("pausing after http request headers for {:?}", p.duration);
@@ -351,7 +351,7 @@ impl Http1Runner {
             }
             self.out.plan.body = body;
         }
-        if let Err(e) = self.stream.flush().await {
+        if let Err(e) = self.transport.flush().await {
             self.out.error = Some(Http1Error {
                 kind: e.kind().to_string(),
                 message: e.to_string(),
@@ -372,13 +372,15 @@ impl Http1Runner {
         }
     }
 
-    pub async fn finish(mut self) -> (Output, Option<Runner>) {
+    pub fn finish(mut self) -> (Output, Runner) {
+        let State::Running { start_time } = self.state else {
+            return (Output::Http1(self.out), self.transport);
+        };
         let end_time = self.end_time.unwrap_or_else(Instant::now);
 
         if let Some(req) = &mut self.out.request {
             req.duration =
-                Duration::from_std(self.req_end_time.unwrap_or(end_time) - self.start_time)
-                    .unwrap();
+                Duration::from_std(self.req_end_time.unwrap_or(end_time) - start_time).unwrap();
             req.body_duration = self
                 .req_body_start_time
                 .map(|start| self.resp_start_time.unwrap_or(end_time) - start)
@@ -387,7 +389,7 @@ impl Http1Runner {
                 .unwrap();
             req.time_to_first_byte = self
                 .req_header_start_time
-                .map(|header_start| header_start - self.start_time)
+                .map(|header_start| header_start - start_time)
                 .map(Duration::from_std)
                 .transpose()
                 .unwrap();
@@ -412,8 +414,8 @@ impl Http1Runner {
                 .unwrap();
         }
 
-        self.out.duration = Duration::from_std(end_time - self.start_time).unwrap();
+        self.out.duration = Duration::from_std(end_time - start_time).unwrap();
 
-        (Output::Http1(self.out), Some(self.stream))
+        (Output::Http1(self.out), self.transport)
     }
 }
