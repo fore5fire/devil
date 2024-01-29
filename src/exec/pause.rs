@@ -185,25 +185,27 @@ where
         }
 
         // Don't read more bytes than we need to get to the next pause.
-        let read_len = self
+        let read_len = dbg!(self
             .read_plans
             .front()
             .map(|p| p.absolute_offset - self.read_bytes)
             .map(usize::try_from)
             .transpose()
             .expect("bytes to read should fit in a usize")
-            .unwrap_or(usize::MAX);
+            .unwrap_or_else(|| buf.remaining()));
+        // When we let the sub buffer writes initalize bytes in the parent buffer things break, so
+        // just pre-initialize the whole parent for now.
+        buf.initialize_unfilled();
         let mut sub_buf = buf.take(read_len);
+        // We just initalized the parent buffer so it's safe to assume the sub buffer is initalized
+        // too.
+        unsafe { sub_buf.assume_init(sub_buf.remaining()) }
 
         // Read some data.
         let result = Pin::new(&mut self.inner).poll_read(cx, &mut sub_buf);
 
         let bytes_read = sub_buf.filled().len();
 
-        // sub_buf started assuming it was fully uninitialized, and any writes to it would have
-        // initialized the shared memory in buf.
-        let sub_buf_initialized = sub_buf.initialized().len();
-        unsafe { buf.assume_init(buf.filled().len() + sub_buf_initialized) }
         buf.advance(bytes_read);
 
         // Record the newly read bytes.
@@ -272,7 +274,7 @@ where
             .unwrap_or_else(|| buf.len());
 
         // Write some bytes.
-        let result = Pin::new(&mut self.inner).poll_write(cx, &buf[0..write_len]);
+        let result = Pin::new(&mut self.inner).poll_write(cx, &buf[0..write_len.min(buf.len())]);
 
         let Poll::Ready(Ok(bytes_written)) = result else {
             // Nothing else to do if no bytes were written.

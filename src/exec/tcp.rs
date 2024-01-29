@@ -15,7 +15,6 @@ use crate::{
 };
 
 use super::pause::{PauseSpec, PauseStream};
-use super::runner::Runner;
 use super::tee::Tee;
 use super::Context;
 
@@ -140,6 +139,11 @@ impl TcpRunner {
                         },
                     ]
                 } else {
+                    if !pause.before.last_read.is_empty() {
+                        return Err(Box::new(Error(
+                            "tcp.pause.before.last_read is unsupported in this request".to_owned(),
+                        )));
+                    }
                     vec![PauseSpec {
                         group_offset: 0,
                         plan: pause.before.first_read,
@@ -157,6 +161,11 @@ impl TcpRunner {
                         },
                     ]
                 } else {
+                    if !pause.before.last_write.is_empty() {
+                        return Err(Box::new(Error(
+                            "tcp.pause.before.last_read is unsupported in this request".to_owned(),
+                        )));
+                    }
                     vec![PauseSpec {
                         group_offset: 0,
                         plan: pause.before.first_write,
@@ -171,18 +180,24 @@ impl TcpRunner {
 
 impl TcpRunner {
     pub async fn execute(&mut self) {
-        let State::Open { stream, .. } = &mut self.state else {
-            return;
-        };
-        if let Err(e) = stream.write_all(&self.out.plan.body).await {
+        let body = std::mem::take(&mut self.out.plan.body);
+        if let Err(e) = self.start(Some(body.len())).await {
+            self.out.error = Some(TcpError {
+                kind: "tcp_start".to_owned(),
+                message: e.to_string(),
+            })
+        }
+        if let Err(e) = self.write_all(&body).await {
             self.out.error = Some(TcpError {
                 kind: e.kind().to_string(),
                 message: e.to_string(),
             });
             self.complete();
+            self.out.plan.body = body;
             return;
         };
-        if let Err(e) = stream.flush().await {
+        self.out.plan.body = body;
+        if let Err(e) = self.flush().await {
             self.out.error = Some(TcpError {
                 kind: e.kind().to_string(),
                 message: e.to_string(),
