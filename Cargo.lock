@@ -297,6 +297,7 @@ dependencies = [
  "nom",
  "rand",
  "rustls",
+ "scopeguard",
  "serde",
  "serde_json",
  "tokio",

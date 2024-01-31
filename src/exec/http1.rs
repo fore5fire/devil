@@ -10,20 +10,19 @@ use chrono::Duration;
 use tokio::io::ReadBuf;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+use super::pause::PauseSpec;
+use super::pause::PauseStream;
 use super::runner::Runner;
 use super::Context;
 use crate::Http1Error;
 use crate::Http1PlanOutput;
 use crate::Http1RequestOutput;
-use crate::PauseOutput;
 use crate::WithPlannedCapacity;
 use crate::{Error, Http1Output, Http1Response, Output};
 
 #[derive(Debug)]
 pub(super) struct Http1Runner {
-    ctx: Arc<Context>,
     out: Http1Output,
-    transport: Runner,
     state: State,
     req_header_start_time: Option<Instant>,
     req_body_start_time: Option<Instant>,
@@ -39,8 +38,33 @@ pub(super) struct Http1Runner {
 
 #[derive(Debug)]
 enum State {
-    Pending { header: BytesMut },
-    Running { start_time: Instant },
+    Pending {
+        ctx: Arc<Context>,
+        header: BytesMut,
+        transport: Runner,
+    },
+    StartFailed {
+        transport: Runner,
+    },
+    SendingHeader {
+        start_time: Instant,
+        transport: PauseStream<Runner>,
+    },
+    SendingBody {
+        start_time: Instant,
+        transport: PauseStream<Runner>,
+    },
+    ReceivingHeader {
+        start_time: Instant,
+        transport: PauseStream<Runner>,
+    },
+    ReceivingBody {
+        start_time: Instant,
+        transport: PauseStream<Runner>,
+    },
+    Complete {
+        transport: Runner,
+    },
     Invalid,
 }
 
@@ -51,63 +75,74 @@ impl AsyncRead for Http1Runner {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         // If we've already read the header then read and record body bytes.
-        if self
-            .out
-            .response
-            .as_ref()
-            .and_then(|resp| resp.header_duration)
-            .is_some()
-        {
-            let old_len = buf.filled().len();
-            let poll = Pin::new(&mut self.transport).poll_read(cx, buf);
-            self.resp_body_buf
-                .extend_from_slice(&buf.filled()[old_len..]);
-            return poll;
-        }
+        let mut state = scopeguard::guard(
+            (
+                std::mem::replace(&mut self.state, State::Invalid),
+                &mut self,
+            ),
+            |(state, mutself)| mutself.state = state,
+        );
+        match &mut *state {
+            (State::ReceivingHeader { transport, .. }, mutself) => {
+                let old_len = buf.filled().len();
+                let poll = Pin::new(transport).poll_read(cx, buf);
+                mutself
+                    .resp_body_buf
+                    .extend_from_slice(&buf.filled()[old_len..]);
+                return poll;
+            }
+            (
+                State::ReceivingBody {
+                    ref mut transport, ..
+                },
+                mutself,
+            ) => {
+                // Record the response start time if this is our first read poll and we didn't explicitly
+                // start it in execute (running as a transport).
+                if mutself.resp_start_time.is_none() {
+                    mutself.resp_start_time = Some(Instant::now());
+                }
 
-        // Record the response start time if this is our first read poll and we didn't explicitly
-        // start it in execute (running as a transport).
-        if self.resp_start_time.is_none() {
-            self.resp_start_time = Some(Instant::now());
-        }
-
-        // Don't read in more bytes at a time than we could fit in buf if there's extra after
-        // reading the header.
-        // TODO: optimize this to avoid the intermediate allocation and write.
-        let mut header_vec = vec![0; buf.remaining() + 1];
-        loop {
-            let mut header_buf = ReadBuf::new(header_vec.as_mut());
-            let poll = Pin::new(&mut self.transport).poll_read(cx, &mut header_buf);
-            self.resp_header_buf.put_slice(header_buf.filled());
-            match poll {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
-                // If no data was read then the stream has ended.
-                Poll::Ready(Ok(())) => {
-                    if header_buf.filled().len() == 0 {
-                        return Poll::Ready(Err(std::io::Error::new(
-                            std::io::ErrorKind::UnexpectedEof,
-                            "header incomplete".to_owned(),
-                        )));
+                // Don't read in more bytes at a time than we could fit in buf if there's extra after
+                // reading the header.
+                // TODO: optimize this to avoid the intermediate allocation and write.
+                let mut header_vec = vec![0; buf.remaining() + 1];
+                loop {
+                    let mut header_buf = ReadBuf::new(header_vec.as_mut());
+                    let poll = Pin::new(&mut *transport).poll_read(cx, &mut header_buf);
+                    mutself.resp_header_buf.put_slice(header_buf.filled());
+                    match poll {
+                        Poll::Pending => return Poll::Pending,
+                        Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+                        // If no data was read then the stream has ended.
+                        Poll::Ready(Ok(())) => {
+                            if header_buf.filled().len() == 0 {
+                                return Poll::Ready(Err(std::io::Error::new(
+                                    std::io::ErrorKind::UnexpectedEof,
+                                    "header incomplete".to_owned(),
+                                )));
+                            }
+                        }
+                    }
+                    // Data was read - try to process it.
+                    if mutself.first_read.is_none() {
+                        mutself.first_read = Some(Instant::now());
+                    }
+                    match mutself.receive_header() {
+                        // Not enough data, let's read some more.
+                        Poll::Pending => {}
+                        // The full header was read, read the leftover bytes as part of the body.
+                        Poll::Ready(Ok(remaining)) => {
+                            mutself.resp_header_end_time = Some(Instant::now());
+                            mutself.resp_body_buf.extend_from_slice(&remaining);
+                            buf.put(remaining);
+                            return Poll::Ready(Ok(()));
+                        }
+                        Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                     }
                 }
             }
-            // Data was read - try to process it.
-            if self.first_read.is_none() {
-                self.first_read = Some(Instant::now());
-            }
-            match self.receive_header() {
-                // Not enough data, let's read some more.
-                Poll::Pending => {}
-                // The full header was read, read the leftover bytes as part of the body.
-                Poll::Ready(Ok(remaining)) => {
-                    self.resp_header_end_time = Some(Instant::now());
-                    self.resp_body_buf.extend_from_slice(&remaining);
-                    buf.put(remaining);
-                    return Poll::Ready(Ok(()));
-                }
-                Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
-            }
+            _ => panic!(),
         }
     }
 }
@@ -118,7 +153,12 @@ impl AsyncWrite for Http1Runner {
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> Poll<Result<usize, std::io::Error>> {
-        let poll = Pin::new(&mut self.transport).poll_write(cx, buf);
+        let (State::SendingHeader { transport, .. } | State::SendingBody { transport, .. }) =
+            &mut self.state
+        else {
+            panic!();
+        };
+        let poll = Pin::new(transport).poll_write(cx, buf);
         if poll.is_ready() {
             if self.req_body_start_time.is_none() {
                 self.req_body_start_time = Some(Instant::now());
@@ -132,14 +172,24 @@ impl AsyncWrite for Http1Runner {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
-        Pin::new(&mut self.transport).poll_flush(cx)
+        let (State::SendingHeader { transport, .. } | State::SendingBody { transport, .. }) =
+            &mut self.state
+        else {
+            panic!();
+        };
+        Pin::new(transport).poll_flush(cx)
     }
 
     fn poll_shutdown(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
-        let poll = Pin::new(&mut self.transport).poll_shutdown(cx);
+        let (State::SendingHeader { transport, .. } | State::SendingBody { transport, .. }) =
+            &mut self.state
+        else {
+            panic!();
+        };
+        let poll = Pin::new(transport).poll_shutdown(cx);
         if poll.is_ready() {
             self.end_time = Some(Instant::now());
         }
@@ -150,19 +200,19 @@ impl AsyncWrite for Http1Runner {
 impl Http1Runner {
     pub(super) fn new(ctx: Arc<Context>, transport: Runner, plan: Http1PlanOutput) -> Self {
         Self {
-            ctx,
             state: State::Pending {
+                ctx,
                 header: Self::compute_header(&plan),
+                transport,
             },
             out: Http1Output {
                 request: None,
                 response: None,
                 error: None,
                 duration: Duration::zero(),
-                pause: PauseOutput::with_planned_capacity(&plan.pause),
+                pause: crate::Http1PauseOutput::with_planned_capacity(&plan.pause),
                 plan,
             },
-            transport,
             req_header_start_time: None,
             req_body_start_time: None,
             req_end_time: None,
@@ -258,8 +308,24 @@ impl Http1Runner {
                 match result {
                     httparse::Status::Partial => Poll::Pending,
                     httparse::Status::Complete(body_start) => {
-                        let State::Running { start_time } = self.state else {
+                        let state = std::mem::replace(&mut self.state, State::Invalid);
+                        let State::ReceivingHeader {
+                            start_time,
+                            mut transport,
+                        } = state
+                        else {
                             panic!("header recieved in incorrect state: {:?}", self.state);
+                        };
+                        transport.reset(
+                            std::iter::empty(),
+                            vec![PauseSpec {
+                                plan: self.out.plan.pause.response_body.start.clone(),
+                                group_offset: 0,
+                            }],
+                        );
+                        self.state = State::ReceivingBody {
+                            start_time,
+                            transport,
                         };
                         self.out.response.as_mut().unwrap().header_duration =
                             Some(Duration::from_std(header_complete_time - start_time).unwrap());
@@ -283,39 +349,98 @@ impl Http1Runner {
         size_hint: Option<usize>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let state = std::mem::replace(&mut self.state, State::Invalid);
-        let State::Pending { mut header } = state else {
+        let State::Pending {
+            mut header,
+            mut transport,
+            ctx,
+        } = state
+        else {
             return Err(Box::new(Error(
                 "attempt to start Http1Runner from invalid state".to_owned(),
             )));
         };
 
-        for p in &self.out.plan.pause.before.open {
-            println!("pausing before http open for {:?}", p.duration);
-        }
-
-        self.transport
+        if let Err(e) = transport
             .start(Some(header.len() + size_hint.unwrap_or(0)))
-            .await?;
-
-        self.state = State::Running {
-            start_time: Instant::now(),
+            .await
+        {
+            self.out.error = Some(Http1Error {
+                kind: "transport start".to_owned(),
+                message: e.to_string(),
+            });
+            self.state = State::StartFailed { transport };
+            self.complete();
+            return Err(e);
         };
 
-        for p in &self.out.plan.pause.after.open {
-            println!("pausing after http open for {:?}", p.duration);
-        }
-        for p in &self.out.plan.pause.before.request_headers {
-            println!("pausing before http request headers for {:?}", p.duration);
-        }
+        self.state = State::SendingHeader {
+            start_time: Instant::now(),
+            transport: PauseStream::new(
+                ctx,
+                transport,
+                vec![
+                    PauseSpec {
+                        plan: self.out.plan.pause.request_headers.start.clone(),
+                        group_offset: 0,
+                    },
+                    PauseSpec {
+                        plan: self.out.plan.pause.request_headers.end.clone(),
+                        group_offset: header.len().try_into().unwrap(),
+                    },
+                ],
+                std::iter::empty(),
+            ),
+        };
 
         self.req_header_start_time = Some(Instant::now());
-        // Write directly to the transport instead of self so we don't record the header as the
-        // body.
-        self.transport.write_all_buf(&mut header).await?;
+        self.write_all_buf(&mut header).await?;
 
-        for p in &self.out.plan.pause.after.request_headers {
-            println!("pausing after http request headers for {:?}", p.duration);
+        let state = std::mem::replace(&mut self.state, State::Invalid);
+        let State::SendingHeader {
+            start_time,
+            mut transport,
+        } = state
+        else {
+            panic!("invalid state after HTTP/1 header write");
+        };
+
+        let (_, mut writes) = transport.reset(
+            if let Some(size_hint) = size_hint {
+                vec![
+                    PauseSpec {
+                        plan: self.out.plan.pause.request_body.start.clone(),
+                        group_offset: 0,
+                    },
+                    PauseSpec {
+                        plan: self.out.plan.pause.request_body.end.clone(),
+                        group_offset: size_hint.try_into().unwrap(),
+                    },
+                ]
+            } else {
+                if !self.out.plan.pause.request_body.end.is_empty() {
+                    return Err(Box::new(Error(
+                        "http1.pause.receive_body.end is unsupported in this request".to_owned(),
+                    )));
+                }
+                vec![PauseSpec {
+                    plan: self.out.plan.pause.request_body.start.clone(),
+                    group_offset: 0,
+                }]
+            },
+            std::iter::empty(),
+        );
+
+        if let Some(p) = writes.pop() {
+            self.out.pause.request_headers.end = p;
         }
+        if let Some(p) = writes.pop() {
+            self.out.pause.request_headers.start = p;
+        }
+
+        self.state = State::SendingBody {
+            start_time,
+            transport,
+        };
 
         self.out.request = Some(Http1RequestOutput {
             url: self.out.plan.url.clone(),
@@ -351,15 +476,12 @@ impl Http1Runner {
             }
             self.out.plan.body = body;
         }
-        if let Err(e) = self.transport.flush().await {
+        if let Err(e) = self.flush().await {
             self.out.error = Some(Http1Error {
                 kind: e.kind().to_string(),
                 message: e.to_string(),
             });
             return;
-        }
-        for p in &self.out.plan.pause.after.request_body {
-            println!("pausing after http request headers for {:?}", p.duration);
         }
         self.resp_start_time = Some(Instant::now());
         let mut response = Vec::new();
@@ -373,8 +495,39 @@ impl Http1Runner {
     }
 
     pub fn finish(mut self) -> (Output, Runner) {
-        let State::Running { start_time } = self.state else {
-            return (Output::Http1(self.out), self.transport);
+        self.complete();
+        let State::Complete { transport } = self.state else {
+            unreachable!();
+        };
+        (Output::Http1(self.out), transport)
+    }
+
+    fn complete(&mut self) {
+        let state = std::mem::replace(&mut self.state, State::Invalid);
+        let (start_time, transport) = match state {
+            State::SendingHeader {
+                start_time,
+                transport,
+            }
+            | State::SendingBody {
+                start_time,
+                transport,
+            }
+            | State::ReceivingHeader {
+                start_time,
+                transport,
+            }
+            | State::ReceivingBody {
+                start_time,
+                transport,
+            } => (start_time, transport),
+            State::Complete { transport }
+            | State::Pending { transport, .. }
+            | State::StartFailed { transport } => {
+                self.state = State::Complete { transport };
+                return;
+            }
+            State::Invalid => panic!(),
         };
         let end_time = self.end_time.unwrap_or_else(Instant::now);
 
@@ -414,8 +567,7 @@ impl Http1Runner {
                 .unwrap();
         }
 
+        self.state = State::Complete { transport };
         self.out.duration = Duration::from_std(end_time - start_time).unwrap();
-
-        (Output::Http1(self.out), self.transport)
     }
 }

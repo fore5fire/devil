@@ -110,74 +110,52 @@ pub enum HttpVersion {
     HTTP3,
 }
 
-#[derive(Debug)]
-pub struct Pause<T> {
-    pub before: T,
-    pub after: T,
+#[derive(Debug, Clone, Default)]
+pub struct PausePoints {
+    pub start: Vec<PauseValue>,
+    pub end: Vec<PauseValue>,
 }
 
-impl<T: PauseJoins> PauseJoins for Pause<T> {
+impl PauseJoins for PausePoints {
     fn joins(&self) -> impl Iterator<Item = String> {
-        self.before.joins().chain(self.after.joins())
+        self.start
+            .iter()
+            .flat_map(|p| p.join.iter())
+            .chain(self.end.iter().flat_map(|p| p.join.iter()))
+            .map(ToOwned::to_owned)
     }
 }
 
-impl<T: Clone> Clone for Pause<T> {
-    fn clone(&self) -> Self {
-        Pause {
-            before: self.before.clone(),
-            after: self.after.clone(),
-        }
-    }
-}
-
-impl<T: Default> Default for Pause<T> {
-    fn default() -> Self {
-        Pause {
-            before: T::default(),
-            after: T::default(),
-        }
-    }
-}
-
-impl<T: TryInto<P, Error = Error>, P: Default> TryFrom<bindings::Pause<T>> for Pause<P> {
+impl TryFrom<bindings::PausePoints> for PausePoints {
     type Error = Error;
-    fn try_from(binding: bindings::Pause<T>) -> Result<Pause<P>> {
-        Ok(Pause {
-            before: binding
-                .before
-                .map(T::try_into)
-                .transpose()?
-                .unwrap_or_default(),
-            after: binding
-                .after
-                .map(T::try_into)
-                .transpose()?
-                .unwrap_or_default(),
+    fn try_from(binding: bindings::PausePoints) -> Result<PausePoints> {
+        Ok(Self {
+            start: binding
+                .start
+                .unwrap_or_default()
+                .into_iter()
+                .map(PauseValue::try_from)
+                .collect::<Result<_>>()?,
+            end: binding
+                .end
+                .unwrap_or_default()
+                .into_iter()
+                .map(PauseValue::try_from)
+                .collect::<Result<_>>()?,
         })
     }
 }
 
-impl<P: TryInto<T, Error = Error>, T> TryFrom<Pause<P>> for crate::PauseOutput<T> {
-    type Error = Error;
-    fn try_from(binding: Pause<P>) -> Result<crate::PauseOutput<T>> {
-        Ok(crate::PauseOutput {
-            before: binding.before.try_into()?,
-            after: binding.after.try_into()?,
-        })
-    }
-}
-
-impl<T: Evaluate<O>, O> Evaluate<crate::PauseOutput<O>> for Pause<T> {
-    fn evaluate<'a, S, SO, I>(&self, state: &S) -> Result<crate::PauseOutput<O>>
+impl Evaluate<crate::PausePointsOutput> for PausePoints {
+    fn evaluate<'a, S, SO, I>(&self, state: &S) -> Result<crate::PausePointsOutput>
     where
         S: State<'a, SO, I>,
         SO: Into<&'a str>,
         I: IntoIterator<Item = SO>,
     {
-        Ok(crate::PauseOutput {
-            before: self.before.evaluate(state)?,
-            after: self.after.evaluate(state)?,
+        Ok(crate::PausePointsOutput {
+            start: self.start.evaluate(state)?,
+            end: self.end.evaluate(state)?,
         })
     }
 }
@@ -222,24 +200,13 @@ impl Evaluate<crate::PauseValueOutput> for PauseValue {
     }
 }
 
-impl Evaluate<Vec<crate::PauseValueOutput>> for Vec<PauseValue> {
-    fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Vec<crate::PauseValueOutput>>
-    where
-        S: State<'a, O, I>,
-        O: Into<&'a str>,
-        I: IntoIterator<Item = O>,
-    {
-        self.iter().map(|x| x.evaluate(state)).collect()
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct HttpRequest {
     pub url: PlanValue<Url>,
     pub method: Option<PlanValue<Vec<u8>>>,
     pub body: Option<PlanValue<Vec<u8>>>,
     pub headers: PlanValueTable<Vec<u8>, Error, Vec<u8>, Error>,
-    pub pause: Pause<HttpPause>,
+    pub pause: HttpPause,
 }
 
 impl TryFrom<bindings::Http> for HttpRequest {
@@ -259,7 +226,7 @@ impl TryFrom<bindings::Http> for HttpRequest {
                 .map(PlanValue::<Vec<u8>>::try_from)
                 .transpose()?,
             headers: PlanValueTable::try_from(binding.headers.unwrap_or_default())?,
-            pause: binding.pause.try_into()?,
+            pause: binding.pause.unwrap_or_default().try_into()?,
         })
     }
 }
@@ -292,23 +259,21 @@ impl Evaluate<crate::HttpPlanOutput> for HttpRequest {
 
 #[derive(Debug, Clone, Default)]
 pub struct HttpPause {
-    pub open: Vec<PauseValue>,
-    pub request_headers: Vec<PauseValue>,
-    pub request_body: Vec<PauseValue>,
-    pub response_headers: Vec<PauseValue>,
-    pub response_body: Vec<PauseValue>,
+    pub open: PausePoints,
+    pub request_headers: PausePoints,
+    pub request_body: PausePoints,
+    pub response_headers: PausePoints,
+    pub response_body: PausePoints,
 }
 
 impl PauseJoins for HttpPause {
     fn joins(&self) -> impl Iterator<Item = String> {
         self.open
-            .iter()
-            .flat_map(|x| x.join.iter())
-            .chain(self.request_headers.iter().flat_map(|x| x.join.iter()))
-            .chain(self.request_body.iter().flat_map(|x| x.join.iter()))
-            .chain(self.response_headers.iter().flat_map(|x| x.join.iter()))
-            .chain(self.response_body.iter().flat_map(|x| x.join.iter()))
-            .map(|x| x.to_owned())
+            .joins()
+            .chain(self.request_headers.joins())
+            .chain(self.request_body.joins())
+            .chain(self.response_headers.joins())
+            .chain(self.response_body.joins())
     }
 }
 
@@ -316,26 +281,11 @@ impl TryFrom<bindings::HttpPause> for HttpPause {
     type Error = Error;
     fn try_from(value: bindings::HttpPause) -> std::result::Result<Self, Self::Error> {
         Ok(Self {
-            open: Vec::from(value.open.unwrap_or_default())
-                .into_iter()
-                .map(PauseValue::try_from)
-                .collect::<Result<_>>()?,
-            request_headers: Vec::from(value.request_headers.unwrap_or_default())
-                .into_iter()
-                .map(PauseValue::try_from)
-                .collect::<Result<_>>()?,
-            request_body: Vec::from(value.request_body.unwrap_or_default())
-                .into_iter()
-                .map(PauseValue::try_from)
-                .collect::<Result<_>>()?,
-            response_headers: Vec::from(value.response_headers.unwrap_or_default())
-                .into_iter()
-                .map(PauseValue::try_from)
-                .collect::<Result<_>>()?,
-            response_body: Vec::from(value.response_body.unwrap_or_default())
-                .into_iter()
-                .map(PauseValue::try_from)
-                .collect::<Result<_>>()?,
+            open: PausePoints::try_from(value.open.unwrap_or_default())?,
+            request_headers: PausePoints::try_from(value.request_headers.unwrap_or_default())?,
+            request_body: PausePoints::try_from(value.request_body.unwrap_or_default())?,
+            response_headers: PausePoints::try_from(value.response_headers.unwrap_or_default())?,
+            response_body: PausePoints::try_from(value.response_body.unwrap_or_default())?,
         })
     }
 }
@@ -365,7 +315,7 @@ pub struct Http1Request {
     pub body: Option<PlanValue<Vec<u8>>>,
     pub headers: PlanValueTable<Vec<u8>, Error, Vec<u8>, Error>,
 
-    pub pause: Pause<Http1Pause>,
+    pub pause: Http1Pause,
 }
 
 impl Evaluate<crate::Http1PlanOutput> for Http1Request {
@@ -424,30 +374,28 @@ impl TryFrom<bindings::Http1> for Http1Request {
                 .map(PlanValue::<Vec<u8>>::try_from)
                 .transpose()?,
             headers: PlanValueTable::try_from(binding.common.headers.unwrap_or_default())?,
-            pause: binding.pause.try_into()?,
+            pause: binding.pause.unwrap_or_default().try_into()?,
         })
     }
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct Http1Pause {
-    pub open: Vec<PauseValue>,
-    pub request_headers: Vec<PauseValue>,
-    pub request_body: Vec<PauseValue>,
-    pub response_headers: Vec<PauseValue>,
-    pub response_body: Vec<PauseValue>,
+    pub open: PausePoints,
+    pub request_headers: PausePoints,
+    pub request_body: PausePoints,
+    pub response_headers: PausePoints,
+    pub response_body: PausePoints,
 }
 
 impl PauseJoins for Http1Pause {
     fn joins(&self) -> impl Iterator<Item = String> {
         self.open
-            .iter()
-            .flat_map(|x| x.join.iter())
-            .chain(self.request_headers.iter().flat_map(|x| x.join.iter()))
-            .chain(self.request_body.iter().flat_map(|x| x.join.iter()))
-            .chain(self.response_headers.iter().flat_map(|x| x.join.iter()))
-            .chain(self.response_body.iter().flat_map(|x| x.join.iter()))
-            .map(|x| x.to_owned())
+            .joins()
+            .chain(self.request_headers.joins())
+            .chain(self.request_body.joins())
+            .chain(self.response_headers.joins())
+            .chain(self.response_body.joins())
     }
 }
 
@@ -455,26 +403,11 @@ impl TryFrom<bindings::Http1Pause> for Http1Pause {
     type Error = Error;
     fn try_from(value: bindings::Http1Pause) -> std::result::Result<Self, Self::Error> {
         Ok(Self {
-            open: Vec::from(value.open.unwrap_or_default())
-                .into_iter()
-                .map(PauseValue::try_from)
-                .collect::<Result<_>>()?,
-            request_headers: Vec::from(value.request_headers.unwrap_or_default())
-                .into_iter()
-                .map(PauseValue::try_from)
-                .collect::<Result<_>>()?,
-            request_body: Vec::from(value.request_body.unwrap_or_default())
-                .into_iter()
-                .map(PauseValue::try_from)
-                .collect::<Result<_>>()?,
-            response_headers: Vec::from(value.response_headers.unwrap_or_default())
-                .into_iter()
-                .map(PauseValue::try_from)
-                .collect::<Result<_>>()?,
-            response_body: Vec::from(value.response_body.unwrap_or_default())
-                .into_iter()
-                .map(PauseValue::try_from)
-                .collect::<Result<_>>()?,
+            open: PausePoints::try_from(value.open.unwrap_or_default())?,
+            request_headers: PausePoints::try_from(value.request_headers.unwrap_or_default())?,
+            request_body: PausePoints::try_from(value.request_body.unwrap_or_default())?,
+            response_headers: PausePoints::try_from(value.response_headers.unwrap_or_default())?,
+            response_body: PausePoints::try_from(value.response_body.unwrap_or_default())?,
         })
     }
 }
@@ -522,7 +455,7 @@ pub struct GraphQlRequest {
     pub query: PlanValue<String>,
     pub params: Option<PlanValueTable<Vec<u8>, Error, serde_json::Value, Error>>,
     pub operation: Option<PlanValue<serde_json::Value>>,
-    pub pause: Pause<GraphQlPause>,
+    pub pause: GraphQlPause,
 }
 
 impl GraphQlRequest {
@@ -548,7 +481,7 @@ impl TryFrom<bindings::GraphQl> for GraphQlRequest {
                 .operation
                 .map(PlanValue::<serde_json::Value>::try_from)
                 .transpose()?,
-            pause: binding.pause.try_into()?,
+            pause: binding.pause.unwrap_or_default().try_into()?,
         })
     }
 }
@@ -605,7 +538,7 @@ pub struct TcpRequest {
     pub body: PlanValue<Vec<u8>>,
     pub host: PlanValue<String>,
     pub port: PlanValue<u16>,
-    pub pause: Pause<TcpPause>,
+    pub pause: TcpPause,
 }
 
 impl Evaluate<crate::TcpPlanOutput> for TcpRequest {
@@ -641,30 +574,24 @@ impl TryFrom<bindings::Tcp> for TcpRequest {
                 .map(PlanValue::<Vec<u8>>::try_from)
                 .transpose()?
                 .unwrap_or_else(|| PlanValue::Literal(Vec::new())),
-            pause: binding.pause.try_into()?,
+            pause: binding.pause.unwrap_or_default().try_into()?,
         })
     }
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct TcpPause {
-    pub handshake: Vec<PauseValue>,
-    pub first_read: Vec<PauseValue>,
-    pub first_write: Vec<PauseValue>,
-    pub last_read: Vec<PauseValue>,
-    pub last_write: Vec<PauseValue>,
+    pub handshake: PausePoints,
+    pub send_body: PausePoints,
+    pub receive_body: PausePoints,
 }
 
 impl PauseJoins for TcpPause {
     fn joins(&self) -> impl Iterator<Item = String> {
         self.handshake
-            .iter()
-            .flat_map(|x| x.join.iter())
-            .chain(self.first_read.iter().flat_map(|x| x.join.iter()))
-            .chain(self.first_write.iter().flat_map(|x| x.join.iter()))
-            .chain(self.last_read.iter().flat_map(|x| x.join.iter()))
-            .chain(self.last_write.iter().flat_map(|x| x.join.iter()))
-            .map(|x| x.to_owned())
+            .joins()
+            .chain(self.send_body.joins())
+            .chain(self.receive_body.joins())
     }
 }
 
@@ -672,26 +599,9 @@ impl TryFrom<bindings::TcpPause> for TcpPause {
     type Error = Error;
     fn try_from(value: bindings::TcpPause) -> std::result::Result<Self, Self::Error> {
         Ok(Self {
-            handshake: Vec::from(value.handshake.unwrap_or_default())
-                .into_iter()
-                .map(PauseValue::try_from)
-                .collect::<Result<_>>()?,
-            first_read: Vec::from(value.first_read.unwrap_or_default())
-                .into_iter()
-                .map(PauseValue::try_from)
-                .collect::<Result<_>>()?,
-            first_write: Vec::from(value.first_write.unwrap_or_default())
-                .into_iter()
-                .map(PauseValue::try_from)
-                .collect::<Result<_>>()?,
-            last_read: Vec::from(value.last_read.unwrap_or_default())
-                .into_iter()
-                .map(PauseValue::try_from)
-                .collect::<Result<_>>()?,
-            last_write: Vec::from(value.last_write.unwrap_or_default())
-                .into_iter()
-                .map(PauseValue::try_from)
-                .collect::<Result<_>>()?,
+            handshake: PausePoints::try_from(value.handshake.unwrap_or_default())?,
+            send_body: PausePoints::try_from(value.send_body.unwrap_or_default())?,
+            receive_body: PausePoints::try_from(value.receive_body.unwrap_or_default())?,
         })
     }
 }
@@ -705,10 +615,8 @@ impl Evaluate<TcpPauseOutput> for TcpPause {
     {
         Ok(TcpPauseOutput {
             handshake: self.handshake.evaluate(state)?,
-            first_read: self.first_read.evaluate(state)?,
-            first_write: self.first_write.evaluate(state)?,
-            last_read: self.last_read.evaluate(state)?,
-            last_write: self.last_write.evaluate(state)?,
+            send_body: self.send_body.evaluate(state)?,
+            receive_body: self.receive_body.evaluate(state)?,
         })
     }
 }
@@ -1003,7 +911,7 @@ pub struct TlsRequest {
     pub host: PlanValue<String>,
     pub port: PlanValue<u16>,
     pub body: PlanValue<Vec<u8>>,
-    pub pause: Pause<TlsPause>,
+    pub pause: TlsPause,
 }
 
 impl Evaluate<crate::TlsPlanOutput> for TlsRequest {
@@ -1039,26 +947,24 @@ impl TryFrom<bindings::Tls> for TlsRequest {
                 .map(PlanValue::<Vec<u8>>::try_from)
                 .transpose()?
                 .unwrap_or_else(|| PlanValue::Literal(Vec::new())),
-            pause: binding.pause.try_into()?,
+            pause: binding.pause.unwrap_or_default().try_into()?,
         })
     }
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct TlsPause {
-    pub handshake: Vec<PauseValue>,
-    pub first_read: Vec<PauseValue>,
-    pub first_write: Vec<PauseValue>,
+    pub handshake: PausePoints,
+    pub send_body: PausePoints,
+    pub receive_body: PausePoints,
 }
 
 impl PauseJoins for TlsPause {
     fn joins(&self) -> impl Iterator<Item = String> {
         self.handshake
-            .iter()
-            .flat_map(|x| x.join.iter())
-            .chain(self.first_read.iter().flat_map(|x| x.join.iter()))
-            .chain(self.first_write.iter().flat_map(|x| x.join.iter()))
-            .map(|x| x.to_owned())
+            .joins()
+            .chain(self.send_body.joins())
+            .chain(self.receive_body.joins())
     }
 }
 
@@ -1066,18 +972,9 @@ impl TryFrom<bindings::TlsPause> for TlsPause {
     type Error = Error;
     fn try_from(value: bindings::TlsPause) -> std::result::Result<Self, Self::Error> {
         Ok(Self {
-            handshake: Vec::from(value.handshake.unwrap_or_default())
-                .into_iter()
-                .map(PauseValue::try_from)
-                .collect::<Result<_>>()?,
-            first_read: Vec::from(value.first_read.unwrap_or_default())
-                .into_iter()
-                .map(PauseValue::try_from)
-                .collect::<Result<_>>()?,
-            first_write: Vec::from(value.first_write.unwrap_or_default())
-                .into_iter()
-                .map(PauseValue::try_from)
-                .collect::<Result<_>>()?,
+            handshake: PausePoints::try_from(value.handshake.unwrap_or_default())?,
+            send_body: PausePoints::try_from(value.send_body.unwrap_or_default())?,
+            receive_body: PausePoints::try_from(value.receive_body.unwrap_or_default())?,
         })
     }
 }
@@ -1091,8 +988,8 @@ impl Evaluate<TlsPauseOutput> for TlsPause {
     {
         Ok(TlsPauseOutput {
             handshake: self.handshake.evaluate(state)?,
-            first_read: self.first_read.evaluate(state)?,
-            first_write: self.first_write.evaluate(state)?,
+            send_body: self.send_body.evaluate(state)?,
+            receive_body: self.receive_body.evaluate(state)?,
         })
     }
 }
@@ -1106,7 +1003,7 @@ pub struct QuicRequest {
     pub port: PlanValue<u16>,
     pub body: PlanValue<Vec<u8>>,
     pub version: Option<PlanValue<TlsVersion>>,
-    pub pause: Pause<QuicPause>,
+    pub pause: QuicPause,
 }
 
 impl TryFrom<bindings::Quic> for QuicRequest {
@@ -1130,22 +1027,19 @@ impl TryFrom<bindings::Quic> for QuicRequest {
                 .tls_version
                 .map(PlanValue::<TlsVersion>::try_from)
                 .transpose()?,
-            pause: binding.pause.try_into()?,
+            pause: binding.pause.unwrap_or_default().try_into()?,
         })
     }
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct QuicPause {
-    pub handshake: Vec<PauseValue>,
+    pub handshake: PausePoints,
 }
 
 impl PauseJoins for QuicPause {
     fn joins(&self) -> impl Iterator<Item = String> {
-        self.handshake
-            .iter()
-            .flat_map(|x| x.join.iter())
-            .map(|x| x.to_owned())
+        self.handshake.joins()
     }
 }
 
@@ -1153,10 +1047,7 @@ impl TryFrom<bindings::QuicPause> for QuicPause {
     type Error = Error;
     fn try_from(value: bindings::QuicPause) -> std::result::Result<Self, Self::Error> {
         Ok(Self {
-            handshake: Vec::from(value.handshake.unwrap_or_default())
-                .into_iter()
-                .map(PauseValue::try_from)
-                .collect::<Result<_>>()?,
+            handshake: PausePoints::try_from(value.handshake.unwrap_or_default())?,
         })
     }
 }
@@ -1166,7 +1057,7 @@ pub struct UdpRequest {
     pub body: PlanValue<Vec<u8>>,
     pub host: PlanValue<String>,
     pub port: PlanValue<u16>,
-    pub pause: Pause<UdpPause>,
+    pub pause: UdpPause,
 }
 
 impl TryFrom<bindings::Udp> for UdpRequest {
@@ -1186,24 +1077,20 @@ impl TryFrom<bindings::Udp> for UdpRequest {
                 .map(PlanValue::<Vec<u8>>::try_from)
                 .transpose()?
                 .unwrap_or_else(|| PlanValue::Literal(Vec::new())),
-            pause: binding.pause.try_into()?,
+            pause: binding.pause.unwrap_or_default().try_into()?,
         })
     }
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct UdpPause {
-    pub first_read: Vec<PauseValue>,
-    pub first_write: Vec<PauseValue>,
+    pub send_body: PausePoints,
+    pub receive_body: PausePoints,
 }
 
 impl PauseJoins for UdpPause {
     fn joins(&self) -> impl Iterator<Item = String> {
-        self.first_read
-            .iter()
-            .flat_map(|x| x.join.iter())
-            .chain(self.first_write.iter().flat_map(|x| x.join.iter()))
-            .map(|x| x.to_owned())
+        self.send_body.joins().chain(self.receive_body.joins())
     }
 }
 
@@ -1211,14 +1098,8 @@ impl TryFrom<bindings::UdpPause> for UdpPause {
     type Error = Error;
     fn try_from(value: bindings::UdpPause) -> std::result::Result<Self, Self::Error> {
         Ok(Self {
-            first_read: Vec::from(value.first_read.unwrap_or_default())
-                .into_iter()
-                .map(PauseValue::try_from)
-                .collect::<Result<_>>()?,
-            first_write: Vec::from(value.first_write.unwrap_or_default())
-                .into_iter()
-                .map(PauseValue::try_from)
-                .collect::<Result<_>>()?,
+            send_body: PausePoints::try_from(value.send_body.unwrap_or_default())?,
+            receive_body: PausePoints::try_from(value.receive_body.unwrap_or_default())?,
         })
     }
 }
@@ -2282,6 +2163,17 @@ pub trait Evaluate<T> {
         I: IntoIterator<Item = O>;
 }
 
+impl<T: Evaluate<T2>, T2> Evaluate<Vec<T2>> for Vec<T> {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Vec<T2>>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O>,
+    {
+        self.iter().map(|x| x.evaluate(state)).collect()
+    }
+}
+
 fn exec_cel<'a, S, O, I>(cel: &str, vars: &[(String, String)], state: &S) -> Result<PlanData>
 where
     O: Into<&'a str>,
@@ -2305,4 +2197,10 @@ where
 
 trait PauseJoins {
     fn joins(&self) -> impl Iterator<Item = String>;
+}
+
+impl<T: PauseJoins> PauseJoins for Vec<T> {
+    fn joins(&self) -> impl Iterator<Item = String> {
+        self.iter().flat_map(PauseJoins::joins)
+    }
 }

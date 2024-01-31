@@ -5,9 +5,7 @@ use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::{runner::Runner, Context};
-use crate::{
-    GraphQlError, GraphQlOutput, GraphQlPlanOutput, Output, PauseOutput, WithPlannedCapacity,
-};
+use crate::{GraphQlError, GraphQlOutput, GraphQlPlanOutput, Output, WithPlannedCapacity};
 
 #[derive(Debug)]
 pub(super) struct GraphQlRunner {
@@ -52,7 +50,7 @@ impl GraphQlRunner {
                 response: None,
                 error: None,
                 duration: Duration::zero(),
-                pause: PauseOutput::with_planned_capacity(&plan.pause),
+                pause: crate::GraphQlPauseOutput::with_planned_capacity(&plan.pause),
                 plan,
             },
             ctx,
