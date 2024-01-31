@@ -87,6 +87,27 @@ where
         read_plans: impl IntoIterator<Item = PauseSpec>,
         write_plans: impl IntoIterator<Item = PauseSpec>,
     ) -> Self {
+        let mut result = PauseStream {
+            inner,
+            ctx,
+            read_bytes: 0,
+            read_pending: None,
+            read_plans: VecDeque::new(),
+            read_out: Vec::new(),
+            write_bytes: 0,
+            write_pending: None,
+            write_plans: VecDeque::new(),
+            write_out: Vec::new(),
+        };
+        result.reset(read_plans, write_plans);
+        result
+    }
+
+    pub(crate) fn reset(
+        &mut self,
+        read_plans: impl IntoIterator<Item = PauseSpec>,
+        write_plans: impl IntoIterator<Item = PauseSpec>,
+    ) -> (Vec<Vec<PauseValueOutput>>, Vec<Vec<PauseValueOutput>>) {
         let read_plans = read_plans.into_iter();
         let mut read_out = read_plans
             .size_hint()
@@ -125,18 +146,12 @@ where
             .sorted_by(|a, b| a.absolute_offset.cmp(&b.absolute_offset))
             .collect();
 
-        PauseStream {
-            inner,
-            ctx,
-            read_bytes: 0,
-            read_pending: None,
-            read_out,
-            read_plans,
-            write_bytes: 0,
-            write_pending: None,
-            write_out,
-            write_plans,
-        }
+        let old = (self.read_out, self.write_out);
+        self.read_out = read_out;
+        self.read_plans = read_plans;
+        self.write_out = write_out;
+        self.write_plans = write_plans;
+        old
     }
 
     pub fn finish(self) -> (T, Vec<Vec<PauseValueOutput>>, Vec<Vec<PauseValueOutput>>) {
@@ -185,14 +200,14 @@ where
         }
 
         // Don't read more bytes than we need to get to the next pause.
-        let read_len = dbg!(self
+        let read_len = self
             .read_plans
             .front()
             .map(|p| p.absolute_offset - self.read_bytes)
             .map(usize::try_from)
             .transpose()
             .expect("bytes to read should fit in a usize")
-            .unwrap_or_else(|| buf.remaining()));
+            .unwrap_or_else(|| buf.remaining());
         // When we let the sub buffer writes initalize bytes in the parent buffer things break, so
         // just pre-initialize the whole parent for now.
         buf.initialize_unfilled();

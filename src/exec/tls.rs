@@ -3,7 +3,6 @@ use std::time::Instant;
 use std::{pin::Pin, sync::Arc};
 
 use chrono::Duration;
-use futures::future::join_all;
 use rustls::pki_types::ServerName;
 use rustls::RootCertStore;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -11,12 +10,14 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_rustls::client::TlsStream;
 use tokio_rustls::TlsConnector;
 
+use super::pause::PauseStream;
 use super::runner::Runner;
 use super::tee::Tee;
 use super::Context;
+use crate::exec::pause::{Pause, PauseSpec};
 use crate::{
-    Error, Output, PauseOutput, PauseValueOutput, TlsError, TlsOutput, TlsPlanOutput,
-    TlsRequestOutput, TlsResponse, TlsVersion, WithPlannedCapacity,
+    Error, Output, TlsError, TlsOutput, TlsPauseOutput, TlsPlanOutput, TlsRequestOutput,
+    TlsResponse, TlsVersion, WithPlannedCapacity,
 };
 
 #[derive(Debug)]
@@ -35,12 +36,16 @@ enum State {
         connector: TlsConnector,
         domain: Box<String>,
         transport: Runner,
+        pause: TlsPauseOutput,
     },
     Open {
         start: Instant,
-        transport: Tee<TlsStream<Runner>>,
+        transport: PauseStream<Tee<TlsStream<Runner>>>,
     },
     Completed {
+        transport: Runner,
+    },
+    StartFailed {
         transport: Runner,
     },
     Invalid,
@@ -50,19 +55,23 @@ impl std::fmt::Debug for State {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Pending {
-                connector,
+                connector: _,
                 domain,
                 transport,
+                pause,
             } => {
                 write!(
                     f,
-                    "Pending {{ connector: <Opaque>, domain: {domain}, transport: {transport:?} }}"
+                    "Pending {{ connector: <Opaque>, domain: {domain}, transport: {transport:?}, pause: {pause:?} }}"
                 )
             }
             Self::Open { start, transport } => {
-                write!(f, "Open{{ start: {start:?}, transport: {transport:?} }}")
+                write!(f, "Open {{ start: {start:?}, transport: {transport:?} }}")
             }
             Self::Completed { transport } => write!(f, "Completed {{ transport: {transport:?} }}"),
+            Self::StartFailed { transport } => {
+                write!(f, "StartFailed {{ transport: {transport:?} }}")
+            }
             Self::Invalid => write!(f, "Invalid"),
         }
     }
@@ -78,7 +87,7 @@ impl TlsRunner {
             .with_no_client_auth();
         let connector = tokio_rustls::TlsConnector::from(Arc::new(tls_config));
 
-        let mut pause = PauseOutput::with_planned_capacity(&plan.pause);
+        let pause = crate::TlsPauseOutput::with_planned_capacity(&plan.pause);
 
         TlsRunner {
             ctx,
@@ -86,6 +95,7 @@ impl TlsRunner {
                 connector,
                 domain: Box::new(plan.host.clone()),
                 transport,
+                pause: plan.pause.clone(),
             },
             out: TlsOutput {
                 request: Some(TlsRequestOutput {
@@ -119,63 +129,153 @@ impl TlsRunner {
             connector,
             domain,
             mut transport,
+            pause,
         } = state
         else {
             return Err(Box::new(Error(
-                "attempt to start TlsRunner from invalid state".to_owned(),
+                "attempt to start TlsRunner from unexpected state".to_owned(),
             )));
         };
 
         // FIXME: Why does rustls ClientConnector require a static lifetime for DNS names?
         let leaked_name = Box::leak(domain);
-        let domain =
-            ServerName::try_from(leaked_name.as_str()).map_err(|e| crate::Error(e.to_string()))?;
+        let domain = match ServerName::try_from(leaked_name.as_str()) {
+            Ok(domain) => domain,
+            Err(e) => {
+                self.out.error = Some(TlsError {
+                    kind: "parse domain".to_owned(),
+                    message: e.to_string(),
+                });
+                self.state = State::StartFailed { transport };
+                self.complete();
+                return Err(Box::new(e));
+            }
+        };
 
-        // It's really complicated to calculate the number of bytes TLS will increase the stream
-        // by, so don't provide a size hint.
-        transport.start(None).await?;
+        // It's really complicated to pre-calculate the number of bytes TLS will increase the
+        // stream by, so don't forward a size hint even if we have one.
+        if let Err(e) = transport.start(None).await {
+            self.out.error = Some(TlsError {
+                kind: "tcp_start".to_owned(),
+                message: e.to_string(),
+            });
+            self.state = State::StartFailed { transport };
+            self.complete();
+            return Err(e);
+        };
 
         let start = Instant::now();
-        for p in &self.out.plan.pause.before.handshake {
+        self.out
+            .pause
+            .handshake
+            .start
+            .reserve_exact(self.out.plan.pause.handshake.start.len());
+        for p in &self.out.plan.pause.handshake.start {
+            if p.offset_bytes != 0 {
+                return Err(Box::new(Error(
+                    "pause offset not yet supported for tls handshake".to_string(),
+                )));
+            }
             println!("pausing before tls handshake for {:?}", p.duration);
-            let before = Instant::now();
-            tokio::time::sleep(p.duration.to_std().unwrap()).await;
-            self.out.pause.before.handshake.push(PauseValueOutput {
-                duration: Duration::from_std(before.elapsed()).unwrap(),
-                offset_bytes: p.offset_bytes,
-                join: p.join.clone(),
-            })
+            self.out
+                .pause
+                .handshake
+                .start
+                .push(Pause::new(&self.ctx, p).await?);
         }
         // Perform the TLS handshake.
-        let connection = connector
-            .connect(domain, transport)
-            .await
-            .map_err(|e| crate::Error(e.to_string()))?;
+        let connection = match connector.connect(domain, transport).await {
+            Ok(conn) => conn,
+            Err(e) => {
+                panic!("TLS handshake failure: {e}");
+            }
+        };
         let handshake_duration = start.elapsed();
-        for p in &self.out.plan.pause.after.handshake {
+        for p in &self.out.plan.pause.handshake.end {
+            if p.offset_bytes != 0 {
+                return Err(Box::new(Error(
+                    "pause offset not yet supported for tls handshake".to_string(),
+                )));
+            }
             println!("pausing after tls handshake for {:?}", p.duration);
+            self.out
+                .pause
+                .handshake
+                .end
+                .push(Pause::new(&self.ctx, p).await?);
         }
         self.out.handshake_duration = Some(Duration::from_std(handshake_duration).unwrap());
         self.state = State::Open {
             start,
-            transport: Tee::new(connection),
+            transport: PauseStream::new(
+                self.ctx.clone(),
+                Tee::new(connection),
+                if let Some(size) = size_hint {
+                    vec![
+                        PauseSpec {
+                            group_offset: 0,
+                            plan: pause.receive_body.start,
+                        },
+                        PauseSpec {
+                            group_offset: size.try_into().unwrap(),
+                            plan: pause.receive_body.end,
+                        },
+                    ]
+                } else {
+                    if !pause.receive_body.end.is_empty() {
+                        return Err(Box::new(Error(
+                            "tls.pause.receive_body.end is unsupported in this request".to_owned(),
+                        )));
+                    }
+                    vec![PauseSpec {
+                        group_offset: 0,
+                        plan: pause.receive_body.start,
+                    }]
+                },
+                if let Some(size) = size_hint {
+                    vec![
+                        PauseSpec {
+                            group_offset: 0,
+                            plan: pause.send_body.start,
+                        },
+                        PauseSpec {
+                            group_offset: size.try_into().unwrap(),
+                            plan: pause.send_body.end,
+                        },
+                    ]
+                } else {
+                    if !pause.send_body.end.is_empty() {
+                        return Err(Box::new(Error(
+                            "tls.pause.send_body.end is unsupported in this request".to_owned(),
+                        )));
+                    }
+                    vec![PauseSpec {
+                        group_offset: 0,
+                        plan: pause.send_body.start,
+                    }]
+                },
+            ),
         };
         Ok(())
     }
 
     pub async fn execute(&mut self) {
-        let State::Open { transport, .. } = &mut self.state else {
-            panic!();
+        if let Err(_) = self.start(Some(self.out.plan.body.len())).await {
+            // Error output is already set by start.
+            return;
         };
-        if let Err(e) = transport.write_all(&self.out.plan.body).await {
+        let body = std::mem::take(&mut self.out.plan.body);
+        if let Err(e) = self.write_all(&body).await {
             self.out.error = Some(TlsError {
                 kind: "write failure".to_owned(),
                 message: e.to_string(),
             });
+            self.out.plan.body = body;
             self.complete();
             return;
         }
-        if let Err(e) = transport.flush().await {
+        self.out.plan.body = body;
+        if let Err(e) = self.flush().await {
             self.out.error = Some(TlsError {
                 kind: "write failure".to_owned(),
                 message: e.to_string(),
@@ -184,7 +284,7 @@ impl TlsRunner {
             return;
         }
         let mut response = Vec::new();
-        if let Err(e) = transport.read_to_end(&mut response).await {
+        if let Err(e) = self.read_to_end(&mut response).await {
             self.out.error = Some(TlsError {
                 kind: "read failure".to_owned(),
                 message: e.to_string(),
@@ -208,17 +308,33 @@ impl TlsRunner {
             State::Open {
                 start, transport, ..
             } => (start, transport),
-            State::Completed { transport } => {
+            State::Completed { transport }
+            | State::Pending { transport, .. }
+            | State::StartFailed { transport } => {
                 self.state = State::Completed { transport };
                 return;
             }
-            _ => return,
+            State::Invalid => panic!("tls has invalid end state"),
         };
         let end_time = Instant::now();
-        let (stream, writes, reads) = transport.into_parts();
+        let (tee, mut send_pause, mut receive_pause) = transport.finish();
+        let (stream, writes, reads) = tee.into_parts();
         let (inner, conn) = stream.into_inner();
 
         self.state = State::Completed { transport: inner };
+
+        if let Some(p) = receive_pause.pop() {
+            self.out.pause.receive_body.end = p;
+        }
+        if let Some(p) = receive_pause.pop() {
+            self.out.pause.receive_body.start = p;
+        }
+        if let Some(p) = send_pause.pop() {
+            self.out.pause.send_body.end = p;
+        }
+        if let Some(p) = send_pause.pop() {
+            self.out.pause.send_body.start = p;
+        }
 
         if let Some(req) = &mut self.out.request {
             req.time_to_first_byte = self
@@ -288,13 +404,7 @@ impl AsyncWrite for TlsRunner {
         };
         let poll = Pin::new(transport).poll_write(cx, buf);
         if let Poll::Ready(Ok(_)) = &poll {
-            if self.first_write.is_none() {
-                let mut pause_results = Vec::new();
-                for p in &self.out.plan.pause.after.first_write {
-                    println!("pausing after first write for {:?}", p.duration);
-                }
-                self.out.pause.after.first_write.extend(pause_results);
-            }
+            if self.first_write.is_none() {}
         }
         poll
     }

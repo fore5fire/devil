@@ -2,48 +2,63 @@ courier.version = 0
 
 #[http_pause.http]
 #url = "https://example.com/"
-#pause.after.open.duration = "500ms"
-#pause.after.request_body.duration = "500ms"
-
+#pause.open.end.duration = "500ms"
+#pause.request_body.end.duration = "500ms"
+#
 #[http1_pause.http1]
 #url = "https://example.com/test"
 #[http1_pause.http1.pause]
-#after.open.duration = "10ms"
-#after.request_headers.duration = "50us"
-#after.response_headers = [{duration = "5ms"}, {duration = "10ms", offset_bytes = 100 }]
+#open.end.duration = "10ms"
+#request_headers.end.duration = "50us"
+#response_headers.end = [{duration = "5ms"}, {duration = "10ms", offset_bytes = 100 }]
 #[http1_pause.tcp.pause]
 ## Pause after the tcp handshake but before the tls handshake. Could also be
 ## done using `http1_pause.tls.pause.before`.
-#after.handshake.duration = "1s"
+#handshake.end.duration = "1s"
+#
+#[simple_tcp.tcp]
+#host = "example.com"
+#port = 80
+#body = "GET / HTTP/1.0\r\n\r\n"
+#[simple_tcp.tcp.pause]
+#handshake.start.duration = "250ms"
+#handshake.end.duration = "250ms"
+#send_body.start.duration = "250ms"
+#send_body.end.duration = "250ms"
+#receive_body.start.duration = "250ms"
+#receive_body.end.duration = "250ms"
 
-[simple.tcp]
+[simple_tls.tls]
 host = "example.com"
-port = 80
+port = 443
 body = "GET / HTTP/1.0\r\n\r\n"
-#pause.before.handshake.duration = "250ms"
-#pause.after.handshake.duration = "250ms"
-#pause.before.first_read.duration = "250ms"
-#pause.before.last_read.duration = "250ms"
+[simple_tls.tls.pause]
+handshake.start.duration = "250ms"
+handshake.end.duration = "250ms"
+send_body.start.duration = "250ms"
+send_body.end.duration = "250ms"
+receive_body.start.duration = "250ms"
+receive_body.end.duration = "250ms"
 
 #[multi_pause.tls]
 #host = "example.com"
 #port = 443
 #body = "GET / HTTP/1.0\r\n\r\n"
-#pause.after.handshake.duration = "500ms"
-#[[multi_pause.tls.pause.after.first_write]]
+#pause.handshake.end.duration = "500ms"
+#[[multi_pause.tls.pause.send_body.end]]
 #duration = "500ms"
-#[[multi_pause.tls.pause.after.first_write]]
+#[[multi_pause.tls.pause.send_body.end]]
 #offset_bytes = 50
 #duration = "500ms"
-#[multi_pause.tls.pause.after.first_read]
+#[multi_pause.tls.pause.receive_body.end]
 ##match = "<< >>"
 #offset_bytes = 50
 #duration = "500ms"
-
-# Sync parallel requests by pausing until all are ready.
+#
+## Sync parallel requests by pausing until all are ready.
 #[parallel_join.http1]
 #url = "https://example.com/"
-#[parallel_join.tcp.pause.before.first_read]
+#[parallel_join.tcp.pause.receive_body.start]
 ## Pause each parallel request a different number of seconds.
 #duration.cel = "randomDuration(0, 20, 's')"
 ## Pause each parallel request at a different spot.

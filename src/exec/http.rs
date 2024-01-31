@@ -9,7 +9,7 @@ use super::tls::TlsRunner;
 use super::{http1::Http1Runner, Context};
 use crate::{
     Error, HttpOutput, HttpPauseOutput, HttpPlanOutput, HttpRequestOutput, HttpResponse, Output,
-    PauseOutput, TcpPlanOutput, TlsPlanOutput,
+    TcpPlanOutput, TlsPlanOutput,
 };
 
 #[derive(Debug)]
@@ -74,7 +74,7 @@ impl HttpRunner {
                     .port_or_known_default()
                     .ok_or_else(|| Error("url is missing port".to_owned()))?,
                 body: Vec::new(),
-                pause: PauseOutput::default(),
+                pause: crate::TcpPauseOutput::default(),
             },
         )));
 
@@ -95,7 +95,7 @@ impl HttpRunner {
                         .port_or_known_default()
                         .ok_or_else(|| Error("url is missing port".to_owned()))?,
                     body: Vec::new(),
-                    pause: PauseOutput::default(),
+                    pause: crate::TlsPauseOutput::default(),
                 },
             )))
         };
@@ -109,21 +109,12 @@ impl HttpRunner {
                 version_string: Some("HTTP/1.1".into()),
                 headers: plan.headers,
                 body: plan.body,
-                pause: PauseOutput {
-                    before: crate::Http1PauseOutput {
-                        open: plan.pause.before.open,
-                        request_headers: plan.pause.before.request_headers,
-                        request_body: plan.pause.before.request_body,
-                        response_headers: plan.pause.before.response_headers,
-                        response_body: plan.pause.before.response_body,
-                    },
-                    after: crate::Http1PauseOutput {
-                        open: plan.pause.after.open,
-                        request_headers: plan.pause.after.request_headers,
-                        request_body: plan.pause.after.request_body,
-                        response_headers: plan.pause.after.response_headers,
-                        response_body: plan.pause.after.response_body,
-                    },
+                pause: crate::Http1PauseOutput {
+                    open: plan.pause.open,
+                    request_headers: plan.pause.request_headers,
+                    request_body: plan.pause.request_body,
+                    response_headers: plan.pause.response_headers,
+                    response_body: plan.pause.response_body,
                 },
             },
         )))
@@ -156,21 +147,12 @@ impl HttpRunner {
                         method: out.plan.method,
                         headers: out.plan.headers,
                         body: out.plan.body,
-                        pause: PauseOutput {
-                            before: HttpPauseOutput {
-                                open: out.plan.pause.before.open,
-                                request_headers: out.plan.pause.before.request_headers,
-                                request_body: out.plan.pause.before.request_body,
-                                response_headers: out.plan.pause.before.response_headers,
-                                response_body: out.plan.pause.before.response_body,
-                            },
-                            after: HttpPauseOutput {
-                                open: out.plan.pause.after.open,
-                                request_headers: out.plan.pause.after.request_headers,
-                                request_body: out.plan.pause.after.request_body,
-                                response_headers: out.plan.pause.after.response_headers,
-                                response_body: out.plan.pause.after.response_body,
-                            },
+                        pause: HttpPauseOutput {
+                            open: out.plan.pause.open,
+                            request_headers: out.plan.pause.request_headers,
+                            request_body: out.plan.pause.request_body,
+                            response_headers: out.plan.pause.response_headers,
+                            response_body: out.plan.pause.response_body,
                         },
                     },
                     request: out.request.map(|req| HttpRequestOutput {
@@ -197,21 +179,12 @@ impl HttpRunner {
                     }),
                     protocol: Some("HTTP/1.1".to_string()),
                     duration: out.duration,
-                    pause: PauseOutput {
-                        before: HttpPauseOutput {
-                            open: out.pause.before.open,
-                            request_headers: out.pause.before.request_headers,
-                            request_body: out.pause.before.request_body,
-                            response_headers: out.pause.before.response_headers,
-                            response_body: out.pause.before.response_body,
-                        },
-                        after: HttpPauseOutput {
-                            open: out.pause.after.open,
-                            request_headers: out.pause.after.request_headers,
-                            request_body: out.pause.after.request_body,
-                            response_headers: out.pause.after.response_headers,
-                            response_body: out.pause.after.response_body,
-                        },
+                    pause: HttpPauseOutput {
+                        open: out.pause.open,
+                        request_headers: out.pause.request_headers,
+                        request_body: out.pause.request_body,
+                        response_headers: out.pause.response_headers,
+                        response_body: out.pause.response_body,
                     },
                 }),
                 _ => unreachable!(),
