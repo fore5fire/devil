@@ -1,14 +1,12 @@
 courier.version = 0
 
-#[http_pause.http]
-#url = "https://example.com/"
-#pause.open.end.duration = "500ms"
-#pause.request_body.end.duration = "500ms"
-#
+[http_pause.http]
+url = "https://example.com/"
+pause.request_body.end.duration = "500ms"
+
 #[http1_pause.http1]
 #url = "https://example.com/test"
 #[http1_pause.http1.pause]
-#open.end.duration = "10ms"
 #request_headers.end.duration = "50us"
 #response_headers.end = [{duration = "5ms"}, {duration = "10ms", offset_bytes = 100 }]
 #[http1_pause.tcp.pause]
@@ -28,17 +26,17 @@ courier.version = 0
 #receive_body.start.duration = "250ms"
 #receive_body.end.duration = "250ms"
 
-[simple_tls.tls]
-host = "example.com"
-port = 443
-body = "GET / HTTP/1.0\r\n\r\n"
-[simple_tls.tls.pause]
-handshake.start.duration = "250ms"
-handshake.end.duration = "250ms"
-send_body.start.duration = "250ms"
-send_body.end.duration = "250ms"
-receive_body.start.duration = "250ms"
-receive_body.end.duration = "250ms"
+#[simple_tls.tls]
+#host = "example.com"
+#port = 443
+#body = "GET / HTTP/1.0\r\n\r\n"
+#[simple_tls.tls.pause]
+#handshake.start.duration = "250ms"
+#handshake.end.duration = "250ms"
+#send_body.start.duration = "250ms"
+#send_body.end.duration = "250ms"
+#receive_body.start.duration = "250ms"
+#receive_body.end.duration = "250ms"
 
 #[multi_pause.tls]
 #host = "example.com"

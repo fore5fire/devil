@@ -297,13 +297,25 @@ impl Evaluate<HttpPauseOutput> for HttpPause {
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
-        Ok(HttpPauseOutput {
+        let resp = HttpPauseOutput {
             open: self.open.evaluate(state)?,
             request_headers: self.request_headers.evaluate(state)?,
             request_body: self.request_body.evaluate(state)?,
             response_headers: self.response_headers.evaluate(state)?,
             response_body: self.response_body.evaluate(state)?,
-        })
+        };
+        if resp.response_headers.end.iter().any(|p| p.offset_bytes < 0) {
+            return Err(Error(
+                "http.pause.response_headers.end with negative offset is not supported".to_owned(),
+            ));
+        }
+        if resp.response_body.start.iter().any(|p| p.offset_bytes < 0) {
+            return Err(Error(
+                "http.pause.response_headers.start with negative offset is not supported"
+                    .to_owned(),
+            ));
+        }
+        Ok(resp)
     }
 }
 
@@ -419,13 +431,25 @@ impl Evaluate<Http1PauseOutput> for Http1Pause {
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
-        Ok(Http1PauseOutput {
+        let resp = Http1PauseOutput {
             open: self.open.evaluate(state)?,
             request_headers: self.request_headers.evaluate(state)?,
             request_body: self.request_body.evaluate(state)?,
             response_headers: self.response_headers.evaluate(state)?,
             response_body: self.response_body.evaluate(state)?,
-        })
+        };
+        if resp.response_headers.end.iter().any(|p| p.offset_bytes < 0) {
+            return Err(Error(
+                "http.pause.response_headers.end with negative offset is not supported".to_owned(),
+            ));
+        }
+        if resp.response_body.start.iter().any(|p| p.offset_bytes < 0) {
+            return Err(Error(
+                "http.pause.response_headers.start with negative offset is not supported"
+                    .to_owned(),
+            ));
+        }
+        Ok(resp)
     }
 }
 

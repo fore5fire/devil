@@ -1179,7 +1179,7 @@ impl PausePoints {
     /// Merge two groups of pause values, with first groups taking presedence over second. If the same
     /// after tag is found in both groups, all entries with that after tag second are ignored.
     /// Otherwise, they are appended.
-    fn merge(mut first: Option<PausePoints>, second: Option<PausePoints>) -> Option<PausePoints> {
+    fn merge(first: Option<PausePoints>, second: Option<PausePoints>) -> Option<PausePoints> {
         let Some(mut first) = first else {
             return second;
         };
