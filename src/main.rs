@@ -207,7 +207,7 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                             String::from_utf8_lossy(&resp.body).replace("\n", "\n< ")
                         );
                     }
-                    if let Some(e) = &tcp.error {
+                    for e in &tcp.errors {
                         println!("{} error: {}", e.kind, e.message);
                     }
                     println!("duration: {}ms", tcp.duration.num_milliseconds());
@@ -221,7 +221,7 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                             String::from_utf8_lossy(&resp.body).replace("\n", "\n< ")
                         );
                     }
-                    if let Some(e) = &tls.error {
+                    for e in &tls.errors {
                         println!("{} error: {}", e.kind, e.message);
                     }
                     println!("duration: {}ms", tls.duration.num_milliseconds());
@@ -256,7 +256,7 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                             println!("< {}", String::from_utf8_lossy(&body).replace("\n", "\n< "));
                         }
                     }
-                    if let Some(e) = &http.error {
+                    for e in &http.errors {
                         println!("{} error: {}", e.kind, e.message);
                     }
                     println!("duration: {}ms", http.duration.num_milliseconds());
@@ -285,7 +285,7 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                             println!("< {}", String::from_utf8_lossy(&body).replace("\n", "\n< "));
                         }
                     }
-                    if let Some(e) = &http.error {
+                    for e in &http.errors {
                         println!("{} error: {}", e.kind, e.message);
                     }
                     println!("duration: {}ms", http.duration.num_milliseconds());
@@ -301,7 +301,7 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                                 .replace("\n", "\n< ")
                         );
                     }
-                    if let Some(e) = &gql.error {
+                    for e in &gql.errors {
                         println!("{} error: {}", e.kind, e.message);
                     }
                     println!("duration: {}ms", gql.duration.num_milliseconds());

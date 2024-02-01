@@ -107,7 +107,7 @@ impl TlsRunner {
                 }),
                 plan,
                 response: None,
-                error: None,
+                errors: Vec::new(),
                 version: None,
                 duration: Duration::zero(),
                 handshake_duration: None,
@@ -142,7 +142,7 @@ impl TlsRunner {
         let domain = match ServerName::try_from(leaked_name.as_str()) {
             Ok(domain) => domain,
             Err(e) => {
-                self.out.error = Some(TlsError {
+                self.out.errors.push(TlsError {
                     kind: "parse domain".to_owned(),
                     message: e.to_string(),
                 });
@@ -155,7 +155,7 @@ impl TlsRunner {
         // It's really complicated to pre-calculate the number of bytes TLS will increase the
         // stream by, so don't forward a size hint even if we have one.
         if let Err(e) = transport.start(None).await {
-            self.out.error = Some(TlsError {
+            self.out.errors.push(TlsError {
                 kind: "tcp_start".to_owned(),
                 message: e.to_string(),
             });
@@ -266,7 +266,7 @@ impl TlsRunner {
         };
         let body = std::mem::take(&mut self.out.plan.body);
         if let Err(e) = self.write_all(&body).await {
-            self.out.error = Some(TlsError {
+            self.out.errors.push(TlsError {
                 kind: "write failure".to_owned(),
                 message: e.to_string(),
             });
@@ -276,7 +276,7 @@ impl TlsRunner {
         }
         self.out.plan.body = body;
         if let Err(e) = self.flush().await {
-            self.out.error = Some(TlsError {
+            self.out.errors.push(TlsError {
                 kind: "write failure".to_owned(),
                 message: e.to_string(),
             });
@@ -285,7 +285,7 @@ impl TlsRunner {
         }
         let mut response = Vec::new();
         if let Err(e) = self.read_to_end(&mut response).await {
-            self.out.error = Some(TlsError {
+            self.out.errors.push(TlsError {
                 kind: "read failure".to_owned(),
                 message: e.to_string(),
             });
@@ -317,24 +317,18 @@ impl TlsRunner {
             State::Invalid => panic!("tls has invalid end state"),
         };
         let end_time = Instant::now();
-        let (tee, mut send_pause, mut receive_pause) = transport.finish();
+        let (tee, send_pause, receive_pause) = transport.finish();
         let (stream, writes, reads) = tee.into_parts();
         let (inner, conn) = stream.into_inner();
 
         self.state = State::Completed { transport: inner };
 
-        if let Some(p) = receive_pause.pop() {
-            self.out.pause.receive_body.end = p;
-        }
-        if let Some(p) = receive_pause.pop() {
-            self.out.pause.receive_body.start = p;
-        }
-        if let Some(p) = send_pause.pop() {
-            self.out.pause.send_body.end = p;
-        }
-        if let Some(p) = send_pause.pop() {
-            self.out.pause.send_body.start = p;
-        }
+        let mut receive_pause = receive_pause.into_iter();
+        self.out.pause.receive_body.start = receive_pause.next().unwrap_or_default();
+        self.out.pause.receive_body.end = receive_pause.next().unwrap_or_default();
+        let mut send_pause = send_pause.into_iter();
+        self.out.pause.send_body.start = send_pause.next().unwrap_or_default();
+        self.out.pause.send_body.end = send_pause.next().unwrap_or_default();
 
         if let Some(req) = &mut self.out.request {
             req.time_to_first_byte = self

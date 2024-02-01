@@ -173,10 +173,14 @@ impl HttpRunner {
                         header_duration: resp.header_duration,
                         time_to_first_byte: resp.time_to_first_byte,
                     }),
-                    error: out.error.map(|e| crate::HttpError {
-                        kind: e.kind,
-                        message: e.message,
-                    }),
+                    errors: out
+                        .errors
+                        .into_iter()
+                        .map(|e| crate::HttpError {
+                            kind: e.kind,
+                            message: e.message,
+                        })
+                        .collect(),
                     protocol: Some("HTTP/1.1".to_string()),
                     duration: out.duration,
                     pause: HttpPauseOutput {

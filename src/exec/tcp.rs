@@ -61,7 +61,7 @@ impl TcpRunner {
                 pause: TcpPauseOutput::with_planned_capacity(&plan.pause),
                 plan,
                 response: None,
-                error: None,
+                errors: Vec::new(),
                 duration: Duration::zero(),
                 handshake_duration: None,
             },
@@ -103,7 +103,7 @@ impl TcpRunner {
                 .push(Pause::new(&self.ctx, p).await?);
         }
         let stream = TcpStream::connect(addr).await.map_err(|e| {
-            self.out.error = Some(TcpError {
+            self.out.errors.push(TcpError {
                 kind: e.kind().to_string(),
                 message: e.to_string(),
             });
@@ -190,14 +190,14 @@ impl TcpRunner {
 impl TcpRunner {
     pub async fn execute(&mut self) {
         if let Err(e) = self.start(Some(self.out.plan.body.len())).await {
-            self.out.error = Some(TcpError {
+            self.out.errors.push(TcpError {
                 kind: "tcp_start".to_owned(),
                 message: e.to_string(),
             })
         }
         let body = std::mem::take(&mut self.out.plan.body);
         if let Err(e) = self.write_all(&body).await {
-            self.out.error = Some(TcpError {
+            self.out.errors.push(TcpError {
                 kind: e.kind().to_string(),
                 message: e.to_string(),
             });
@@ -207,7 +207,7 @@ impl TcpRunner {
         };
         self.out.plan.body = body;
         if let Err(e) = self.flush().await {
-            self.out.error = Some(TcpError {
+            self.out.errors.push(TcpError {
                 kind: e.kind().to_string(),
                 message: e.to_string(),
             });
@@ -216,7 +216,7 @@ impl TcpRunner {
         }
         let mut response = Vec::new();
         if let Err(e) = self.read_to_end(&mut response).await {
-            self.out.error = Some(TcpError {
+            self.out.errors.push(TcpError {
                 kind: e.kind().to_string(),
                 message: e.to_string(),
             });
@@ -239,21 +239,15 @@ impl TcpRunner {
         let end_time = Instant::now();
 
         // TODO: how to sort out which pause outputs came from first or last?
-        let (stream, mut send_pause, mut receive_pause) = stream.finish();
+        let (stream, send_pause, receive_pause) = stream.finish();
         let (_, writes, reads) = stream.into_parts();
 
-        if let Some(p) = receive_pause.pop() {
-            self.out.pause.receive_body.end = p;
-        }
-        if let Some(p) = receive_pause.pop() {
-            self.out.pause.receive_body.start = p;
-        }
-        if let Some(p) = send_pause.pop() {
-            self.out.pause.send_body.end = p;
-        }
-        if let Some(p) = send_pause.pop() {
-            self.out.pause.send_body.start = p;
-        }
+        let mut receive_pause = receive_pause.into_iter();
+        self.out.pause.receive_body.start = receive_pause.next().unwrap_or_default();
+        self.out.pause.receive_body.end = receive_pause.next().unwrap_or_default();
+        let mut send_pause = send_pause.into_iter();
+        self.out.pause.send_body.start = send_pause.next().unwrap_or_default();
+        self.out.pause.send_body.end = send_pause.next().unwrap_or_default();
 
         if let Some(req) = &mut self.out.request {
             if let Some(first_write) = self.first_write {

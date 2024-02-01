@@ -48,7 +48,7 @@ impl GraphQlRunner {
             out: GraphQlOutput {
                 request: None,
                 response: None,
-                error: None,
+                errors: Vec::new(),
                 duration: Duration::zero(),
                 pause: crate::GraphQlPauseOutput::with_planned_capacity(&plan.pause),
                 plan,
@@ -78,21 +78,21 @@ impl<'a> GraphQlRunner {
 
     pub async fn execute(&mut self) {
         if let Err(e) = self.start(None).await {
-            self.out.error = Some(GraphQlError {
+            self.out.errors.push(GraphQlError {
                 kind: "start failed".to_owned(),
                 message: e.to_string(),
             });
             return;
         }
         if let Err(e) = self.transport.write_all(&self.http_body).await {
-            self.out.error = Some(GraphQlError {
+            self.out.errors.push(GraphQlError {
                 kind: e.kind().to_string(),
                 message: e.to_string(),
             });
             return;
         }
         if let Err(e) = self.transport.flush().await {
-            self.out.error = Some(GraphQlError {
+            self.out.errors.push(GraphQlError {
                 kind: e.kind().to_string(),
                 message: e.to_string(),
             });
@@ -100,7 +100,7 @@ impl<'a> GraphQlRunner {
         }
         self.resp_start_time = Some(Instant::now());
         if let Err(e) = self.transport.read_to_end(&mut self.resp).await {
-            self.out.error = Some(GraphQlError {
+            self.out.errors.push(GraphQlError {
                 kind: e.kind().to_string(),
                 message: e.to_string(),
             });
@@ -117,7 +117,7 @@ impl<'a> GraphQlRunner {
         let resp_body: Option<serde_json::Value> = match serde_json::from_slice(&self.resp) {
             Ok(resp) => Some(resp),
             Err(e) => {
-                self.out.error = Some(GraphQlError {
+                self.out.errors.push(GraphQlError {
                     kind: "json response body deserialize".to_owned(),
                     message: e.to_string(),
                 });

@@ -110,6 +110,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "atoi"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f28d99ec8bfea296261ca1af174f24225171fea9664ba9003cbebee704810528"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -281,6 +290,7 @@ name = "courier_qe"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "atoi",
  "base64",
  "bytes",
  "cel-interpreter",

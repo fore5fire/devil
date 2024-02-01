@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, pin::Pin, sync::Arc, task::Poll, time::Instant};
+use std::{collections::VecDeque, mem, pin::Pin, sync::Arc, task::Poll, time::Instant};
 
 use futures::{future::join_all, Future, FutureExt};
 use itertools::Itertools;
@@ -99,59 +99,53 @@ where
             write_plans: VecDeque::new(),
             write_out: Vec::new(),
         };
-        result.reset(read_plans, write_plans);
+        result.add_reads(read_plans);
+        result.add_writes(write_plans);
         result
     }
 
-    pub(crate) fn reset(
-        &mut self,
-        read_plans: impl IntoIterator<Item = PauseSpec>,
-        write_plans: impl IntoIterator<Item = PauseSpec>,
-    ) -> (Vec<Vec<PauseValueOutput>>, Vec<Vec<PauseValueOutput>>) {
+    pub(crate) fn add_reads(&mut self, read_plans: impl IntoIterator<Item = PauseSpec>) {
         let read_plans = read_plans.into_iter();
-        let mut read_out = read_plans
-            .size_hint()
-            .1
-            .map_or_else(Vec::new, |s| Vec::with_capacity(s));
-        let read_plans = read_plans
-            .enumerate()
-            .map(|(i, spec)| {
-                read_out.push(Vec::with_capacity(spec.plan.len()));
-                spec.plan.into_iter().map(move |p| AbsolutePlan {
-                    absolute_offset: spec.group_offset + p.offset_bytes,
-                    plan: p,
-                    output_index: i,
+        if let Some(s) = read_plans.size_hint().1 {
+            self.read_out.reserve(s);
+        }
+        self.read_plans.extend(
+            read_plans
+                .map(|spec| {
+                    let output_index = self.read_out.len();
+                    self.read_out.push(Vec::with_capacity(spec.plan.len()));
+                    let current_offset = spec.group_offset + self.read_bytes;
+                    spec.plan.into_iter().map(move |p| AbsolutePlan {
+                        absolute_offset: current_offset + p.offset_bytes,
+                        plan: p,
+                        output_index,
+                    })
                 })
-            })
-            .flatten()
-            .sorted_by(|a, b| a.absolute_offset.cmp(&b.absolute_offset))
-            .collect();
+                .flatten()
+                .sorted_by(|a, b| a.absolute_offset.cmp(&b.absolute_offset)),
+        );
+    }
 
+    pub fn add_writes(&mut self, write_plans: impl IntoIterator<Item = PauseSpec>) {
         let write_plans = write_plans.into_iter();
-        let mut write_out = write_plans
-            .size_hint()
-            .1
-            .map_or_else(Vec::new, |s| Vec::with_capacity(s));
-        let write_plans = write_plans
-            .enumerate()
-            .map(|(i, spec)| {
-                write_out.push(Vec::with_capacity(spec.plan.len()));
-                spec.plan.into_iter().map(move |p| AbsolutePlan {
-                    absolute_offset: spec.group_offset + p.offset_bytes,
-                    plan: p,
-                    output_index: i,
+        if let Some(s) = write_plans.size_hint().1 {
+            self.write_out.reserve(s);
+        }
+        self.write_plans.extend(
+            write_plans
+                .map(|spec| {
+                    let output_index = self.write_out.len();
+                    self.write_out.push(Vec::with_capacity(spec.plan.len()));
+                    let current_offset = spec.group_offset + self.write_bytes;
+                    spec.plan.into_iter().map(move |p| AbsolutePlan {
+                        absolute_offset: current_offset + p.offset_bytes,
+                        plan: p,
+                        output_index,
+                    })
                 })
-            })
-            .flatten()
-            .sorted_by(|a, b| a.absolute_offset.cmp(&b.absolute_offset))
-            .collect();
-
-        let old = (self.read_out, self.write_out);
-        self.read_out = read_out;
-        self.read_plans = read_plans;
-        self.write_out = write_out;
-        self.write_plans = write_plans;
-        old
+                .flatten()
+                .sorted_by(|a, b| a.absolute_offset.cmp(&b.absolute_offset)),
+        );
     }
 
     pub fn finish(self) -> (T, Vec<Vec<PauseValueOutput>>, Vec<Vec<PauseValueOutput>>) {
