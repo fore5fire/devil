@@ -325,7 +325,7 @@ impl Http1Runner {
     #[inline]
     fn receive_header(&mut self) -> Poll<std::io::Result<BytesMut>> {
         // TODO: Write our own extra-permissive parser.
-        let mut headers = [httparse::EMPTY_HEADER; 16];
+        let mut headers = [httparse::EMPTY_HEADER; 64];
         let mut resp = httparse::Response::new(&mut headers);
         match resp.parse(&self.resp_header_buf) {
             Ok(result) => {
@@ -414,6 +414,7 @@ impl Http1Runner {
             return Err(e);
         };
 
+        let header_len = i64::try_from(header.len()).unwrap();
         let mut transport = PauseStream::new(
             ctx,
             transport,
@@ -428,18 +429,18 @@ impl Http1Runner {
                 },
                 PauseSpec {
                     plan: self.out.plan.pause.request_headers.end.clone(),
-                    group_offset: header.len().try_into().unwrap(),
+                    group_offset: header_len,
                 },
                 PauseSpec {
                     plan: self.out.plan.pause.request_body.start.clone(),
-                    group_offset: header.len().try_into().unwrap(),
+                    group_offset: header_len,
                 },
             ],
         );
         if let Some(size_hint) = size_hint {
             transport.add_writes([PauseSpec {
                 plan: self.out.plan.pause.request_body.end.clone(),
-                group_offset: size_hint.try_into().unwrap(),
+                group_offset: i64::try_from(size_hint).unwrap() + header_len,
             }]);
         } else {
             if self
@@ -521,12 +522,12 @@ impl Http1Runner {
         }
     }
 
-    pub fn finish(mut self) -> (Output, Runner) {
+    pub fn finish(mut self) -> (Http1Output, Runner) {
         self.complete();
         let State::Complete { transport } = self.state else {
             unreachable!();
         };
-        (Output::Http1(self.out), transport)
+        (self.out, transport)
     }
 
     fn complete(&mut self) {

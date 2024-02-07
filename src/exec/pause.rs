@@ -26,11 +26,8 @@ impl Pause {
         let join_tags = planned.join.clone();
         let offset_bytes = planned.offset_bytes;
         Pause(tokio::spawn(async move {
-            println!("pausing for {duration:?}");
             sleep.await;
-            println!("finished sleep");
             join_all(barriers.iter().map(|b| b.wait())).await;
-            println!("finished join at {:?}", std::time::Instant::now());
             PauseValueOutput {
                 duration: chrono::Duration::from_std(start.elapsed())
                     .expect("pause durations should fit in both std and chrono"),
@@ -172,12 +169,6 @@ where
                         self.read_plans.pop_front();
                     }
                 }
-
-                println!(
-                    "calculated required pause: {:?}, time {:?}",
-                    self.read_pending,
-                    Instant::now(),
-                );
             }
 
             // Execute any pending pauses.
@@ -243,12 +234,6 @@ where
                         self.write_plans.pop_front();
                     }
                 }
-
-                println!(
-                    "calculated required pause: {:?}, time {:?}",
-                    self.write_pending,
-                    Instant::now(),
-                );
             }
 
             // Always flush before pausing.

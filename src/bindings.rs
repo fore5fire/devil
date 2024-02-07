@@ -35,6 +35,8 @@ pub struct Settings {
     pub version: u16,
     #[serde(default)]
     pub defaults: Vec<Defaults>,
+    #[serde(default)]
+    pub locals: IndexMap<String, Value>,
     #[serde(flatten)]
     pub unrecognized: toml::Table,
 }
@@ -43,7 +45,7 @@ impl Settings {
     fn validate(&self) -> crate::Result<()> {
         if !self.unrecognized.is_empty() {
             return Err(crate::Error(format!(
-                "unrecognized field{} {}",
+                "unrecognized field courier.{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
                 } else {
@@ -61,9 +63,11 @@ pub struct Defaults {
     pub selector: Option<Selector>,
     pub graphql: Option<GraphQl>,
     pub http: Option<Http>,
-    pub http1: Option<Http1>,
-    pub http2: Option<Http2>,
-    pub http3: Option<Http3>,
+    pub h1c: Option<Http1>,
+    pub h1: Option<Http1>,
+    pub h2c: Option<Http2>,
+    pub h2: Option<Http2>,
+    pub h3: Option<Http3>,
     pub tls: Option<Tls>,
     pub tcp: Option<Tcp>,
     pub quic: Option<Quic>,
@@ -86,20 +90,28 @@ impl Defaults {
 pub enum ProtocolKind {
     #[serde(rename = "graphql")]
     GraphQl,
-    #[serde(rename = "graphqlhttp1")]
-    GraphQlHttp1,
-    #[serde(rename = "graphqlhttp2")]
-    GraphQlHttp2,
-    #[serde(rename = "graphqlhttp3")]
-    GraphQlHttp3,
+    #[serde(rename = "graphqlh1c")]
+    GraphQlH1c,
+    #[serde(rename = "graphqlh1")]
+    GraphQlH1,
+    #[serde(rename = "graphqlh2c")]
+    GraphQlH2c,
+    #[serde(rename = "graphqlh2")]
+    GraphQlH2,
+    #[serde(rename = "graphqlh3")]
+    GraphQlH3,
     #[serde(rename = "http")]
     Http,
-    #[serde(rename = "http1")]
-    Http1,
-    #[serde(rename = "http2")]
-    Http2,
-    #[serde(rename = "http3")]
-    Http3,
+    #[serde(rename = "h1c")]
+    H1c,
+    #[serde(rename = "h1")]
+    H1,
+    #[serde(rename = "h2c")]
+    H2c,
+    #[serde(rename = "h2")]
+    H2,
+    #[serde(rename = "h3")]
+    H3,
     #[serde(rename = "tls")]
     Tls,
     #[serde(rename = "tcp")]
@@ -167,18 +179,31 @@ impl Step {
                     x.validate()?;
                 };
             }
-            StepProtocols::GraphQlHttp1 {
+            StepProtocols::GraphQlH1c { graphql, h1c, tcp } => {
+                self.unrecognized.remove("graphql");
+                self.unrecognized.remove("h1c");
+                self.unrecognized.remove("tls");
+                self.unrecognized.remove("tcp");
+                graphql.validate()?;
+                if let Some(x) = &h1c {
+                    x.validate()?;
+                };
+                if let Some(x) = &tcp {
+                    x.validate()?;
+                };
+            }
+            StepProtocols::GraphQlH1 {
                 graphql,
-                http1,
+                h1,
                 tls,
                 tcp,
             } => {
                 self.unrecognized.remove("graphql");
-                self.unrecognized.remove("http1");
+                self.unrecognized.remove("h1");
                 self.unrecognized.remove("tls");
                 self.unrecognized.remove("tcp");
                 graphql.validate()?;
-                if let Some(x) = &http1 {
+                if let Some(x) = &h1 {
                     x.validate()?;
                 };
                 if let Some(x) = &tls {
@@ -188,18 +213,31 @@ impl Step {
                     x.validate()?;
                 };
             }
-            StepProtocols::GraphQlHttp2 {
+            StepProtocols::GraphQlH2c { graphql, h2c, tcp } => {
+                self.unrecognized.remove("graphql");
+                self.unrecognized.remove("h2c");
+                self.unrecognized.remove("tls");
+                self.unrecognized.remove("tcp");
+                graphql.validate()?;
+                if let Some(x) = &h2c {
+                    x.validate()?;
+                };
+                if let Some(x) = &tcp {
+                    x.validate()?;
+                };
+            }
+            StepProtocols::GraphQlH2 {
                 graphql,
-                http2,
+                h2,
                 tls,
                 tcp,
             } => {
                 self.unrecognized.remove("graphql");
-                self.unrecognized.remove("http2");
+                self.unrecognized.remove("h2");
                 self.unrecognized.remove("tls");
                 self.unrecognized.remove("tcp");
                 graphql.validate()?;
-                if let Some(x) = &http2 {
+                if let Some(x) = &h2 {
                     x.validate()?;
                 };
                 if let Some(x) = &tls {
@@ -209,18 +247,18 @@ impl Step {
                     x.validate()?;
                 };
             }
-            StepProtocols::GraphQlHttp3 {
+            StepProtocols::GraphQlH3 {
                 graphql,
-                http3,
+                h3,
                 quic,
                 udp,
             } => {
                 self.unrecognized.remove("graphql");
-                self.unrecognized.remove("http3");
+                self.unrecognized.remove("h3");
                 self.unrecognized.remove("quic");
                 self.unrecognized.remove("udp");
                 graphql.validate()?;
-                if let Some(x) = &http3 {
+                if let Some(x) = &h3 {
                     x.validate()?;
                 };
                 if let Some(x) = &quic {
@@ -234,11 +272,19 @@ impl Step {
                 self.unrecognized.remove("http");
                 http.validate()?;
             }
-            StepProtocols::Http1 { http1, tls, tcp } => {
-                self.unrecognized.remove("http1");
+            StepProtocols::H1c { h1c, tcp } => {
+                self.unrecognized.remove("h1c");
+                self.unrecognized.remove("tcp");
+                h1c.validate()?;
+                if let Some(x) = &tcp {
+                    x.validate()?;
+                };
+            }
+            StepProtocols::H1 { h1, tls, tcp } => {
+                self.unrecognized.remove("h1");
                 self.unrecognized.remove("tls");
                 self.unrecognized.remove("tcp");
-                http1.validate()?;
+                h1.validate()?;
                 if let Some(x) = &tls {
                     x.validate()?;
                 };
@@ -246,11 +292,19 @@ impl Step {
                     x.validate()?;
                 };
             }
-            StepProtocols::Http2 { http2, tls, tcp } => {
-                self.unrecognized.remove("http2");
+            StepProtocols::H2c { h2c, tcp } => {
+                self.unrecognized.remove("h2c");
+                self.unrecognized.remove("tcp");
+                h2c.validate()?;
+                if let Some(x) = &tcp {
+                    x.validate()?;
+                };
+            }
+            StepProtocols::H2 { h2, tls, tcp } => {
+                self.unrecognized.remove("h2");
                 self.unrecognized.remove("tls");
                 self.unrecognized.remove("tcp");
-                http2.validate()?;
+                h2.validate()?;
                 if let Some(x) = &tls {
                     x.validate()?;
                 };
@@ -258,11 +312,11 @@ impl Step {
                     x.validate()?;
                 };
             }
-            StepProtocols::Http3 { http3, quic, udp } => {
-                self.unrecognized.remove("http3");
+            StepProtocols::H3 { h3, quic, udp } => {
+                self.unrecognized.remove("h3");
                 self.unrecognized.remove("quic");
                 self.unrecognized.remove("udp");
-                http3.validate()?;
+                h3.validate()?;
                 if let Some(x) = &quic {
                     x.validate()?;
                 };
@@ -278,10 +332,10 @@ impl Step {
                     x.validate()?;
                 };
             }
-            StepProtocols::Dtls { tls, udp } => {
+            StepProtocols::Dtls { dtls, udp } => {
                 self.unrecognized.remove("tls");
                 self.unrecognized.remove("udp");
-                tls.validate()?;
+                dtls.validate()?;
                 if let Some(x) = &udp {
                     x.validate()?;
                 };
@@ -325,39 +379,59 @@ pub enum StepProtocols {
         graphql: GraphQl,
         http: Option<Http>,
     },
-    GraphQlHttp1 {
+    // If only graphql and tcp are specified we assume GraphQLH1c.
+    GraphQlH1c {
         graphql: GraphQl,
-        http1: Option<Http1>,
+        h1c: Option<Http1>,
+        tcp: Option<Tcp>,
+    },
+    // If only graphql and tls are specified we assume GraphQLH1.
+    GraphQlH1 {
+        graphql: GraphQl,
+        h1: Option<Http1>,
         tls: Option<Tls>,
         tcp: Option<Tcp>,
     },
-    GraphQlHttp2 {
+    GraphQlH2c {
         graphql: GraphQl,
-        http2: Option<Http2>,
+        h2c: Option<Http2>,
+        tcp: Option<Tcp>,
+    },
+    GraphQlH2 {
+        graphql: GraphQl,
+        h2: Option<Http2>,
         tls: Option<Tls>,
         tcp: Option<Tcp>,
     },
-    GraphQlHttp3 {
+    GraphQlH3 {
         graphql: GraphQl,
-        http3: Option<Http3>,
+        h3: Option<Http3>,
         quic: Option<Quic>,
         udp: Option<Udp>,
     },
     Http {
         http: Http,
     },
-    Http1 {
-        http1: Http1,
+    H1c {
+        h1c: Http1,
+        tcp: Option<Tcp>,
+    },
+    H1 {
+        h1: Http1,
         tls: Option<Tls>,
         tcp: Option<Tcp>,
     },
-    Http2 {
-        http2: Http2,
+    H2c {
+        h2c: Http2,
+        tcp: Option<Tcp>,
+    },
+    H2 {
+        h2: Http2,
         tls: Option<Tls>,
         tcp: Option<Tcp>,
     },
-    Http3 {
-        http3: Http3,
+    H3 {
+        h3: Http3,
         quic: Option<Quic>,
         udp: Option<Udp>,
     },
@@ -366,7 +440,7 @@ pub enum StepProtocols {
         tcp: Option<Tcp>,
     },
     Dtls {
-        tls: Tls,
+        dtls: Tls,
         udp: Option<Udp>,
     },
     Tcp {
@@ -398,55 +472,73 @@ impl StepProtocols {
                 graphql: GraphQl::merge(graphql, default.graphql),
                 http: Some(http.unwrap_or_default().merge(default.http)),
             },
-            Self::GraphQlHttp1 {
+            Self::GraphQlH1c { graphql, h1c, tcp } => Self::GraphQlH1c {
+                graphql: graphql.merge(default.graphql),
+                h1c: Some(h1c.unwrap_or_default().merge(default.h1c)),
+                tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
+            },
+            Self::GraphQlH1 {
                 graphql,
-                http1,
+                h1,
                 tls,
                 tcp,
-            } => Self::GraphQlHttp1 {
+            } => Self::GraphQlH1 {
                 graphql: graphql.merge(default.graphql),
-                http1: Some(http1.unwrap_or_default().merge(default.http1)),
+                h1: Some(h1.unwrap_or_default().merge(default.h1)),
                 tls: Some(tls.unwrap_or_default().merge(default.tls)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
             },
-            Self::GraphQlHttp2 {
+            Self::GraphQlH2c { graphql, h2c, tcp } => Self::GraphQlH2c {
+                graphql: graphql.merge(default.graphql),
+                h2c: Some(h2c.unwrap_or_default().merge(default.h2c)),
+                tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
+            },
+            Self::GraphQlH2 {
                 graphql,
-                http2,
+                h2,
                 tls,
                 tcp,
-            } => Self::GraphQlHttp2 {
+            } => Self::GraphQlH2 {
                 graphql: graphql.merge(default.graphql),
-                http2: Some(http2.unwrap_or_default().merge(default.http2)),
+                h2: Some(h2.unwrap_or_default().merge(default.h2)),
                 tls: Some(tls.unwrap_or_default().merge(default.tls)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
             },
 
-            Self::GraphQlHttp3 {
+            Self::GraphQlH3 {
                 graphql,
-                http3,
+                h3,
                 quic,
                 udp,
-            } => Self::GraphQlHttp3 {
+            } => Self::GraphQlH3 {
                 graphql: graphql.merge(default.graphql),
-                http3: Some(http3.unwrap_or_default().merge(default.http3)),
+                h3: Some(h3.unwrap_or_default().merge(default.h3)),
                 quic: Some(quic.unwrap_or_default().merge(default.quic)),
                 udp: Some(udp.unwrap_or_default().merge(default.udp)),
             },
             Self::Http { http } => Self::Http {
                 http: http.merge(default.http),
             },
-            Self::Http1 { http1, tls, tcp } => Self::Http1 {
-                http1: http1.merge(default.http1),
+            Self::H1c { h1c, tcp } => Self::H1c {
+                h1c: h1c.merge(default.h1c),
+                tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
+            },
+            Self::H1 { h1, tls, tcp } => Self::H1 {
+                h1: h1.merge(default.h1),
                 tls: Some(tls.unwrap_or_default().merge(default.tls)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
             },
-            Self::Http2 { http2, tls, tcp } => Self::Http2 {
-                http2: http2.merge(default.http2),
+            Self::H2c { h2c, tcp } => Self::H2c {
+                h2c: h2c.merge(default.h2c),
+                tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
+            },
+            Self::H2 { h2, tls, tcp } => Self::H2 {
+                h2: h2.merge(default.h2),
                 tls: Some(tls.unwrap_or_default().merge(default.tls)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
             },
-            Self::Http3 { http3, quic, udp } => Self::Http3 {
-                http3: http3.merge(default.http3),
+            Self::H3 { h3, quic, udp } => Self::H3 {
+                h3: h3.merge(default.h3),
                 quic: Some(quic.unwrap_or_default().merge(default.quic)),
                 udp: Some(udp.unwrap_or_default().merge(default.udp)),
             },
@@ -458,8 +550,8 @@ impl StepProtocols {
                 tcp: tcp.merge(default.tcp),
             },
 
-            Self::Dtls { tls, udp } => Self::Dtls {
-                tls: tls.merge(default.tls),
+            Self::Dtls { dtls, udp } => Self::Dtls {
+                dtls: dtls.merge(default.tls),
                 udp: Some(udp.unwrap_or_default().merge(default.udp)),
             },
             Self::Udp { udp } => Self::Udp {
@@ -472,13 +564,17 @@ impl StepProtocols {
     fn kind(&self) -> ProtocolKind {
         match self {
             Self::GraphQl { .. } => ProtocolKind::GraphQl,
-            Self::GraphQlHttp1 { .. } => ProtocolKind::GraphQlHttp1,
-            Self::GraphQlHttp2 { .. } => ProtocolKind::GraphQlHttp2,
-            Self::GraphQlHttp3 { .. } => ProtocolKind::GraphQlHttp3,
+            Self::GraphQlH1c { .. } => ProtocolKind::GraphQlH1c,
+            Self::GraphQlH1 { .. } => ProtocolKind::GraphQlH1,
+            Self::GraphQlH2c { .. } => ProtocolKind::GraphQlH2c,
+            Self::GraphQlH2 { .. } => ProtocolKind::GraphQlH2,
+            Self::GraphQlH3 { .. } => ProtocolKind::GraphQlH3,
             Self::Http { .. } => ProtocolKind::Http,
-            Self::Http1 { .. } => ProtocolKind::Http1,
-            Self::Http2 { .. } => ProtocolKind::Http2,
-            Self::Http3 { .. } => ProtocolKind::Http3,
+            Self::H1c { .. } => ProtocolKind::H1c,
+            Self::H1 { .. } => ProtocolKind::H1,
+            Self::H2c { .. } => ProtocolKind::H2c,
+            Self::H2 { .. } => ProtocolKind::H2,
+            Self::H3 { .. } => ProtocolKind::H3,
             Self::Tls { .. } => ProtocolKind::Tls,
             Self::Dtls { .. } => ProtocolKind::Dtls,
             Self::Tcp { .. } => ProtocolKind::Tcp,

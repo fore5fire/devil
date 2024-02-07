@@ -1,0 +1,4 @@
+courier.version = 0
+
+[printf.http]
+url.cel = "printf('https://example.com/%05d', 10)"

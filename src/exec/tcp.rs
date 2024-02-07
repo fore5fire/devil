@@ -4,13 +4,13 @@ use std::task::Poll;
 use std::time::Instant;
 
 use chrono::Duration;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
 use tokio::net::TcpStream;
 
 use crate::exec::pause::Pause;
 use crate::{
-    Error, Output, TcpError, TcpOutput, TcpPauseOutput, TcpPlanOutput, TcpRequestOutput,
-    TcpResponse, WithPlannedCapacity,
+    Error, TcpError, TcpOutput, TcpPauseOutput, TcpPlanOutput, TcpRequestOutput, TcpResponse,
+    WithPlannedCapacity,
 };
 
 use super::pause::{PauseSpec, PauseStream};
@@ -36,7 +36,7 @@ pub enum State {
     },
     Open {
         start: Instant,
-        stream: PauseStream<Tee<TcpStream>>,
+        stream: PauseStream<BufWriter<Tee<TcpStream>>>,
         size_hint: Option<usize>,
     },
     Completed,
@@ -131,33 +131,21 @@ impl TcpRunner {
         }
 
         self.out.handshake_duration = Some(chrono::Duration::from_std(handshake_duration).unwrap());
+        if !pause.receive_body.end.is_empty() {
+            return Err(Box::new(Error(
+                "tcp.pause.receive_body.end is unsupported in this request".to_owned(),
+            )));
+        }
         self.state = State::Open {
             start,
             stream: PauseStream::new(
                 self.ctx.clone(),
-                Tee::new(stream),
-                if let Some(size) = size_hint {
-                    vec![
-                        PauseSpec {
-                            group_offset: 0,
-                            plan: pause.receive_body.start,
-                        },
-                        PauseSpec {
-                            group_offset: size.try_into().unwrap(),
-                            plan: pause.receive_body.end,
-                        },
-                    ]
-                } else {
-                    if !pause.receive_body.end.is_empty() {
-                        return Err(Box::new(Error(
-                            "tcp.pause.receive_body.end is unsupported in this request".to_owned(),
-                        )));
-                    }
-                    vec![PauseSpec {
-                        group_offset: 0,
-                        plan: pause.receive_body.start,
-                    }]
-                },
+                BufWriter::new(Tee::new(stream)),
+                // TODO: implement read size hints.
+                vec![PauseSpec {
+                    group_offset: 0,
+                    plan: pause.receive_body.start,
+                }],
                 if let Some(size) = size_hint {
                     vec![
                         PauseSpec {
@@ -225,9 +213,9 @@ impl TcpRunner {
         }
     }
 
-    pub fn finish(mut self) -> Output {
+    pub fn finish(mut self) -> TcpOutput {
         self.complete();
-        Output::Tcp(self.out)
+        self.out
     }
 
     fn complete(&mut self) {
@@ -240,6 +228,7 @@ impl TcpRunner {
 
         // TODO: how to sort out which pause outputs came from first or last?
         let (stream, send_pause, receive_pause) = stream.finish();
+        let stream = stream.into_inner();
         let (_, writes, reads) = stream.into_parts();
 
         let mut receive_pause = receive_pause.into_iter();

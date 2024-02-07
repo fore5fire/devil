@@ -1,7 +1,10 @@
 use std::{pin::pin, sync::Arc};
 
 use futures::future::BoxFuture;
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    sync::Mutex,
+};
 
 use crate::{Output, StepPlanOutput};
 
@@ -13,7 +16,8 @@ use super::{
 pub(super) enum Runner {
     GraphQl(Box<GraphQlRunner>),
     Http(Box<HttpRunner>),
-    Http1(Box<Http1Runner>),
+    H1c(Box<Http1Runner>),
+    H1(Box<Http1Runner>),
     Tls(Box<TlsRunner>),
     Tcp(Box<TcpRunner>),
 }
@@ -38,10 +42,14 @@ impl Runner {
                 transport.expect("no plan should have tls as a base protocol"),
                 output,
             ))),
-
-            StepPlanOutput::Http1(output) => Runner::Http1(Box::new(Http1Runner::new(
+            StepPlanOutput::H1c(output) => Runner::H1c(Box::new(Http1Runner::new(
                 ctx,
-                transport.expect("no plan should have http1 as a base protocol"),
+                transport.expect("no plan should have h1c as a base protocol"),
+                output,
+            ))),
+            StepPlanOutput::H1(output) => Runner::H1(Box::new(Http1Runner::new(
+                ctx,
+                transport.expect("no plan should have h1 as a base protocol"),
                 output,
             ))),
             StepPlanOutput::GraphQl(output) => Runner::GraphQl(Box::new(GraphQlRunner::new(
@@ -51,7 +59,7 @@ impl Runner {
             )?)),
         })
     }
-    pub fn start(
+    pub async fn start(
         &mut self,
 
         size_hint: Option<usize>,
@@ -59,7 +67,7 @@ impl Runner {
         match self {
             Self::Tcp(r) => Box::pin(r.start(size_hint)),
             Self::Tls(r) => Box::pin(r.start(size_hint)),
-            Self::Http1(r) => Box::pin(r.start(size_hint)),
+            Self::H1c(r) | Self::H1(r) => Box::pin(r.start(size_hint)),
             Self::Http(r) => Box::pin(r.start(size_hint)),
             Self::GraphQl(r) => Box::pin(r.start(size_hint)),
         }
@@ -69,7 +77,7 @@ impl Runner {
         match self {
             Self::Tcp(r) => r.execute().await,
             Self::Tls(r) => r.execute().await,
-            Self::Http1(r) => r.execute().await,
+            Self::H1c(r) | Self::H1(r) => r.execute().await,
             Self::Http(r) => r.execute().await,
             Self::GraphQl(r) => r.execute().await,
         }
@@ -77,22 +85,26 @@ impl Runner {
 
     pub async fn finish(self: Self) -> (Output, Option<Runner>) {
         match self {
-            Self::Tcp(r) => (r.finish(), None),
+            Self::Tcp(r) => (Output::Tcp(r.finish()), None),
             Self::Tls(r) => {
                 let (out, inner) = r.finish();
-                (out, Some(inner))
-            }
-            Self::Http1(r) => {
-                let (out, inner) = r.finish();
-                (out, Some(inner))
+                (Output::Tls(out), Some(inner))
             }
             Self::Http(r) => {
                 let (out, inner) = r.finish();
-                (out, Some(inner))
+                (Output::Http(out), Some(inner))
+            }
+            Self::H1c(r) => {
+                let (out, inner) = r.finish();
+                (Output::H1c(out), Some(inner))
+            }
+            Self::H1(r) => {
+                let (out, inner) = r.finish();
+                (Output::H1(out), Some(inner))
             }
             Self::GraphQl(r) => {
                 let (out, inner) = r.finish();
-                (out, Some(inner))
+                (Output::GraphQl(out), Some(inner))
             }
         }
     }
@@ -107,7 +119,7 @@ impl AsyncRead for Runner {
         match *self {
             Self::Tcp(ref mut r) => pin!(r).poll_read(cx, buf),
             Self::Tls(ref mut r) => pin!(r).poll_read(cx, buf),
-            Self::Http1(ref mut r) => pin!(r).poll_read(cx, buf),
+            Self::H1c(ref mut r) | Self::H1(ref mut r) => pin!(r).poll_read(cx, buf),
             Self::Http(ref mut r) => pin!(r).poll_read(cx, buf),
             Self::GraphQl(ref mut r) => panic!(),
         }
@@ -123,7 +135,7 @@ impl AsyncWrite for Runner {
         match *self {
             Self::Tcp(ref mut r) => pin!(r).poll_write(cx, buf),
             Self::Tls(ref mut r) => pin!(r).poll_write(cx, buf),
-            Self::Http1(ref mut r) => pin!(r).poll_write(cx, buf),
+            Self::H1c(ref mut r) | Self::H1(ref mut r) => pin!(r).poll_write(cx, buf),
             Self::Http(ref mut r) => pin!(r).poll_write(cx, buf),
             Self::GraphQl(ref mut r) => panic!(),
         }
@@ -135,7 +147,7 @@ impl AsyncWrite for Runner {
         match *self {
             Self::Tcp(ref mut r) => pin!(r).poll_flush(cx),
             Self::Tls(ref mut r) => pin!(r).poll_flush(cx),
-            Self::Http1(ref mut r) => pin!(r).poll_flush(cx),
+            Self::H1c(ref mut r) | Self::H1(ref mut r) => pin!(r).poll_flush(cx),
             Self::Http(ref mut r) => pin!(r).poll_flush(cx),
             Self::GraphQl(ref mut r) => panic!(),
         }
@@ -147,7 +159,7 @@ impl AsyncWrite for Runner {
         match *self {
             Self::Tcp(ref mut r) => pin!(r).poll_shutdown(cx),
             Self::Tls(ref mut r) => pin!(r).poll_shutdown(cx),
-            Self::Http1(ref mut r) => pin!(r).poll_shutdown(cx),
+            Self::H1c(ref mut r) | Self::H1(ref mut r) => pin!(r).poll_shutdown(cx),
             Self::Http(ref mut r) => pin!(r).poll_shutdown(cx),
             Self::GraphQl(ref mut r) => panic!(),
         }

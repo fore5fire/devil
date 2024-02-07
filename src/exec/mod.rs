@@ -24,20 +24,36 @@ use crate::{
 use self::runner::Runner;
 
 pub struct Executor<'a> {
+    locals: HashMap<cel_interpreter::objects::Key, cel_interpreter::Value>,
     steps: VecDeque<(&'a str, Step)>,
     outputs: HashMap<&'a str, IndexMap<IterableKey, StepOutput>>,
 }
 
 impl<'a> Executor<'a> {
-    pub fn new(plan: &'a Plan) -> Self {
-        Executor {
+    pub fn new(plan: &'a Plan) -> Result<Self, crate::Error> {
+        // Evaluate the locals in order.
+        let mut locals = HashMap::new();
+        for (k, v) in plan.locals.iter() {
+            let inputs = State {
+                data: &HashMap::new(),
+                locals: &locals,
+                current: StepPlanOutputs::default(),
+                run_while: None,
+                run_for: None,
+                run_count: None,
+            };
+            let out = v.evaluate(&inputs)?;
+            locals.insert(k.clone().into(), out.0);
+        }
+        Ok(Executor {
+            locals: locals.into(),
             steps: plan
                 .steps
                 .iter()
                 .map(|(name, step)| (name.as_str(), step.to_owned()))
                 .collect(),
             outputs: HashMap::new(),
-        }
+        })
     }
 
     pub async fn next(
@@ -48,6 +64,7 @@ impl<'a> Executor<'a> {
         };
         let mut inputs = State {
             data: &self.outputs,
+            locals: &self.locals,
             current: StepPlanOutputs::default(),
             run_while: None,
             run_for: None,
@@ -94,7 +111,7 @@ impl<'a> Executor<'a> {
                     .collect::<Result<HashMap<_, _>, TryFromIntError>>()?,
             });
 
-            let mut states: Vec<_> = (0..count)
+            let states: Vec<_> = (0..count)
                 .map(|i| {
                     // Process current item if for is used.
                     let mut key = None;
@@ -110,12 +127,16 @@ impl<'a> Executor<'a> {
                     }
 
                     inputs.run_count = Some(crate::RunCountOutput { index: i });
-                    (key.unwrap_or(IterableKey::Uint(i)), inputs.clone())
+                    Ok((
+                        key.unwrap_or(IterableKey::Uint(i)),
+                        Self::prepare_runner(&ctx, step.protocols.clone(), inputs.clone())?,
+                    ))
                 })
-                .collect();
+                .collect::<crate::Result<_>>()?;
 
-            let ops = try_join_all(states.iter_mut().map(|(key, state)| {
-                Self::iteration(ctx.clone(), key, step.protocols.clone(), state)
+            let ops = try_join_all(states.into_iter().map(|(key, runner)| async {
+                let out = tokio::spawn(Executor::iteration(runner)).await??;
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>((key, out))
             }))
             .await?;
 
@@ -152,8 +173,8 @@ impl<'a> Executor<'a> {
                 }
 
                 inputs.run_count = Some(crate::RunCountOutput { index: i });
-                let (_, out) =
-                    Self::iteration(ctx.clone(), &key, step.protocols.clone(), &mut inputs).await?;
+                let runner = Self::prepare_runner(&ctx, step.protocols.clone(), inputs.clone())?;
+                let out = Self::iteration(runner).await?;
                 output.insert(key, out);
             }
         }
@@ -162,12 +183,11 @@ impl<'a> Executor<'a> {
         Ok(output)
     }
 
-    async fn iteration(
-        ctx: Arc<Context>,
-        key: &IterableKey,
+    fn prepare_runner(
+        ctx: &Arc<Context>,
         protos: StepProtocols,
-        inputs: &mut State<'_>,
-    ) -> Result<(IterableKey, StepOutput), Box<dyn std::error::Error + Send + Sync>> {
+        mut inputs: State<'_>,
+    ) -> Result<Runner, crate::Error> {
         // Reverse iterate the protocol stack for evaluation so that protocols below can access
         // request fields from higher protocols.
         let mut runner: Option<Runner> = None;
@@ -176,11 +196,12 @@ impl<'a> Executor<'a> {
             .iter()
             .rev()
             .map(|proto| {
-                let req = proto.evaluate(inputs)?;
+                let req = proto.evaluate(&inputs)?;
                 match &req {
                     StepPlanOutput::GraphQl(req) => inputs.current.graphql = Some(req.clone()),
                     StepPlanOutput::Http(req) => inputs.current.http = Some(req.clone()),
-                    StepPlanOutput::Http1(req) => inputs.current.http1 = Some(req.clone()),
+                    StepPlanOutput::H1c(req) => inputs.current.h1c = Some(req.clone()),
+                    StepPlanOutput::H1(req) => inputs.current.h1 = Some(req.clone()),
                     StepPlanOutput::Tls(req) => inputs.current.tls = Some(req.clone()),
                     StepPlanOutput::Tcp(req) => inputs.current.tcp = Some(req.clone()),
                 }
@@ -193,7 +214,13 @@ impl<'a> Executor<'a> {
         for req in requests.into_iter().rev() {
             runner = Some(Runner::new(ctx.clone(), runner, req)?)
         }
-        let mut runner = runner.expect("no plan should have an empty protocol stack");
+
+        Ok(runner.expect("no plan should have an empty protocol stack"))
+    }
+
+    async fn iteration(
+        mut runner: Runner,
+    ) -> Result<StepOutput, Box<dyn std::error::Error + Send + Sync>> {
         runner.execute().await;
         let mut output = StepOutput::default();
         loop {
@@ -201,7 +228,8 @@ impl<'a> Executor<'a> {
             match out {
                 Output::GraphQl(out) => output.graphql = Some(out),
                 Output::Http(out) => output.http = Some(out),
-                Output::Http1(out) => output.http1 = Some(out),
+                Output::H1c(out) => output.h1c = Some(out),
+                Output::H1(out) => output.h1 = Some(out),
                 Output::Tls(out) => output.tls = Some(out),
                 Output::Tcp(out) => output.tcp = Some(out),
             }
@@ -210,7 +238,7 @@ impl<'a> Executor<'a> {
             };
             runner = inner;
         }
-        Ok((key.to_owned(), output))
+        Ok(output)
     }
 }
 
@@ -221,6 +249,7 @@ struct State<'a> {
     run_while: Option<crate::RunWhileOutput>,
     run_for: Option<crate::RunForOutput>,
     run_count: Option<crate::RunCountOutput>,
+    locals: &'a HashMap<cel_interpreter::objects::Key, cel_interpreter::Value>,
 }
 
 impl<'a> crate::State<'a, &'a str, StateIterator<'a>> for State<'a> {
@@ -238,6 +267,9 @@ impl<'a> crate::State<'a, &'a str, StateIterator<'a>> for State<'a> {
     }
     fn run_count(&self) -> &Option<crate::RunCountOutput> {
         &self.run_count
+    }
+    fn locals(&self) -> cel_interpreter::objects::Map {
+        self.locals.clone().into()
     }
     fn iter(&self) -> StateIterator<'a> {
         StateIterator {

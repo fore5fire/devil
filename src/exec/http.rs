@@ -135,65 +135,64 @@ impl HttpRunner {
         }
     }
 
-    pub fn finish(self) -> (Output, Runner) {
-        let (out, inner) = match self {
-            Self::Http1(r) => r.finish(),
-        };
-        (
-            match out {
-                Output::Http1(out) => Output::Http(HttpOutput {
-                    plan: HttpPlanOutput {
-                        url: out.plan.url,
-                        method: out.plan.method,
-                        headers: out.plan.headers,
-                        body: out.plan.body,
+    pub fn finish(self) -> (HttpOutput, Runner) {
+        match self {
+            Self::Http1(r) => {
+                let (out, inner) = r.finish();
+                (
+                    HttpOutput {
+                        plan: HttpPlanOutput {
+                            url: out.plan.url,
+                            method: out.plan.method,
+                            headers: out.plan.headers,
+                            body: out.plan.body,
+                            pause: HttpPauseOutput {
+                                open: out.plan.pause.open,
+                                request_headers: out.plan.pause.request_headers,
+                                request_body: out.plan.pause.request_body,
+                                response_headers: out.plan.pause.response_headers,
+                                response_body: out.plan.pause.response_body,
+                            },
+                        },
+                        request: out.request.map(|req| HttpRequestOutput {
+                            url: req.url,
+                            method: req.method,
+                            headers: req.headers,
+                            body: req.body,
+                            duration: req.duration,
+                            body_duration: req.body_duration,
+                            time_to_first_byte: req.time_to_first_byte,
+                        }),
+                        response: out.response.map(|resp| HttpResponse {
+                            protocol: resp.protocol,
+                            status_code: resp.status_code,
+                            headers: resp.headers,
+                            body: resp.body,
+                            duration: resp.duration,
+                            header_duration: resp.header_duration,
+                            time_to_first_byte: resp.time_to_first_byte,
+                        }),
+                        errors: out
+                            .errors
+                            .into_iter()
+                            .map(|e| crate::HttpError {
+                                kind: e.kind,
+                                message: e.message,
+                            })
+                            .collect(),
+                        protocol: Some("HTTP/1.1".to_string()),
+                        duration: out.duration,
                         pause: HttpPauseOutput {
-                            open: out.plan.pause.open,
-                            request_headers: out.plan.pause.request_headers,
-                            request_body: out.plan.pause.request_body,
-                            response_headers: out.plan.pause.response_headers,
-                            response_body: out.plan.pause.response_body,
+                            open: out.pause.open,
+                            request_headers: out.pause.request_headers,
+                            request_body: out.pause.request_body,
+                            response_headers: out.pause.response_headers,
+                            response_body: out.pause.response_body,
                         },
                     },
-                    request: out.request.map(|req| HttpRequestOutput {
-                        url: req.url,
-                        method: req.method,
-                        headers: req.headers,
-                        body: req.body,
-                        duration: req.duration,
-                        body_duration: req.body_duration,
-                        time_to_first_byte: req.time_to_first_byte,
-                    }),
-                    response: out.response.map(|resp| HttpResponse {
-                        protocol: resp.protocol,
-                        status_code: resp.status_code,
-                        headers: resp.headers,
-                        body: resp.body,
-                        duration: resp.duration,
-                        header_duration: resp.header_duration,
-                        time_to_first_byte: resp.time_to_first_byte,
-                    }),
-                    errors: out
-                        .errors
-                        .into_iter()
-                        .map(|e| crate::HttpError {
-                            kind: e.kind,
-                            message: e.message,
-                        })
-                        .collect(),
-                    protocol: Some("HTTP/1.1".to_string()),
-                    duration: out.duration,
-                    pause: HttpPauseOutput {
-                        open: out.pause.open,
-                        request_headers: out.pause.request_headers,
-                        request_body: out.pause.request_body,
-                        response_headers: out.pause.response_headers,
-                        response_body: out.pause.response_body,
-                    },
-                }),
-                _ => unreachable!(),
-            },
-            inner,
-        )
+                    inner,
+                )
+            }
+        }
     }
 }

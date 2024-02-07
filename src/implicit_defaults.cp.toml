@@ -1,44 +1,61 @@
 courier.version = 0
 
 [[courier.defaults]]
-selector = ["graphql", "graphqlhttp1", "graphqlhttp2", "graphqlhttp3"]
+selector = ["graphql", "graphqlh1c", "graphqlh1", "graphqlh2", "graphqlh2c", "graphqlh3"]
     [courier.defaults.http]
+    url.cel = "current.graphql.plan.url"
     method = "POST"
     headers.Content-Type = "application/json"
-    [courier.defaults.http1]
+    [courier.defaults.h1c]
+    url.cel = "current.graphql.plan.url"
     method = "POST"
     headers.Content-Type = "application/json"
-    [courier.defaults.http2]
+    [courier.defaults.h1]
+    url.cel = "current.graphql.plan.url"
     method = "POST"
     headers.Content-Type = "application/json"
-    [courier.defaults.http3]
+    [courier.defaults.h2c]
+    url.cel = "current.graphql.plan.url"
+    method = "POST"
+    headers.Content-Type = "application/json"
+    [courier.defaults.h2]
+    url.cel = "current.graphql.plan.url"
+    method = "POST"
+    headers.Content-Type = "application/json"
+    [courier.defaults.h3]
+    url.cel = "current.graphql.plan.url"
     method = "POST"
     headers.Content-Type = "application/json"
 
 [[courier.defaults]]
-selector = ["graphql"]
-    http.url.cel = "current.graphql.plan.url"
-
-[[courier.defaults]]
-selector = ["graphqlhttp1"]
-    http1.url.cel = "current.graphqlhttp1.plan.url"
-
-[[courier.defaults]]
-selector = ["graphqlhttp2"]
-    http2.url.cel = "current.graphqlhttp2.plan.url"
-
-[[courier.defaults]]
-selector = ["graphqlhttp3"]
-    http3.url.cel = "current.graphqlhttp3.plan.url"
-
-[[courier.defaults]]
-selector = ["http1"]
-    [courier.defaults.tls]
-    host.cel = "current.http1.plan.url.parse_url().host"
-    port.cel = "current.http1.plan.url.parse_url().port_or_default"
+selector = ["h1c"]
     [courier.defaults.tcp]
-    host.cel = "current.http1.plan.url.parse_url().host"
-    port.cel = "current.http1.plan.url.parse_url().port_or_default"
+    host.cel = "current.h1c.plan.url.parse_url().host"
+    port.cel = "current.h1c.plan.url.parse_url().port_or_default"
+
+[[courier.defaults]]
+selector = ["h1"]
+    [courier.defaults.tls]
+    host.cel = "current.h1.plan.url.parse_url().host"
+    port.cel = "current.h1.plan.url.parse_url().port_or_default"
+    [courier.defaults.tcp]
+    host.cel = "current.h1.plan.url.parse_url().host"
+    port.cel = "current.h1.plan.url.parse_url().port_or_default"
+
+[[courier.defaults]]
+selector = ["h2c"]
+    [courier.defaults.tcp]
+    host.cel = "current.h2c.plan.url.parse_url().host"
+    port.cel = "current.h2c.plan.url.parse_url().port_or_default"
+
+[[courier.defaults]]
+selector = ["h2"]
+    [courier.defaults.tls]
+    host.cel = "current.h2.plan.url.parse_url().host"
+    port.cel = "current.h2.plan.url.parse_url().port_or_default"
+    [courier.defaults.tcp]
+    host.cel = "current.h2.plan.url.parse_url().host"
+    port.cel = "current.h2.plan.url.parse_url().port_or_default"
 
 [[courier.defaults]]
 selector = ["tls"]
@@ -47,5 +64,16 @@ selector = ["tls"]
     port.cel = "current.tls.plan.port"
 
 [[courier.defaults]]
-    http.method = "GET"
+selector = ["dtls"]
+    [courier.defaults.udp]
+    host.cel = "current.dtls.plan.host"
+    port.cel = "current.dtls.plan.port"
 
+[[courier.defaults]]
+    http.method = "GET"
+    h1c.method = "GET"
+    h1c.version_string = "HTTP/1.1"
+    h1.method = "GET"
+    h1.version_string = "HTTP/1.1"
+    h2c.method = "GET"
+    h2.method = "GET"
