@@ -1,6 +1,6 @@
 use clap::{Parser, ValueEnum};
-use courier_qe::exec::Executor;
-use courier_qe::{Plan, StepOutput};
+use devil::exec::Executor;
+use devil::{Plan, StepOutput};
 
 // Simple program to greet a person
 #[derive(Parser, Debug)]
@@ -56,7 +56,7 @@ async fn main() -> Result<()> {
             return Ok(());
         }
 
-        let mut executor = Executor::new(&plan);
+        let mut executor = Executor::new(&plan)?;
         for (name, _) in plan.steps.iter() {
             println!("------- executing {name} --------");
             let output = executor.next().await?;
@@ -74,19 +74,29 @@ fn print_proto(args: &Args, proto: &StepOutput) {
     for level in &args.request_level {
         match level {
             Protocol::TCP => {
-                if let Some(req) = proto.tcp.as_ref().map(|tcp| tcp.request.as_ref()).flatten() {
-                    println!(
-                        "> {}",
-                        String::from_utf8_lossy(&req.body).replace("\n", "\n> ")
-                    );
+                if let Some(tcp) = &proto.tcp {
+                    if let Some(req) = &tcp.request {
+                        println!(
+                            "> {}",
+                            String::from_utf8_lossy(&req.body).replace("\n", "\n> ")
+                        );
+                        if let Some(ttfb) = &req.time_to_first_byte {
+                            println!("request time to first byte: {}", ttfb);
+                        }
+                    }
                 }
             }
             Protocol::TLS => {
-                if let Some(req) = proto.tls.as_ref().map(|tls| tls.request.as_ref()).flatten() {
-                    println!(
-                        "> {}",
-                        String::from_utf8_lossy(&req.body).replace("\n", "\n> ")
-                    );
+                if let Some(tls) = &proto.tcp {
+                    if let Some(req) = &tls.request {
+                        println!(
+                            "> {}",
+                            String::from_utf8_lossy(&req.body).replace("\n", "\n> ")
+                        );
+                        if let Some(ttfb) = &req.time_to_first_byte {
+                            println!("request time to first byte: {}", ttfb);
+                        }
+                    }
                 }
             }
             Protocol::HTTP => {
@@ -121,9 +131,13 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                             "> {}",
                             String::from_utf8_lossy(&req.body).replace("\n", "\n> ")
                         );
+                        if let Some(ttfb) = &req.time_to_first_byte {
+                            println!("request time to first byte: {}", ttfb);
+                        }
+                        println!("request duration: {}", req.duration);
                     }
                 }
-                if let Some(http) = &proto.http1 {
+                if let Some(http) = proto.http1() {
                     println!(
                         "> {}{}{}",
                         http.request
@@ -158,6 +172,10 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                             "> {}",
                             String::from_utf8_lossy(&req.body).replace("\n", "\n> ")
                         );
+                        if let Some(ttfb) = &req.time_to_first_byte {
+                            println!("request time to first byte: {}", ttfb);
+                        }
+                        println!("request duration: {}", req.duration);
                     }
                 }
             }
@@ -169,6 +187,7 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                     .flatten()
                 {
                     println!("> {}", &req.query.replace("\n", "\n> "));
+                    println!("request duration: {}", req.duration);
                 }
             }
             _ => {}
@@ -183,7 +202,7 @@ fn print_proto(args: &Args, proto: &StepOutput) {
         //    vec![Protocol::HTTP]
         //} else if proto.http2.is_some() {
         //    vec![Protocol::HTTP]
-        } else if proto.http1.is_some() {
+        } else if proto.http1().is_some() {
             &[Protocol::HTTP]
         } else if proto.http.is_some() {
             &[Protocol::HTTP]
@@ -206,11 +225,32 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                             "< {}",
                             String::from_utf8_lossy(&resp.body).replace("\n", "\n< ")
                         );
+                        if let Some(ttfb) = &resp.time_to_first_byte {
+                            println!("response time to first byte: {}", ttfb);
+                        }
                     }
                     for e in &tcp.errors {
                         println!("{} error: {}", e.kind, e.message);
                     }
-                    println!("duration: {}ms", tcp.duration.num_milliseconds());
+                    for p in &tcp.pause.handshake.start {
+                        println!("handshake start pause duration: {}", p.duration);
+                    }
+                    for p in &tcp.pause.handshake.end {
+                        println!("handshake end pause duration: {}", p.duration);
+                    }
+                    for p in &tcp.pause.send_body.start {
+                        println!("send body start pause duration: {}", p.duration);
+                    }
+                    for p in &tcp.pause.send_body.end {
+                        println!("send body end pause duration: {}", p.duration);
+                    }
+                    for p in &tcp.pause.receive_body.start {
+                        println!("receive body start pause duration: {}", p.duration);
+                    }
+                    for p in &tcp.pause.receive_body.end {
+                        println!("receive body end pause duration: {}", p.duration);
+                    }
+                    println!("total duration: {}", tcp.duration);
                 }
             }
             Protocol::TLS => {
@@ -220,11 +260,32 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                             "< {}",
                             String::from_utf8_lossy(&resp.body).replace("\n", "\n< ")
                         );
+                        if let Some(ttfb) = &resp.time_to_first_byte {
+                            println!("response time to first byte: {}", ttfb);
+                        }
                     }
                     for e in &tls.errors {
                         println!("{} error: {}", e.kind, e.message);
                     }
-                    println!("duration: {}ms", tls.duration.num_milliseconds());
+                    for p in &tls.pause.handshake.start {
+                        println!("handshake start pause duration: {}", p.duration);
+                    }
+                    for p in &tls.pause.handshake.end {
+                        println!("handshake end pause duration: {}", p.duration);
+                    }
+                    for p in &tls.pause.send_body.start {
+                        println!("send body start pause duration: {}", p.duration);
+                    }
+                    for p in &tls.pause.send_body.end {
+                        println!("send body end pause duration: {}", p.duration);
+                    }
+                    for p in &tls.pause.receive_body.start {
+                        println!("receive body start pause duration: {}", p.duration);
+                    }
+                    for p in &tls.pause.receive_body.end {
+                        println!("receive body end pause duration: {}", p.duration);
+                    }
+                    println!("total duration: {}", tls.duration);
                 }
             }
             Protocol::HTTP => {
@@ -255,13 +316,41 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                         if let Some(body) = &resp.body {
                             println!("< {}", String::from_utf8_lossy(&body).replace("\n", "\n< "));
                         }
+                        if let Some(ttfb) = &resp.time_to_first_byte {
+                            println!("response time to first byte: {}", ttfb);
+                        }
+                        println!("response duration: {}", resp.duration);
                     }
                     for e in &http.errors {
                         println!("{} error: {}", e.kind, e.message);
                     }
-                    println!("duration: {}ms", http.duration.num_milliseconds());
+                    for p in &http.pause.request_headers.start {
+                        println!("request headers start pause duration: {}", p.duration);
+                    }
+                    for p in &http.pause.request_headers.end {
+                        println!("request headers end pause duration: {}", p.duration);
+                    }
+                    for p in &http.pause.request_body.start {
+                        println!("request body start pause duration: {}", p.duration);
+                    }
+                    for p in &http.pause.request_body.end {
+                        println!("request body end pause duration: {}", p.duration);
+                    }
+                    for p in &http.pause.response_headers.start {
+                        println!("response headers start pause duration: {}", p.duration);
+                    }
+                    for p in &http.pause.response_headers.end {
+                        println!("response headers end pause duration: {}", p.duration);
+                    }
+                    for p in &http.pause.response_body.start {
+                        println!("response headers start pause duration: {}", p.duration);
+                    }
+                    for p in &http.pause.response_body.end {
+                        println!("response headers end pause duration: {}", p.duration);
+                    }
+                    println!("total duration: {}", http.duration);
                 }
-                if let Some(http) = &proto.http1 {
+                if let Some(http) = proto.http1() {
                     if let Some(resp) = &http.response {
                         println!(
                             "< {} {}",
@@ -284,11 +373,39 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                         if let Some(body) = &resp.body {
                             println!("< {}", String::from_utf8_lossy(&body).replace("\n", "\n< "));
                         }
+                        if let Some(ttfb) = &resp.time_to_first_byte {
+                            println!("response time to first byte: {}", ttfb);
+                        }
+                        println!("response duration: {}", resp.duration);
                     }
                     for e in &http.errors {
                         println!("{} error: {}", e.kind, e.message);
                     }
-                    println!("duration: {}ms", http.duration.num_milliseconds());
+                    for p in &http.pause.request_headers.start {
+                        println!("request headers start pause duration: {}", p.duration);
+                    }
+                    for p in &http.pause.request_headers.end {
+                        println!("request headers end pause duration: {}", p.duration);
+                    }
+                    for p in &http.pause.request_body.start {
+                        println!("request body start pause duration: {}", p.duration);
+                    }
+                    for p in &http.pause.request_body.end {
+                        println!("request body end pause duration: {}", p.duration);
+                    }
+                    for p in &http.pause.response_headers.start {
+                        println!("response headers start pause duration: {}", p.duration);
+                    }
+                    for p in &http.pause.response_headers.end {
+                        println!("response headers end pause duration: {}", p.duration);
+                    }
+                    for p in &http.pause.response_body.start {
+                        println!("response headers start pause duration: {}", p.duration);
+                    }
+                    for p in &http.pause.response_body.end {
+                        println!("response headers end pause duration: {}", p.duration);
+                    }
+                    println!("total duration: {}", http.duration);
                 }
             }
             Protocol::GraphQL => {
@@ -300,11 +417,12 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                                 .unwrap()
                                 .replace("\n", "\n< ")
                         );
+                        println!("response duration: {}", resp.duration);
                     }
                     for e in &gql.errors {
                         println!("{} error: {}", e.kind, e.message);
                     }
-                    println!("duration: {}ms", gql.duration.num_milliseconds());
+                    println!("total duration: {}", gql.duration);
                 }
             }
             _ => {}

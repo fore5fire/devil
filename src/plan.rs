@@ -16,6 +16,7 @@ use url::Url;
 #[derive(Debug)]
 pub struct Plan {
     pub steps: IndexMap<String, Step>,
+    pub locals: IndexMap<String, PlanValue<PlanData, Infallible>>,
 }
 
 impl<'a> Plan {
@@ -46,8 +47,14 @@ impl<'a> Plan {
                 Ok((name, Step::from_bindings(value)?))
             })
             .collect::<Result<_>>()?;
+        let locals = plan
+            .courier
+            .locals
+            .into_iter()
+            .map(|(k, v)| Ok((k, PlanValue::try_from(v)?)))
+            .collect::<Result<_>>()?;
 
-        Ok(Plan { steps })
+        Ok(Plan { steps, locals })
     }
 }
 
@@ -724,7 +731,7 @@ impl TryFrom<PlanData> for Vec<u8> {
         match value.0 {
             cel_interpreter::Value::Bytes(x) => Ok(x.deref().clone()),
             cel_interpreter::Value::String(x) => Ok(x.deref().clone().into_bytes()),
-            _ => Err(Error("invalid type for bytes value".to_owned())),
+            val => Err(Error(format!("{val:?} has invalid type for bytes value"))),
         }
     }
 }
@@ -1143,55 +1150,76 @@ impl Step {
                 graphql: graphql.try_into()?,
                 http: http.unwrap_or_default().try_into()?,
             },
-            // If HTTP1, TLS, or TCP is specified we use HTTP1.
-            bindings::StepProtocols::GraphQlHttp1 {
+            bindings::StepProtocols::GraphQlH1c { graphql, h1c, tcp } => {
+                StepProtocols::GraphQlH1c {
+                    graphql: graphql.try_into()?,
+                    h1c: h1c.unwrap_or_default().try_into()?,
+                    tcp: tcp.unwrap_or_default().try_into()?,
+                }
+            }
+            bindings::StepProtocols::GraphQlH1 {
                 graphql,
-                http1,
+                h1,
                 tls,
                 tcp,
-            } => StepProtocols::GraphQlHttp1 {
+            } => StepProtocols::GraphQlH1 {
                 graphql: graphql.try_into()?,
-                http1: http1.unwrap_or_default().try_into()?,
-                tls: tls.map(TlsRequest::try_from).transpose()?,
+                h1: h1.unwrap_or_default().try_into()?,
+                tls: tls.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
             },
-            bindings::StepProtocols::GraphQlHttp2 {
+            bindings::StepProtocols::GraphQlH2c { graphql, h2c, tcp } => {
+                StepProtocols::GraphQlH2c {
+                    graphql: graphql.try_into()?,
+                    h2c: h2c.unwrap_or_default().try_into()?,
+                    tcp: tcp.unwrap_or_default().try_into()?,
+                }
+            }
+            bindings::StepProtocols::GraphQlH2 {
                 graphql,
-                http2,
+                h2,
                 tls,
                 tcp,
-            } => StepProtocols::GraphQlHttp2 {
+            } => StepProtocols::GraphQlH2 {
                 graphql: graphql.try_into()?,
-                http2: http2.unwrap_or_default().try_into()?,
-                tls: tls.map(TlsRequest::try_from).transpose()?,
+                h2: h2.unwrap_or_default().try_into()?,
+                tls: tls.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
             },
-            bindings::StepProtocols::GraphQlHttp3 {
+            bindings::StepProtocols::GraphQlH3 {
                 graphql,
-                http3,
+                h3,
                 quic,
                 udp,
-            } => StepProtocols::GraphQlHttp3 {
+            } => StepProtocols::GraphQlH3 {
                 graphql: graphql.try_into()?,
-                http3: http3.unwrap_or_default().try_into()?,
+                h3: h3.unwrap_or_default().try_into()?,
                 quic: quic.unwrap_or_default().try_into()?,
                 udp: udp.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::Http { http } => StepProtocols::Http {
                 http: http.try_into()?,
             },
-            bindings::StepProtocols::Http1 { http1, tls, tcp } => StepProtocols::Http1 {
-                http1: http1.try_into()?,
-                tls: tls.map(TlsRequest::try_from).transpose()?,
+            bindings::StepProtocols::H1c { h1c, tcp } => StepProtocols::H1c {
+                h1c: h1c.try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
             },
-            bindings::StepProtocols::Http2 { http2, tls, tcp } => StepProtocols::Http2 {
-                http2: http2.try_into()?,
-                tls: tls.map(TlsRequest::try_from).transpose()?,
+            bindings::StepProtocols::H1 { h1, tls, tcp } => StepProtocols::H1 {
+                h1: h1.try_into()?,
+                tls: tls.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
             },
-            bindings::StepProtocols::Http3 { http3, quic, udp } => StepProtocols::Http3 {
-                http3: http3.try_into()?,
+            bindings::StepProtocols::H2c { h2c, tcp } => StepProtocols::H2c {
+                h2c: h2c.try_into()?,
+                tcp: tcp.unwrap_or_default().try_into()?,
+            },
+            bindings::StepProtocols::H2 { h2, tls, tcp } => StepProtocols::H2 {
+                h2: h2.try_into()?,
+                tls: tls.unwrap_or_default().try_into()?,
+                tcp: tcp.unwrap_or_default().try_into()?,
+            },
+            bindings::StepProtocols::H3 { h3, quic, udp } => StepProtocols::H3 {
+                h3: h3.try_into()?,
                 quic: quic.unwrap_or_default().try_into()?,
                 udp: udp.unwrap_or_default().try_into()?,
             },
@@ -1199,8 +1227,8 @@ impl Step {
                 tls: tls.try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
             },
-            bindings::StepProtocols::Dtls { tls, udp } => StepProtocols::Dtls {
-                tls: tls.try_into()?,
+            bindings::StepProtocols::Dtls { dtls, udp } => StepProtocols::Dtls {
+                dtls: dtls.try_into()?,
                 udp: udp.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::Tcp { tcp } => StepProtocols::Tcp {
@@ -1321,39 +1349,57 @@ pub enum StepProtocols {
         graphql: GraphQlRequest,
         http: HttpRequest,
     },
-    GraphQlHttp1 {
+    GraphQlH1c {
         graphql: GraphQlRequest,
-        http1: Http1Request,
-        tls: Option<TlsRequest>,
+        h1c: Http1Request,
         tcp: TcpRequest,
     },
-    GraphQlHttp2 {
+    GraphQlH1 {
         graphql: GraphQlRequest,
-        http2: Http2Request,
-        tls: Option<TlsRequest>,
+        h1: Http1Request,
+        tls: TlsRequest,
         tcp: TcpRequest,
     },
-    GraphQlHttp3 {
+    GraphQlH2c {
         graphql: GraphQlRequest,
-        http3: Http3Request,
+        h2c: Http2Request,
+        tcp: TcpRequest,
+    },
+    GraphQlH2 {
+        graphql: GraphQlRequest,
+        h2: Http2Request,
+        tls: TlsRequest,
+        tcp: TcpRequest,
+    },
+    GraphQlH3 {
+        graphql: GraphQlRequest,
+        h3: Http3Request,
         quic: QuicRequest,
         udp: UdpRequest,
     },
     Http {
         http: HttpRequest,
     },
-    Http1 {
-        http1: Http1Request,
-        tls: Option<TlsRequest>,
+    H1c {
+        h1c: Http1Request,
         tcp: TcpRequest,
     },
-    Http2 {
-        http2: Http2Request,
-        tls: Option<TlsRequest>,
+    H1 {
+        h1: Http1Request,
+        tls: TlsRequest,
         tcp: TcpRequest,
     },
-    Http3 {
-        http3: Http3Request,
+    H2c {
+        h2c: Http2Request,
+        tcp: TcpRequest,
+    },
+    H2 {
+        h2: Http2Request,
+        tls: TlsRequest,
+        tcp: TcpRequest,
+    },
+    H3 {
+        h3: Http3Request,
         quic: QuicRequest,
         udp: UdpRequest,
     },
@@ -1362,7 +1408,7 @@ pub enum StepProtocols {
         tcp: TcpRequest,
     },
     Dtls {
-        tls: TlsRequest,
+        dtls: TlsRequest,
         udp: UdpRequest,
     },
     Tcp {
@@ -1383,98 +1429,82 @@ impl StepProtocols {
             Self::GraphQlHttp { graphql, http } => {
                 vec![Protocol::Http(http), Protocol::GraphQl(graphql)]
             }
-            Self::GraphQlHttp1 {
+            Self::GraphQlH1c { graphql, h1c, tcp } => {
+                vec![
+                    Protocol::Tcp(tcp),
+                    Protocol::H1c(h1c),
+                    Protocol::GraphQl(graphql),
+                ]
+            }
+            Self::GraphQlH1 {
                 graphql,
-                http1,
+                h1,
                 tls,
                 tcp,
             } => {
-                if let Some(tls) = tls {
-                    vec![
-                        Protocol::Tcp(tcp),
-                        Protocol::Tls(tls),
-                        Protocol::Http1(http1),
-                        Protocol::GraphQl(graphql),
-                    ]
-                } else {
-                    vec![
-                        Protocol::Tcp(tcp),
-                        Protocol::Http1(http1),
-                        Protocol::GraphQl(graphql),
-                    ]
-                }
+                vec![
+                    Protocol::Tcp(tcp),
+                    Protocol::Tls(tls),
+                    Protocol::H1(h1),
+                    Protocol::GraphQl(graphql),
+                ]
             }
-            Self::GraphQlHttp2 {
+            Self::GraphQlH2c { graphql, h2c, tcp } => {
+                vec![
+                    Protocol::Tcp(tcp),
+                    Protocol::H2c(h2c),
+                    Protocol::GraphQl(graphql),
+                ]
+            }
+            Self::GraphQlH2 {
                 graphql,
-                http2,
+                h2,
                 tls,
                 tcp,
             } => {
-                if let Some(tls) = tls {
-                    vec![
-                        Protocol::Tcp(tcp),
-                        Protocol::Tls(tls),
-                        Protocol::Http2(http2),
-                        Protocol::GraphQl(graphql),
-                    ]
-                } else {
-                    vec![
-                        Protocol::Tcp(tcp),
-                        Protocol::Http2(http2),
-                        Protocol::GraphQl(graphql),
-                    ]
-                }
+                vec![
+                    Protocol::Tcp(tcp),
+                    Protocol::Tls(tls),
+                    Protocol::H2(h2),
+                    Protocol::GraphQl(graphql),
+                ]
             }
-            Self::GraphQlHttp3 {
+            Self::GraphQlH3 {
                 graphql,
-                http3,
+                h3,
                 quic,
                 udp,
             } => {
                 vec![
                     Protocol::Udp(udp),
                     Protocol::Quic(quic),
-                    Protocol::Http3(http3),
+                    Protocol::H3(h3),
                     Protocol::GraphQl(graphql),
                 ]
             }
             Self::Http { http } => {
                 vec![Protocol::Http(http)]
             }
-            Self::Http1 { http1, tls, tcp } => {
-                if let Some(tls) = tls {
-                    vec![
-                        Protocol::Tcp(tcp),
-                        Protocol::Tls(tls),
-                        Protocol::Http1(http1),
-                    ]
-                } else {
-                    vec![Protocol::Tcp(tcp), Protocol::Http1(http1)]
-                }
+            Self::H1c { h1c, tcp } => {
+                vec![Protocol::Tcp(tcp), Protocol::H1c(h1c)]
             }
-            Self::Http2 { http2, tls, tcp } => {
-                if let Some(tls) = tls {
-                    vec![
-                        Protocol::Tcp(tcp),
-                        Protocol::Tls(tls),
-                        Protocol::Http2(http2),
-                    ]
-                } else {
-                    vec![Protocol::Tcp(tcp), Protocol::Http2(http2)]
-                }
+            Self::H1 { h1, tls, tcp } => {
+                vec![Protocol::Tcp(tcp), Protocol::Tls(tls), Protocol::H1(h1)]
             }
-            Self::Http3 { http3, quic, udp } => {
-                vec![
-                    Protocol::Udp(udp),
-                    Protocol::Quic(quic),
-                    Protocol::Http3(http3),
-                ]
+            Self::H2c { h2c, tcp } => {
+                vec![Protocol::Tcp(tcp), Protocol::H2c(h2c)]
+            }
+            Self::H2 { h2, tls, tcp } => {
+                vec![Protocol::Tcp(tcp), Protocol::Tls(tls), Protocol::H2(h2)]
+            }
+            Self::H3 { h3, quic, udp } => {
+                vec![Protocol::Udp(udp), Protocol::Quic(quic), Protocol::H3(h3)]
             }
             Self::Tls { tls, tcp } => {
                 vec![Protocol::Tcp(tcp), Protocol::Tls(tls)]
             }
-            Self::Dtls { tls, udp } => {
-                vec![Protocol::Udp(udp), Protocol::Tls(tls)]
+            Self::Dtls { dtls, udp } => {
+                vec![Protocol::Udp(udp), Protocol::Tls(dtls)]
             }
             Self::Tcp { tcp } => {
                 vec![Protocol::Tcp(tcp)]
@@ -1493,55 +1523,60 @@ impl StepProtocols {
             Self::GraphQlHttp { graphql, http } => {
                 Box::new(graphql.pause_joins().chain(http.pause.joins())).collect()
             }
-            Self::GraphQlHttp1 {
+            Self::GraphQlH1c { graphql, h1c, tcp } => graphql
+                .pause_joins()
+                .chain(h1c.pause.joins())
+                .chain(tcp.pause.joins())
+                .collect(),
+            Self::GraphQlH1 {
                 graphql,
-                http1,
+                h1,
                 tls,
                 tcp,
-            } => {
-                let result = graphql
-                    .pause_joins()
-                    .chain(http1.pause.joins())
-                    .chain(tcp.pause.joins());
-                let Some(tls) = tls else {
-                    return result.collect();
-                };
-
-                result.chain(tls.pause.joins()).collect()
+            } => graphql
+                .pause_joins()
+                .chain(h1.pause.joins())
+                .chain(tcp.pause.joins())
+                .chain(tls.pause.joins())
+                .collect(),
+            Self::GraphQlH2c { graphql, h2c, tcp } => {
+                unimplemented!()
             }
-            Self::GraphQlHttp2 {
+            Self::GraphQlH2 {
                 graphql,
-                http2,
+                h2,
                 tls,
                 tcp,
             } => {
                 unimplemented!()
             }
-            Self::GraphQlHttp3 {
+            Self::GraphQlH3 {
                 graphql,
-                http3,
+                h3,
                 quic,
                 udp,
             } => {
                 unimplemented!()
             }
             Self::Http { http } => http.pause.joins().collect(),
-            Self::Http1 { http1, tls, tcp } => {
-                let result = http1.pause.joins().chain(tcp.pause.joins());
-                let Some(tls) = tls else {
-                    return result.collect();
-                };
-
-                result.chain(tls.pause.joins()).collect()
-            }
-            Self::Http2 { http2, tls, tcp } => {
+            Self::H1c { h1c, tcp } => h1c.pause.joins().chain(tcp.pause.joins()).collect(),
+            Self::H1 { h1, tls, tcp } => h1
+                .pause
+                .joins()
+                .chain(tcp.pause.joins())
+                .chain(tls.pause.joins())
+                .collect(),
+            Self::H2c { h2c, tcp } => {
                 unimplemented!()
             }
-            Self::Http3 { http3, quic, udp } => {
+            Self::H2 { h2, tls, tcp } => {
+                unimplemented!()
+            }
+            Self::H3 { h3, quic, udp } => {
                 unimplemented!()
             }
             Self::Tls { tls, tcp } => tls.pause.joins().chain(tcp.pause.joins()).collect(),
-            Self::Dtls { tls, udp } => tls.pause.joins().chain(udp.pause.joins()).collect(),
+            Self::Dtls { dtls, udp } => dtls.pause.joins().chain(udp.pause.joins()).collect(),
             Self::Tcp { tcp } => tcp.pause.joins().collect(),
             Self::Quic { quic, udp } => quic.pause.joins().chain(udp.pause.joins()).collect(),
             Self::Udp { udp } => udp.pause.joins().collect(),
@@ -1553,9 +1588,11 @@ impl StepProtocols {
 pub enum Protocol {
     GraphQl(GraphQlRequest),
     Http(HttpRequest),
-    Http1(Http1Request),
-    Http2(Http2Request),
-    Http3(Http3Request),
+    H1c(Http1Request),
+    H1(Http1Request),
+    H2c(Http2Request),
+    H2(Http2Request),
+    H3(Http3Request),
     Tls(TlsRequest),
     Tcp(TcpRequest),
     Quic(QuicRequest),
@@ -1572,7 +1609,7 @@ impl Evaluate<StepPlanOutput> for Protocol {
         Ok(match self {
             Self::GraphQl(proto) => StepPlanOutput::GraphQl(proto.evaluate(state)?),
             Self::Http(proto) => StepPlanOutput::Http(proto.evaluate(state)?),
-            Self::Http1(proto) => StepPlanOutput::Http1(proto.evaluate(state)?),
+            Self::H1c(proto) => StepPlanOutput::H1c(proto.evaluate(state)?),
             //Self::Http2(proto) => ProtocolOutput::Http2(proto.evaluate(state)?),
             //Self::Http3(proto) => ProtocolOutput::Http3(proto.evaluate(state)?),
             Self::Tls(proto) => StepPlanOutput::Tls(proto.evaluate(state)?),
@@ -2146,6 +2183,7 @@ where
     S: State<'a, O, I>,
     I: IntoIterator<Item = O>,
 {
+    ctx.add_variable("locals", cel_interpreter::Value::Map(state.locals()));
     ctx.add_variable(
         "steps",
         state
@@ -2177,6 +2215,7 @@ where
     ctx.add_function("bytes", cel_functions::bytes);
     ctx.add_function("randomDuration", cel_functions::random_duration);
     ctx.add_function("randomInt", cel_functions::random_int);
+    ctx.add_function("printf", cel_functions::printf);
 }
 
 pub trait Evaluate<T> {

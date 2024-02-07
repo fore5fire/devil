@@ -1,9 +1,9 @@
 courier.version = 0
 
-[http_pause.http]
-url = "https://example.com/"
-pause.request_body.end.duration = "500ms"
-
+#[http_pause.http]
+#url = "https://example.com/"
+#pause.request_body.end.duration = "500ms"
+#
 #[http1_pause.http1]
 #url = "https://example.com/test"
 #[http1_pause.http1.pause]
@@ -25,7 +25,7 @@ pause.request_body.end.duration = "500ms"
 #send_body.end.duration = "250ms"
 #receive_body.start.duration = "250ms"
 #receive_body.end.duration = "250ms"
-
+#
 #[simple_tls.tls]
 #host = "example.com"
 #port = 443
@@ -37,7 +37,7 @@ pause.request_body.end.duration = "500ms"
 #send_body.end.duration = "250ms"
 #receive_body.start.duration = "250ms"
 #receive_body.end.duration = "250ms"
-
+#
 #[multi_pause.tls]
 #host = "example.com"
 #port = 443
@@ -52,21 +52,24 @@ pause.request_body.end.duration = "500ms"
 ##match = "<< >>"
 #offset_bytes = 50
 #duration = "500ms"
-#
-## Sync parallel requests by pausing until all are ready.
-#[parallel_join.http1]
-#url = "https://example.com/"
-#[parallel_join.tcp.pause.receive_body.start]
-## Pause each parallel request a different number of seconds.
-#duration.cel = "randomDuration(0, 20, 's')"
-## Pause each parallel request at a different spot.
+
+# Sync parallel requests by pausing until all are ready.
+[parallel_join.h1c]
+url = "http://example.com/test"
+headers.Content-Length = "3"
+body = "abc"
+[parallel_join.h1c.pause.request_body.end]
+# Pause each parallel request a different number of seconds.
+duration = "5s"
+# Pause each parallel request at a different spot.
 #offset_bytes.cel = "randomInt(0, 20)"
-## Pause each request until all other requests with tag "a" are ready to
-## continue. Note that join can be an array but cannot use cel expressions.
-#join = "a"
-## Equivelant to:
-## join = ["a"]
-#[parallel_join.run]
-#parallel = true
-#count = 5
+offset_bytes = -1
+# Pause each request until all other requests with tag "a" are ready to
+# continue. Note that join can be an array but cannot use cel expressions.
+join = "a"
+# Equivelant to:
+# join = ["a"]
+[parallel_join.run]
+parallel = true
+count = 20
 

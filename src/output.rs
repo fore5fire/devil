@@ -17,6 +17,7 @@ pub trait State<'a, O: Into<&'a str>, I: IntoIterator<Item = O>> {
     fn run_for(&self) -> &Option<RunForOutput>;
     fn run_while(&self) -> &Option<RunWhileOutput>;
     fn run_count(&self) -> &Option<RunCountOutput>;
+    fn locals(&self) -> cel_interpreter::objects::Map;
     fn iter(&self) -> I;
     // Check for matching singed int indexes too.
 }
@@ -25,7 +26,8 @@ pub trait State<'a, O: Into<&'a str>, I: IntoIterator<Item = O>> {
 pub enum Output {
     GraphQl(GraphQlOutput),
     Http(HttpOutput),
-    Http1(Http1Output),
+    H1c(Http1Output),
+    H1(Http1Output),
     //Http2(Http2Output),
     //Http3(Http3Output),
     Tls(TlsOutput),
@@ -36,7 +38,8 @@ pub enum Output {
 pub enum StepPlanOutput {
     GraphQl(GraphQlPlanOutput),
     Http(HttpPlanOutput),
-    Http1(Http1PlanOutput),
+    H1c(Http1PlanOutput),
+    H1(Http1PlanOutput),
     //Http2(Http2PlanOutput),
     //Http3(Http3PlanOutput),
     Tls(TlsPlanOutput),
@@ -47,7 +50,8 @@ pub enum StepPlanOutput {
 pub struct StepPlanOutputs {
     pub graphql: Option<GraphQlPlanOutput>,
     pub http: Option<HttpPlanOutput>,
-    pub http1: Option<Http1PlanOutput>,
+    pub h1c: Option<Http1PlanOutput>,
+    pub h1: Option<Http1PlanOutput>,
     //pub http2: Option<Http2PlanOutput>,
     //pub http3: Option<Http3PlanOutput>,
     pub tls: Option<TlsPlanOutput>,
@@ -67,8 +71,12 @@ impl From<StepPlanOutputs> for Value {
                     HashMap::from([("plan", Value::from(value.http))]).into(),
                 ),
                 (
-                    "http1".into(),
-                    HashMap::from([("plan", Value::from(value.http1))]).into(),
+                    "h1c".into(),
+                    HashMap::from([("plan", Value::from(value.h1c))]).into(),
+                ),
+                (
+                    "h1".into(),
+                    HashMap::from([("plan", Value::from(value.h1))]).into(),
                 ),
                 (
                     "tls".into(),
@@ -87,11 +95,18 @@ impl From<StepPlanOutputs> for Value {
 pub struct StepOutput {
     pub graphql: Option<GraphQlOutput>,
     pub http: Option<HttpOutput>,
-    pub http1: Option<Http1Output>,
+    pub h1c: Option<Http1Output>,
+    pub h1: Option<Http1Output>,
     //pub http2: Option<Http2Output>,
     //pub http3: Option<Http3Output>,
     pub tls: Option<TlsOutput>,
     pub tcp: Option<TcpOutput>,
+}
+
+impl StepOutput {
+    pub fn http1(&self) -> Option<&Http1Output> {
+        self.h1.as_ref().or_else(|| self.h1c.as_ref())
+    }
 }
 
 impl From<StepOutput> for Value {
@@ -100,7 +115,8 @@ impl From<StepOutput> for Value {
             map: Rc::new(HashMap::from([
                 ("graphql".into(), value.graphql.into()),
                 ("http".into(), value.http.into()),
-                ("http1".into(), value.http1.into()),
+                ("h1c".into(), value.h1c.into()),
+                ("h1".into(), value.h1.into()),
                 //("http2".into(), value.http2.into()),
                 //("http3".into(), value.http3.into()),
                 ("tls".into(), value.tls.into()),

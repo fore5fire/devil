@@ -205,33 +205,21 @@ impl TlsRunner {
                 .push(Pause::new(&self.ctx, p).await?);
         }
         self.out.handshake_duration = Some(Duration::from_std(handshake_duration).unwrap());
+        if !pause.receive_body.end.is_empty() {
+            return Err(Box::new(Error(
+                "tls.pause.receive_body.end is unsupported in this request".to_owned(),
+            )));
+        }
         self.state = State::Open {
             start,
             transport: PauseStream::new(
                 self.ctx.clone(),
                 Tee::new(connection),
-                if let Some(size) = size_hint {
-                    vec![
-                        PauseSpec {
-                            group_offset: 0,
-                            plan: pause.receive_body.start,
-                        },
-                        PauseSpec {
-                            group_offset: size.try_into().unwrap(),
-                            plan: pause.receive_body.end,
-                        },
-                    ]
-                } else {
-                    if !pause.receive_body.end.is_empty() {
-                        return Err(Box::new(Error(
-                            "tls.pause.receive_body.end is unsupported in this request".to_owned(),
-                        )));
-                    }
-                    vec![PauseSpec {
-                        group_offset: 0,
-                        plan: pause.receive_body.start,
-                    }]
-                },
+                // TODO: Implement read size hints.
+                vec![PauseSpec {
+                    group_offset: 0,
+                    plan: pause.receive_body.start,
+                }],
                 if let Some(size) = size_hint {
                     vec![
                         PauseSpec {
@@ -294,12 +282,12 @@ impl TlsRunner {
         }
     }
 
-    pub fn finish(mut self) -> (Output, Runner) {
+    pub fn finish(mut self) -> (TlsOutput, Runner) {
         self.complete();
         let State::Completed { transport } = self.state else {
             unreachable!();
         };
-        (Output::Tls(self.out), transport)
+        (self.out, transport)
     }
 
     fn complete(&mut self) {

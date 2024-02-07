@@ -78,9 +78,12 @@ headers.Content-Length = "1"
 body = "A body longer than 1 \r\n\r\n"
 
 # Force HTTP/1
-[http1_example.http1]
+[http1_example.h1]
 url = "https://example.com/test"
-version_string = "HTTP/1.1"
+
+# Force HTTP/1 without TLS
+[h1c_example.h1c]
+url = "http://example.com/test"
 
 ## Force HTTP/2
 #[http2_example.http2]

@@ -109,9 +109,9 @@ impl<'a> GraphQlRunner {
         self.end_time = Some(Instant::now());
     }
 
-    pub fn finish(mut self) -> (Output, Runner) {
+    pub fn finish(mut self) -> (GraphQlOutput, Runner) {
         let State::Running { start_time } = self.state else {
-            return (Output::GraphQl(self.out), self.transport);
+            return (self.out, self.transport);
         };
         let end_time = Instant::now();
         let resp_body: Option<serde_json::Value> = match serde_json::from_slice(&self.resp) {
@@ -149,7 +149,7 @@ impl<'a> GraphQlRunner {
         }
         self.out.duration =
             chrono::Duration::from_std(self.end_time.unwrap_or(end_time) - start_time).unwrap();
-        (Output::GraphQl(self.out), self.transport)
+        (self.out, self.transport)
     }
 }
 
