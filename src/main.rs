@@ -178,6 +178,39 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                         println!("request duration: {}", req.duration);
                     }
                 }
+                if let Some(http) = proto.http2() {
+                    println!(
+                        "> {}{} HTTP/2",
+                        http.request
+                            .as_ref()
+                            .map(|req| req.method.as_ref())
+                            .flatten()
+                            .as_deref()
+                            .map(|x| String::from_utf8_lossy(x) + " ")
+                            .unwrap_or_default(),
+                        http.request
+                            .as_ref()
+                            .map(|req| req.url.to_string())
+                            .unwrap_or_else(|| "".to_owned()),
+                    );
+                    if let Some(req) = &http.request {
+                        for (k, v) in &req.headers {
+                            println!(
+                                ">   {}: {}",
+                                String::from_utf8_lossy(k),
+                                String::from_utf8_lossy(v)
+                            );
+                        }
+                        println!(
+                            "> {}",
+                            String::from_utf8_lossy(&req.body).replace("\n", "\n> ")
+                        );
+                        if let Some(ttfb) = &req.time_to_first_byte {
+                            println!("request time to first byte: {}", ttfb);
+                        }
+                        println!("request duration: {}", req.duration);
+                    }
+                }
             }
             Protocol::GraphQL => {
                 if let Some(req) = proto
@@ -200,8 +233,8 @@ fn print_proto(args: &Args, proto: &StepOutput) {
             &[Protocol::GraphQL]
         //} else if proto.http3.is_some() {
         //    vec![Protocol::HTTP]
-        //} else if proto.http2.is_some() {
-        //    vec![Protocol::HTTP]
+        } else if proto.http2().is_some() {
+            &[Protocol::HTTP]
         } else if proto.http1().is_some() {
             &[Protocol::HTTP]
         } else if proto.http.is_some() {
@@ -360,6 +393,56 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                                 .map(|x| String::from_utf8_lossy(x))
                                 .unwrap_or_default()
                         );
+                        if let Some(headers) = &resp.headers {
+                            for (k, v) in headers {
+                                println!(
+                                    "< {}: {}",
+                                    String::from_utf8_lossy(&k),
+                                    String::from_utf8_lossy(&v)
+                                );
+                            }
+                        }
+                        println!("< ");
+                        if let Some(body) = &resp.body {
+                            println!("< {}", String::from_utf8_lossy(&body).replace("\n", "\n< "));
+                        }
+                        if let Some(ttfb) = &resp.time_to_first_byte {
+                            println!("response time to first byte: {}", ttfb);
+                        }
+                        println!("response duration: {}", resp.duration);
+                    }
+                    for e in &http.errors {
+                        println!("{} error: {}", e.kind, e.message);
+                    }
+                    for p in &http.pause.request_headers.start {
+                        println!("request headers start pause duration: {}", p.duration);
+                    }
+                    for p in &http.pause.request_headers.end {
+                        println!("request headers end pause duration: {}", p.duration);
+                    }
+                    for p in &http.pause.request_body.start {
+                        println!("request body start pause duration: {}", p.duration);
+                    }
+                    for p in &http.pause.request_body.end {
+                        println!("request body end pause duration: {}", p.duration);
+                    }
+                    for p in &http.pause.response_headers.start {
+                        println!("response headers start pause duration: {}", p.duration);
+                    }
+                    for p in &http.pause.response_headers.end {
+                        println!("response headers end pause duration: {}", p.duration);
+                    }
+                    for p in &http.pause.response_body.start {
+                        println!("response headers start pause duration: {}", p.duration);
+                    }
+                    for p in &http.pause.response_body.end {
+                        println!("response headers end pause duration: {}", p.duration);
+                    }
+                    println!("total duration: {}", http.duration);
+                }
+                if let Some(http) = proto.http2() {
+                    if let Some(resp) = &http.response {
+                        println!("< {} HTTP/2", resp.status_code.unwrap_or(0),);
                         if let Some(headers) = &resp.headers {
                             for (k, v) in headers {
                                 println!(

@@ -10,14 +10,14 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_rustls::client::TlsStream;
 use tokio_rustls::TlsConnector;
 
-use super::pause::PauseStream;
+use super::pause::{self, PauseStream};
 use super::runner::Runner;
 use super::tee::Tee;
 use super::Context;
 use crate::exec::pause::{Pause, PauseSpec};
 use crate::{
-    Error, Output, TlsError, TlsOutput, TlsPauseOutput, TlsPlanOutput, TlsRequestOutput,
-    TlsResponse, TlsVersion, WithPlannedCapacity,
+    Error, TlsError, TlsOutput, TlsPauseOutput, TlsPlanOutput, TlsRequestOutput, TlsResponse,
+    TlsVersion, WithPlannedCapacity,
 };
 
 #[derive(Debug)]
@@ -29,13 +29,13 @@ pub(super) struct TlsRunner {
     last_read: Option<Instant>,
     first_write: Option<Instant>,
     last_write: Option<Instant>,
+    size_hint: Option<usize>,
 }
 
 enum State {
     Pending {
         connector: TlsConnector,
         domain: Box<String>,
-        transport: Runner,
         pause: TlsPauseOutput,
     },
     Open {
@@ -43,7 +43,7 @@ enum State {
         transport: PauseStream<Tee<TlsStream<Runner>>>,
     },
     Completed {
-        transport: Runner,
+        transport: Option<Runner>,
     },
     StartFailed {
         transport: Runner,
@@ -57,12 +57,11 @@ impl std::fmt::Debug for State {
             Self::Pending {
                 connector: _,
                 domain,
-                transport,
                 pause,
             } => {
                 write!(
                     f,
-                    "Pending {{ connector: <Opaque>, domain: {domain}, transport: {transport:?}, pause: {pause:?} }}"
+                    "Pending {{ connector: <Opaque>, domain: {domain}, pause: {pause:?} }}"
                 )
             }
             Self::Open { start, transport } => {
@@ -78,13 +77,14 @@ impl std::fmt::Debug for State {
 }
 
 impl TlsRunner {
-    pub(super) fn new(ctx: Arc<Context>, transport: Runner, plan: TlsPlanOutput) -> Self {
+    pub(super) fn new(ctx: Arc<Context>, plan: TlsPlanOutput) -> Self {
         let root_cert_store = RootCertStore {
             roots: webpki_roots::TLS_SERVER_ROOTS.into(),
         };
-        let tls_config = rustls::ClientConfig::builder()
+        let mut tls_config = rustls::ClientConfig::builder()
             .with_root_certificates(root_cert_store)
             .with_no_client_auth();
+        tls_config.alpn_protocols = plan.alpn.clone();
         let connector = tokio_rustls::TlsConnector::from(Arc::new(tls_config));
 
         let pause = crate::TlsPauseOutput::with_planned_capacity(&plan.pause);
@@ -94,7 +94,6 @@ impl TlsRunner {
             state: State::Pending {
                 connector,
                 domain: Box::new(plan.host.clone()),
-                transport,
                 pause: plan.pause.clone(),
             },
             out: TlsOutput {
@@ -117,18 +116,25 @@ impl TlsRunner {
             last_read: None,
             first_write: None,
             last_write: None,
+            size_hint: None,
         }
+    }
+
+    pub(super) fn size_hint(&mut self, hint: Option<usize>) -> Option<usize> {
+        self.size_hint = hint;
+        // It's really complicated to pre-calculate the number of bytes TLS will increase the
+        // stream by, so don't forward a size hint even if we have one.
+        None
     }
 
     pub async fn start(
         &mut self,
-        size_hint: Option<usize>,
+        transport: Runner,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let state = std::mem::replace(&mut self.state, State::Invalid);
         let State::Pending {
             connector,
             domain,
-            mut transport,
             pause,
         } = state
         else {
@@ -150,18 +156,6 @@ impl TlsRunner {
                 self.complete();
                 return Err(Box::new(e));
             }
-        };
-
-        // It's really complicated to pre-calculate the number of bytes TLS will increase the
-        // stream by, so don't forward a size hint even if we have one.
-        if let Err(e) = transport.start(None).await {
-            self.out.errors.push(TlsError {
-                kind: "tcp_start".to_owned(),
-                message: e.to_string(),
-            });
-            self.state = State::StartFailed { transport };
-            self.complete();
-            return Err(e);
         };
 
         let start = Instant::now();
@@ -212,7 +206,7 @@ impl TlsRunner {
         }
         self.state = State::Open {
             start,
-            transport: PauseStream::new(
+            transport: pause::new_stream(
                 self.ctx.clone(),
                 Tee::new(connection),
                 // TODO: Implement read size hints.
@@ -220,7 +214,7 @@ impl TlsRunner {
                     group_offset: 0,
                     plan: pause.receive_body.start,
                 }],
-                if let Some(size) = size_hint {
+                if let Some(size) = self.size_hint {
                     vec![
                         PauseSpec {
                             group_offset: 0,
@@ -247,11 +241,11 @@ impl TlsRunner {
         Ok(())
     }
 
+    pub fn executor_size_hint(&self) -> Option<usize> {
+        Some(self.out.plan.body.len())
+    }
+
     pub async fn execute(&mut self) {
-        if let Err(_) = self.start(Some(self.out.plan.body.len())).await {
-            // Error output is already set by start.
-            return;
-        };
         let body = std::mem::take(&mut self.out.plan.body);
         if let Err(e) = self.write_all(&body).await {
             self.out.errors.push(TlsError {
@@ -282,7 +276,7 @@ impl TlsRunner {
         }
     }
 
-    pub fn finish(mut self) -> (TlsOutput, Runner) {
+    pub fn finish(mut self) -> (TlsOutput, Option<Runner>) {
         self.complete();
         let State::Completed { transport } = self.state else {
             unreachable!();
@@ -296,20 +290,30 @@ impl TlsRunner {
             State::Open {
                 start, transport, ..
             } => (start, transport),
-            State::Completed { transport }
-            | State::Pending { transport, .. }
-            | State::StartFailed { transport } => {
+            State::Completed { transport } => {
                 self.state = State::Completed { transport };
+                return;
+            }
+            State::StartFailed { transport } => {
+                self.state = State::Completed {
+                    transport: Some(transport),
+                };
+                return;
+            }
+            State::Pending { .. } => {
+                self.state = State::Completed { transport: None };
                 return;
             }
             State::Invalid => panic!("tls has invalid end state"),
         };
         let end_time = Instant::now();
-        let (tee, send_pause, receive_pause) = transport.finish();
+        let (tee, send_pause, receive_pause) = transport.finish_stream();
         let (stream, writes, reads) = tee.into_parts();
         let (inner, conn) = stream.into_inner();
 
-        self.state = State::Completed { transport: inner };
+        self.state = State::Completed {
+            transport: Some(inner),
+        };
 
         let mut receive_pause = receive_pause.into_iter();
         self.out.pause.receive_body.start = receive_pause.next().unwrap_or_default();

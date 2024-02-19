@@ -1,16 +1,20 @@
 use crate::{
-    bindings, cel_functions, Error, GraphQlPauseOutput, Http1PauseOutput, HttpPauseOutput, Result,
-    State, StepPlanOutput, TcpPauseOutput, TlsPauseOutput,
+    bindings, cel_functions, Error, GraphQlPauseOutput, Http1PauseOutput, Http2FramesPauseOutput,
+    Http2PauseOutput, HttpPauseOutput, Result, State, StepPlanOutput, TcpPauseOutput,
+    TlsPauseOutput,
 };
 use base64::Engine;
 use cel_interpreter::{Context, Program};
 use chrono::{Duration, NaiveDateTime, TimeZone};
 use go_parse_duration::parse_duration;
 use indexmap::IndexMap;
+use itertools::Itertools;
 use std::convert::Infallible;
 use std::fmt::Display;
+use std::str::FromStr;
 use std::sync::OnceLock;
 use std::{collections::HashMap, ops::Deref, rc::Rc, sync::Arc};
+use tokio::sync::Semaphore;
 use url::Url;
 
 #[derive(Debug)]
@@ -74,8 +78,9 @@ pub enum TlsVersion {
     Other(u16),
 }
 
-impl TlsVersion {
-    pub fn try_from_str(s: &str) -> Result<TlsVersion> {
+impl FromStr for TlsVersion {
+    type Err = Error;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         Ok(match s.into() {
             "ssl1" => Self::SSL1,
             "ssl2" => Self::SSL2,
@@ -460,17 +465,215 @@ impl Evaluate<Http1PauseOutput> for Http1Pause {
     }
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct Http2Request {}
+#[derive(Debug, Clone)]
+pub struct Http2Request {
+    pub url: PlanValue<Url>,
+    pub method: Option<PlanValue<Vec<u8>>>,
+    pub content_length: Option<PlanValue<u64>>,
+    pub body: Option<PlanValue<Vec<u8>>>,
+    pub headers: PlanValueTable<Vec<u8>, Error, Vec<u8>, Error>,
+    pub trailers: PlanValueTable<Vec<u8>, Error, Vec<u8>, Error>,
+
+    pub pause: Http2Pause,
+}
+
+impl Evaluate<crate::Http2PlanOutput> for Http2Request {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::Http2PlanOutput>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O>,
+    {
+        Ok(crate::Http2PlanOutput {
+            url: self.url.evaluate(state)?,
+            method: self
+                .method
+                .as_ref()
+                .map(|body| body.evaluate(state))
+                .transpose()?,
+            content_length: self
+                .content_length
+                .as_ref()
+                .map(|body| body.evaluate(state))
+                .transpose()?,
+            headers: self.headers.evaluate(state)?,
+            trailers: self.trailers.evaluate(state)?,
+            body: self
+                .body
+                .as_ref()
+                .map(|body| body.evaluate(state))
+                .transpose()?
+                .unwrap_or_default(),
+            pause: self.pause.evaluate(state)?,
+        })
+    }
+}
 
 impl TryFrom<bindings::Http2> for Http2Request {
     type Error = Error;
     fn try_from(binding: bindings::Http2) -> Result<Self> {
-        Ok(Self {})
+        Ok(Self {
+            url: binding
+                .common
+                .url
+                .map(PlanValue::<Url>::try_from)
+                .ok_or_else(|| Error("http1.url is required".to_owned()))??,
+            method: binding
+                .common
+                .method
+                .map(PlanValue::<Vec<u8>>::try_from)
+                .transpose()?,
+            body: binding
+                .common
+                .body
+                .map(PlanValue::<Vec<u8>>::try_from)
+                .transpose()?,
+            content_length: binding
+                .content_length
+                .map(PlanValue::<u64>::try_from)
+                .transpose()?,
+            headers: PlanValueTable::try_from(binding.common.headers.unwrap_or_default())?,
+            trailers: PlanValueTable::try_from(binding.trailers.unwrap_or_default())?,
+            pause: binding.pause.unwrap_or_default().try_into()?,
+        })
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone, Default)]
+pub struct Http2Pause {
+    pub open: PausePoints,
+    pub request_headers: PausePoints,
+    pub request_body: PausePoints,
+    pub response_headers: PausePoints,
+    pub response_body: PausePoints,
+}
+
+impl PauseJoins for Http2Pause {
+    fn joins(&self) -> impl Iterator<Item = String> {
+        self.open
+            .joins()
+            .chain(self.request_headers.joins())
+            .chain(self.request_body.joins())
+            .chain(self.response_headers.joins())
+            .chain(self.response_body.joins())
+    }
+}
+
+impl TryFrom<bindings::Http2Pause> for Http2Pause {
+    type Error = Error;
+    fn try_from(value: bindings::Http2Pause) -> std::result::Result<Self, Self::Error> {
+        Ok(Self {
+            open: PausePoints::try_from(value.open.unwrap_or_default())?,
+            request_headers: PausePoints::try_from(value.request_headers.unwrap_or_default())?,
+            request_body: PausePoints::try_from(value.request_body.unwrap_or_default())?,
+            response_headers: PausePoints::try_from(value.response_headers.unwrap_or_default())?,
+            response_body: PausePoints::try_from(value.response_body.unwrap_or_default())?,
+        })
+    }
+}
+
+impl Evaluate<Http2PauseOutput> for Http2Pause {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Http2PauseOutput>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O>,
+    {
+        let resp = Http2PauseOutput {
+            open: self.open.evaluate(state)?,
+            request_headers: self.request_headers.evaluate(state)?,
+            request_body: self.request_body.evaluate(state)?,
+            response_headers: self.response_headers.evaluate(state)?,
+            response_body: self.response_body.evaluate(state)?,
+        };
+        if resp.response_headers.end.iter().any(|p| p.offset_bytes < 0) {
+            return Err(Error(
+                "http.pause.response_headers.end with negative offset is not supported".to_owned(),
+            ));
+        }
+        if resp.response_body.start.iter().any(|p| p.offset_bytes < 0) {
+            return Err(Error(
+                "http.pause.response_headers.start with negative offset is not supported"
+                    .to_owned(),
+            ));
+        }
+        Ok(resp)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Http2FramesRequest {
+    pub host: PlanValue<String>,
+    pub port: PlanValue<u16>,
+    pub pause: Http2FramesPause,
+}
+
+impl Evaluate<crate::Http2FramesPlanOutput> for Http2FramesRequest {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::Http2FramesPlanOutput>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O>,
+    {
+        Ok(crate::Http2FramesPlanOutput {
+            host: self.host.evaluate(state)?,
+            port: self.port.evaluate(state)?,
+            pause: self.pause.evaluate(state)?,
+        })
+    }
+}
+
+impl TryFrom<bindings::Http2Frames> for Http2FramesRequest {
+    type Error = Error;
+    fn try_from(binding: bindings::Http2Frames) -> Result<Self> {
+        Ok(Self {
+            host: binding
+                .host
+                .map(PlanValue::<String>::try_from)
+                .ok_or_else(|| Error("tcp.host is required".to_owned()))??,
+            port: binding
+                .port
+                .map(PlanValue::<u16>::try_from)
+                .ok_or_else(|| Error("tcp.port is required".to_owned()))??,
+            pause: binding.pause.unwrap_or_default().try_into()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Http2FramesPause {
+    pub handshake: PausePoints,
+}
+
+impl PauseJoins for Http2FramesPause {
+    fn joins(&self) -> impl Iterator<Item = String> {
+        self.handshake.joins()
+    }
+}
+
+impl TryFrom<bindings::Http2FramesPause> for Http2FramesPause {
+    type Error = Error;
+    fn try_from(value: bindings::Http2FramesPause) -> std::result::Result<Self, Self::Error> {
+        Ok(Self {
+            handshake: PausePoints::try_from(value.handshake.unwrap_or_default())?,
+        })
+    }
+}
+
+impl Evaluate<Http2FramesPauseOutput> for Http2FramesPause {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Http2FramesPauseOutput>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O>,
+    {
+        Ok(Http2FramesPauseOutput {
+            handshake: self.handshake.evaluate(state)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Http3Request {}
 
 impl TryFrom<bindings::Http3> for Http3Request {
@@ -489,8 +692,8 @@ pub struct GraphQlRequest {
     pub pause: GraphQlPause,
 }
 
-impl GraphQlRequest {
-    pub fn pause_joins(&self) -> impl Iterator<Item = String> {
+impl PauseJoins for GraphQlRequest {
+    fn joins(&self) -> impl Iterator<Item = String> {
         std::iter::empty()
     }
 }
@@ -661,7 +864,7 @@ impl TryFrom<PlanData> for String {
         match value.0 {
             cel_interpreter::Value::String(x) => Ok(x.deref().clone()),
             cel_interpreter::Value::Bytes(x) => Ok(String::from_utf8_lossy(&x).to_string()),
-            _ => Err(Error("invalid type for string value".to_owned())),
+            val => Err(Error(format!("{val:?} has invalid value for string value"))),
         }
     }
 }
@@ -676,9 +879,9 @@ impl TryFrom<PlanData> for u16 {
             cel_interpreter::Value::Int(x) => {
                 Ok(u16::try_from(x).map_err(|e| Error(e.to_string()))?)
             }
-            _ => Err(Error(
-                "invalid type for 16 bit unsigned int value".to_owned(),
-            )),
+            val => Err(Error(format!(
+                "{val:?} has invalid value for 16 bit unsigned int value",
+            ))),
         }
     }
 }
@@ -693,9 +896,9 @@ impl TryFrom<PlanData> for u64 {
             cel_interpreter::Value::Int(x) => {
                 Ok(u64::try_from(x).map_err(|e| Error(e.to_string()))?)
             }
-            _ => Err(Error(
-                "invalid type for 64 bit unsigned int value".to_owned(),
-            )),
+            val => Err(Error(format!(
+                "{val:?} has invalid type for 64 bit unsigned int value",
+            ))),
         }
     }
 }
@@ -708,9 +911,9 @@ impl TryFrom<PlanData> for i64 {
                 Ok(i64::try_from(x).map_err(|e| Error(e.to_string()))?)
             }
             cel_interpreter::Value::Int(x) => Ok(x),
-            _ => Err(Error(
-                "invalid type for 16 bit unsigned int value".to_owned(),
-            )),
+            val => Err(Error(format!(
+                "{val:?} has invalid type for 64 bit signed int value",
+            ))),
         }
     }
 }
@@ -720,7 +923,7 @@ impl TryFrom<PlanData> for bool {
     fn try_from(value: PlanData) -> std::result::Result<Self, Self::Error> {
         match value.0 {
             cel_interpreter::Value::Bool(x) => Ok(x),
-            _ => Err(Error("invalid type for bool value".to_owned())),
+            val => Err(Error(format!("{val:?} has invalid type for bool value",))),
         }
     }
 }
@@ -746,7 +949,9 @@ impl TryFrom<PlanData> for Duration {
                     go_parse_duration::Error::ParseError(s) => Error(s),
                 }),
             cel_interpreter::Value::Duration(x) => Ok(x),
-            _ => Err(Error("invalid type for duration value".to_owned())),
+            val => Err(Error(format!(
+                "{val:?} has invalid type for duration value",
+            ))),
         }
     }
 }
@@ -765,7 +970,7 @@ impl TryFrom<PlanData> for TlsVersion {
             "tls1_1" => Ok(TlsVersion::TLS1_1),
             "tls1_2" => Ok(TlsVersion::TLS1_2),
             "tls1_3" => Ok(TlsVersion::TLS1_3),
-            _ => Err(Error("invalid TLS version".to_owned())),
+            val => Err(Error(format!("invalid TLS version {val:?}"))),
         }
     }
 }
@@ -941,6 +1146,7 @@ impl TryFrom<toml::Value> for PlanData {
 pub struct TlsRequest {
     pub host: PlanValue<String>,
     pub port: PlanValue<u16>,
+    pub alpn: Vec<PlanValue<Vec<u8>>>,
     pub body: PlanValue<Vec<u8>>,
     pub pause: TlsPause,
 }
@@ -955,6 +1161,7 @@ impl Evaluate<crate::TlsPlanOutput> for TlsRequest {
         Ok(crate::TlsPlanOutput {
             host: self.host.evaluate(state)?,
             port: self.port.evaluate(state)?,
+            alpn: self.alpn.evaluate(state)?,
             body: self.body.evaluate(state)?.into(),
             pause: self.pause.evaluate(state)?,
         })
@@ -973,6 +1180,12 @@ impl TryFrom<bindings::Tls> for TlsRequest {
                 .port
                 .map(PlanValue::<u16>::try_from)
                 .ok_or_else(|| Error("tls.port is required".to_owned()))??,
+            alpn: binding
+                .alpn
+                .into_iter()
+                .flatten()
+                .map(PlanValue::<Vec<u8>>::try_from)
+                .try_collect()?,
             body: binding
                 .body
                 .map(PlanValue::<Vec<u8>>::try_from)
@@ -1168,21 +1381,27 @@ impl Step {
                 tls: tls.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
             },
-            bindings::StepProtocols::GraphQlH2c { graphql, h2c, tcp } => {
-                StepProtocols::GraphQlH2c {
-                    graphql: graphql.try_into()?,
-                    h2c: h2c.unwrap_or_default().try_into()?,
-                    tcp: tcp.unwrap_or_default().try_into()?,
-                }
-            }
+            bindings::StepProtocols::GraphQlH2c {
+                graphql,
+                h2c,
+                http2frames,
+                tcp,
+            } => StepProtocols::GraphQlH2c {
+                graphql: graphql.try_into()?,
+                h2c: h2c.unwrap_or_default().try_into()?,
+                http2frames: http2frames.unwrap_or_default().try_into()?,
+                tcp: tcp.unwrap_or_default().try_into()?,
+            },
             bindings::StepProtocols::GraphQlH2 {
                 graphql,
                 h2,
+                http2frames,
                 tls,
                 tcp,
             } => StepProtocols::GraphQlH2 {
                 graphql: graphql.try_into()?,
                 h2: h2.unwrap_or_default().try_into()?,
+                http2frames: http2frames.unwrap_or_default().try_into()?,
                 tls: tls.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
             },
@@ -1209,12 +1428,23 @@ impl Step {
                 tls: tls.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
             },
-            bindings::StepProtocols::H2c { h2c, tcp } => StepProtocols::H2c {
+            bindings::StepProtocols::H2c {
+                h2c,
+                http2frames,
+                tcp,
+            } => StepProtocols::H2c {
                 h2c: h2c.try_into()?,
+                http2frames: http2frames.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
             },
-            bindings::StepProtocols::H2 { h2, tls, tcp } => StepProtocols::H2 {
+            bindings::StepProtocols::H2 {
+                h2,
+                http2frames,
+                tls,
+                tcp,
+            } => StepProtocols::H2 {
                 h2: h2.try_into()?,
+                http2frames: http2frames.unwrap_or_default().try_into()?,
                 tls: tls.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
             },
@@ -1279,11 +1509,62 @@ impl Step {
                             .map(PlanValue::try_from)
                             .transpose()?
                             .unwrap_or_default(),
+                        share: run.share.map(PlanValue::try_from).transpose()?,
                     })
                 })
                 .transpose()?
                 .unwrap_or_default(),
         })
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub enum Parallelism {
+    #[default]
+    Serial,
+    Parallel(usize),
+    Pipelined,
+}
+
+impl FromStr for Parallelism {
+    type Err = Error;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "serial" => Ok(Self::Serial),
+            "parallel" => Ok(Self::Parallel(Semaphore::MAX_PERMITS)),
+            "pipelined" => Ok(Self::Pipelined),
+            val => Err(Error(format!("unrecognized parallelism string {val}"))),
+        }
+    }
+}
+
+impl TryFrom<PlanData> for Parallelism {
+    type Error = Error;
+    fn try_from(value: PlanData) -> std::result::Result<Self, Self::Error> {
+        match value.0 {
+            cel_interpreter::Value::String(s) => s.parse(),
+            cel_interpreter::Value::Bool(b) if b => {
+                Ok(Parallelism::Parallel(Semaphore::MAX_PERMITS))
+            }
+            cel_interpreter::Value::Bool(_) => Ok(Parallelism::Serial),
+            cel_interpreter::Value::Int(i) => {
+                Ok(Parallelism::Parallel(i.try_into().map_err(|_| {
+                    Error(format!(
+                        "parallelism value {i} must fit in platform word size"
+                    ))
+                })?))
+            }
+            cel_interpreter::Value::UInt(i) => {
+                Ok(Parallelism::Parallel(i.try_into().map_err(|_| {
+                    Error(format!(
+                        "parallelism value {i} must fit in platform word size"
+                    ))
+                })?))
+            }
+            val => Err(Error(format!(
+                "unsupported value {val:?} for field run.parallel"
+            ))),
+        }
     }
 }
 
@@ -1293,7 +1574,8 @@ pub struct Run {
     pub run_while: Option<PlanValue<bool>>,
     pub run_for: Option<IterablePlanValue>,
     pub count: PlanValue<u64>,
-    pub parallel: PlanValue<bool>,
+    pub parallel: PlanValue<Parallelism>,
+    pub share: Option<PlanValue<ProtocolField>>,
 }
 
 impl Default for Run {
@@ -1303,7 +1585,8 @@ impl Default for Run {
             run_while: None,
             run_for: None,
             count: PlanValue::Literal(1),
-            parallel: PlanValue::Literal(false),
+            parallel: PlanValue::Literal(Parallelism::Serial),
+            share: None,
         }
     }
 }
@@ -1329,13 +1612,18 @@ impl Evaluate<crate::RunOutput> for Run {
                 .transpose()?,
             count: self.count.evaluate(state)?,
             parallel: self.parallel.evaluate(state)?,
+            share: self
+                .share
+                .clone()
+                .map(|share| share.evaluate(state))
+                .transpose()?,
         };
         // Only one of while or for may be used.
         if out.run_while.is_some() && out.run_for.is_some() {
             return Err(Error("run.while and run.for cannot both be set".to_owned()));
         }
         // While cannot be parallel.
-        if out.parallel && out.run_while.is_some() {
+        if !matches!(out.parallel, Parallelism::Serial) && out.run_while.is_some() {
             return Err(Error("run.while cannot be parallel".to_owned()));
         }
 
@@ -1363,11 +1651,13 @@ pub enum StepProtocols {
     GraphQlH2c {
         graphql: GraphQlRequest,
         h2c: Http2Request,
+        http2frames: Http2FramesRequest,
         tcp: TcpRequest,
     },
     GraphQlH2 {
         graphql: GraphQlRequest,
         h2: Http2Request,
+        http2frames: Http2FramesRequest,
         tls: TlsRequest,
         tcp: TcpRequest,
     },
@@ -1391,10 +1681,12 @@ pub enum StepProtocols {
     },
     H2c {
         h2c: Http2Request,
+        http2frames: Http2FramesRequest,
         tcp: TcpRequest,
     },
     H2 {
         h2: Http2Request,
+        http2frames: Http2FramesRequest,
         tls: TlsRequest,
         tcp: TcpRequest,
     },
@@ -1427,13 +1719,13 @@ impl StepProtocols {
     pub fn into_stack(self) -> Vec<Protocol> {
         match self {
             Self::GraphQlHttp { graphql, http } => {
-                vec![Protocol::Http(http), Protocol::GraphQl(graphql)]
+                vec![Protocol::GraphQl(graphql), Protocol::Http(http)]
             }
             Self::GraphQlH1c { graphql, h1c, tcp } => {
                 vec![
-                    Protocol::Tcp(tcp),
-                    Protocol::H1c(h1c),
                     Protocol::GraphQl(graphql),
+                    Protocol::H1c(h1c),
+                    Protocol::Tcp(tcp),
                 ]
             }
             Self::GraphQlH1 {
@@ -1443,30 +1735,38 @@ impl StepProtocols {
                 tcp,
             } => {
                 vec![
-                    Protocol::Tcp(tcp),
-                    Protocol::Tls(tls),
-                    Protocol::H1(h1),
                     Protocol::GraphQl(graphql),
+                    Protocol::H1(h1),
+                    Protocol::Tls(tls),
+                    Protocol::Tcp(tcp),
                 ]
             }
-            Self::GraphQlH2c { graphql, h2c, tcp } => {
+            Self::GraphQlH2c {
+                graphql,
+                h2c,
+                http2frames,
+                tcp,
+            } => {
                 vec![
-                    Protocol::Tcp(tcp),
-                    Protocol::H2c(h2c),
                     Protocol::GraphQl(graphql),
+                    Protocol::H2c(h2c),
+                    Protocol::Http2Frames(http2frames),
+                    Protocol::Tcp(tcp),
                 ]
             }
             Self::GraphQlH2 {
                 graphql,
                 h2,
+                http2frames,
                 tls,
                 tcp,
             } => {
                 vec![
-                    Protocol::Tcp(tcp),
-                    Protocol::Tls(tls),
-                    Protocol::H2(h2),
                     Protocol::GraphQl(graphql),
+                    Protocol::H2(h2),
+                    Protocol::Http2Frames(http2frames),
+                    Protocol::Tls(tls),
+                    Protocol::Tcp(tcp),
                 ]
             }
             Self::GraphQlH3 {
@@ -1476,110 +1776,63 @@ impl StepProtocols {
                 udp,
             } => {
                 vec![
-                    Protocol::Udp(udp),
-                    Protocol::Quic(quic),
-                    Protocol::H3(h3),
                     Protocol::GraphQl(graphql),
+                    Protocol::H3(h3),
+                    Protocol::Quic(quic),
+                    Protocol::Udp(udp),
                 ]
             }
             Self::Http { http } => {
                 vec![Protocol::Http(http)]
             }
             Self::H1c { h1c, tcp } => {
-                vec![Protocol::Tcp(tcp), Protocol::H1c(h1c)]
+                vec![Protocol::H1c(h1c), Protocol::Tcp(tcp)]
             }
             Self::H1 { h1, tls, tcp } => {
-                vec![Protocol::Tcp(tcp), Protocol::Tls(tls), Protocol::H1(h1)]
+                vec![Protocol::H1(h1), Protocol::Tls(tls), Protocol::Tcp(tcp)]
             }
-            Self::H2c { h2c, tcp } => {
-                vec![Protocol::Tcp(tcp), Protocol::H2c(h2c)]
+            Self::H2c {
+                h2c,
+                http2frames,
+                tcp,
+            } => {
+                vec![
+                    Protocol::H2c(h2c),
+                    Protocol::Http2Frames(http2frames),
+                    Protocol::Tcp(tcp),
+                ]
             }
-            Self::H2 { h2, tls, tcp } => {
-                vec![Protocol::Tcp(tcp), Protocol::Tls(tls), Protocol::H2(h2)]
+            Self::H2 {
+                h2,
+                http2frames,
+                tls,
+                tcp,
+            } => {
+                vec![
+                    Protocol::H2(h2),
+                    Protocol::Http2Frames(http2frames),
+                    Protocol::Tls(tls),
+                    Protocol::Tcp(tcp),
+                ]
             }
             Self::H3 { h3, quic, udp } => {
-                vec![Protocol::Udp(udp), Protocol::Quic(quic), Protocol::H3(h3)]
+                vec![Protocol::H3(h3), Protocol::Quic(quic), Protocol::Udp(udp)]
             }
             Self::Tls { tls, tcp } => {
-                vec![Protocol::Tcp(tcp), Protocol::Tls(tls)]
+                vec![Protocol::Tls(tls), Protocol::Tcp(tcp)]
             }
             Self::Dtls { dtls, udp } => {
-                vec![Protocol::Udp(udp), Protocol::Tls(dtls)]
+                vec![Protocol::Tls(dtls), Protocol::Udp(udp)]
             }
             Self::Tcp { tcp } => {
                 vec![Protocol::Tcp(tcp)]
             }
             Self::Quic { quic, udp } => {
-                vec![Protocol::Quic(quic), Protocol::Udp(udp)]
+                vec![Protocol::Udp(udp), Protocol::Quic(quic)]
             }
             Self::Udp { udp } => {
                 vec![Protocol::Udp(udp)]
             }
-        }
-    }
-
-    pub fn pause_joins(&self) -> Vec<String> {
-        match self {
-            Self::GraphQlHttp { graphql, http } => {
-                Box::new(graphql.pause_joins().chain(http.pause.joins())).collect()
-            }
-            Self::GraphQlH1c { graphql, h1c, tcp } => graphql
-                .pause_joins()
-                .chain(h1c.pause.joins())
-                .chain(tcp.pause.joins())
-                .collect(),
-            Self::GraphQlH1 {
-                graphql,
-                h1,
-                tls,
-                tcp,
-            } => graphql
-                .pause_joins()
-                .chain(h1.pause.joins())
-                .chain(tcp.pause.joins())
-                .chain(tls.pause.joins())
-                .collect(),
-            Self::GraphQlH2c { graphql, h2c, tcp } => {
-                unimplemented!()
-            }
-            Self::GraphQlH2 {
-                graphql,
-                h2,
-                tls,
-                tcp,
-            } => {
-                unimplemented!()
-            }
-            Self::GraphQlH3 {
-                graphql,
-                h3,
-                quic,
-                udp,
-            } => {
-                unimplemented!()
-            }
-            Self::Http { http } => http.pause.joins().collect(),
-            Self::H1c { h1c, tcp } => h1c.pause.joins().chain(tcp.pause.joins()).collect(),
-            Self::H1 { h1, tls, tcp } => h1
-                .pause
-                .joins()
-                .chain(tcp.pause.joins())
-                .chain(tls.pause.joins())
-                .collect(),
-            Self::H2c { h2c, tcp } => {
-                unimplemented!()
-            }
-            Self::H2 { h2, tls, tcp } => {
-                unimplemented!()
-            }
-            Self::H3 { h3, quic, udp } => {
-                unimplemented!()
-            }
-            Self::Tls { tls, tcp } => tls.pause.joins().chain(tcp.pause.joins()).collect(),
-            Self::Dtls { dtls, udp } => dtls.pause.joins().chain(udp.pause.joins()).collect(),
-            Self::Tcp { tcp } => tcp.pause.joins().collect(),
-            Self::Quic { quic, udp } => quic.pause.joins().chain(udp.pause.joins()).collect(),
-            Self::Udp { udp } => udp.pause.joins().collect(),
         }
     }
 }
@@ -1592,11 +1845,48 @@ pub enum Protocol {
     H1(Http1Request),
     H2c(Http2Request),
     H2(Http2Request),
+    Http2Frames(Http2FramesRequest),
     H3(Http3Request),
     Tls(TlsRequest),
     Tcp(TcpRequest),
     Quic(QuicRequest),
     Udp(UdpRequest),
+}
+
+impl Protocol {
+    pub fn joins(&self) -> Vec<String> {
+        match self {
+            Self::GraphQl(proto) => proto.joins().collect(),
+            Self::Http(proto) => proto.pause.joins().collect(),
+            Self::H1c(proto) => proto.pause.joins().collect(),
+            Self::H1(proto) => proto.pause.joins().collect(),
+            Self::H2c(proto) => proto.pause.joins().collect(),
+            Self::H2(proto) => proto.pause.joins().collect(),
+            Self::Http2Frames(proto) => proto.pause.joins().collect(),
+            Self::H3(proto) => Vec::new(),
+            Self::Tls(proto) => proto.pause.joins().collect(),
+            Self::Tcp(proto) => proto.pause.joins().collect(),
+            Self::Quic(proto) => proto.pause.joins().collect(),
+            Self::Udp(proto) => proto.pause.joins().collect(),
+        }
+    }
+
+    pub fn field(&self) -> ProtocolField {
+        match self {
+            Self::GraphQl(_) => ProtocolField::GraphQl,
+            Self::Http(_) => ProtocolField::Http,
+            Self::H1c(_) => ProtocolField::H1c,
+            Self::H1(_) => ProtocolField::H1,
+            Self::H2c(_) => ProtocolField::H2c,
+            Self::H2(_) => ProtocolField::H2,
+            Self::Http2Frames(_) => ProtocolField::Http2Frames,
+            Self::H3(_) => ProtocolField::H3,
+            Self::Tls(_) => ProtocolField::Tls,
+            Self::Tcp(_) => ProtocolField::Tcp,
+            Self::Quic(_) => ProtocolField::Quic,
+            Self::Udp(_) => ProtocolField::Udp,
+        }
+    }
 }
 
 impl Evaluate<StepPlanOutput> for Protocol {
@@ -1610,18 +1900,71 @@ impl Evaluate<StepPlanOutput> for Protocol {
             Self::GraphQl(proto) => StepPlanOutput::GraphQl(proto.evaluate(state)?),
             Self::Http(proto) => StepPlanOutput::Http(proto.evaluate(state)?),
             Self::H1c(proto) => StepPlanOutput::H1c(proto.evaluate(state)?),
-            //Self::Http2(proto) => ProtocolOutput::Http2(proto.evaluate(state)?),
+            Self::H1(proto) => StepPlanOutput::H1(proto.evaluate(state)?),
+            Self::H2c(proto) => StepPlanOutput::H2c(proto.evaluate(state)?),
+            Self::H2(proto) => StepPlanOutput::H2(proto.evaluate(state)?),
+            Self::Http2Frames(proto) => StepPlanOutput::Http2Frames(proto.evaluate(state)?),
             //Self::Http3(proto) => ProtocolOutput::Http3(proto.evaluate(state)?),
             Self::Tls(proto) => StepPlanOutput::Tls(proto.evaluate(state)?),
             Self::Tcp(proto) => StepPlanOutput::Tcp(proto.evaluate(state)?),
             //Self::Quic(proto) => ProtocolOutput::Quic(proto.evaluate(state)?),
             //Self::Udp(proto) => ProtocolOutput::Udp(proto.evaluate(state)?),
-            _ => {
-                return Err(Error(
-                    "support for protocol {proto:?} is incomplete".to_owned(),
-                ))
+            proto => {
+                return Err(Error(format!(
+                    "support for protocol {proto:?} is incomplete",
+                )))
             }
         })
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum ProtocolField {
+    GraphQl,
+    Http,
+    H1c,
+    H1,
+    H2c,
+    H2,
+    Http2Frames,
+    H3,
+    Tls,
+    Tcp,
+    Dtls,
+    Quic,
+    Udp,
+}
+
+impl FromStr for ProtocolField {
+    type Err = Error;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.into() {
+            "udp" => Ok(Self::Udp),
+            "quic" => Ok(Self::Quic),
+            "dtls" => Ok(Self::Dtls),
+            "tcp" => Ok(Self::Tcp),
+            "tls" => Ok(Self::Tls),
+            "http" => Ok(Self::Http),
+            "h1c" => Ok(Self::H1c),
+            "h1" => Ok(Self::H1),
+            "h2c" => Ok(Self::H2c),
+            "h2" => Ok(Self::H2),
+            "h3" => Ok(Self::H3),
+            "graphql" => Ok(Self::GraphQl),
+            _ => return Err(Error(format!("invalid tls version string {}", s))),
+        }
+    }
+}
+
+impl TryFrom<PlanData> for ProtocolField {
+    type Error = Error;
+    fn try_from(value: PlanData) -> std::result::Result<Self, Self::Error> {
+        match value.0 {
+            cel_interpreter::Value::String(s) => s.parse(),
+            val => Err(Error(format!(
+                "invalid value {val:?} for protocol reference"
+            ))),
+        }
     }
 }
 
@@ -1805,17 +2148,63 @@ impl TryFrom<bindings::Value> for PlanValue<TlsVersion> {
     type Error = Error;
     fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
-            bindings::Value::LiteralString(x) => Ok(Self::Literal(
-                TlsVersion::try_from_str(x.as_str()).map_err(|_| {
-                    Error("out-of-bounds unsigned 16 bit integer literal".to_owned())
-                })?,
-            )),
+            bindings::Value::LiteralString(x) => Ok(Self::Literal(x.parse()?)),
             bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
             _ => Err(Error(format!(
                 "invalid value {binding:?} for tls version field"
+            ))),
+        }
+    }
+}
+
+impl TryFrom<bindings::Value> for PlanValue<ProtocolField> {
+    type Error = Error;
+    fn try_from(binding: bindings::Value) -> Result<Self> {
+        match binding {
+            bindings::Value::LiteralString(x) => Ok(Self::Literal(x.parse()?)),
+            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
+                cel,
+                vars: vars.unwrap_or_default().into_iter().collect(),
+            }),
+            _ => Err(Error(format!(
+                "invalid value {binding:?} for tls version field"
+            ))),
+        }
+    }
+}
+
+impl TryFrom<bindings::Value> for PlanValue<Parallelism> {
+    type Error = Error;
+    fn try_from(binding: bindings::Value) -> Result<Self> {
+        match binding {
+            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
+                cel,
+                vars: vars.unwrap_or_default().into_iter().collect(),
+            }),
+            bindings::Value::LiteralString(x) => Ok(Self::Literal(x.parse()?)),
+            bindings::Value::LiteralBool(b) if b => {
+                Ok(Self::Literal(Parallelism::Parallel(Semaphore::MAX_PERMITS)))
+            }
+            bindings::Value::LiteralBool(b) => Ok(Self::Literal(Parallelism::Serial)),
+            bindings::Value::LiteralInt(i) => Ok(Self::Literal(Parallelism::Parallel(
+                i.try_into().map_err(|_| {
+                    Error(format!(
+                        "parallelism value {i} must fit in platform word size"
+                    ))
+                })?,
+            ))),
+            bindings::Value::LiteralInt(i) => Ok(Self::Literal(Parallelism::Parallel(
+                i.try_into().map_err(|_| {
+                    Error(format!(
+                        "parallelism value {i} must fit in platform word size"
+                    ))
+                })?,
+            ))),
+            val => Err(Error(format!(
+                "invalid value {val:?} for field run.parallel"
             ))),
         }
     }
@@ -1901,7 +2290,7 @@ where
         I: IntoIterator<Item = O>,
     {
         match self {
-            PlanValue::Literal(s) => Ok(s.clone()),
+            PlanValue::Literal(val) => Ok(val.clone()),
             Self::Dynamic { cel, vars } => exec_cel(cel, vars, state)?
                 .try_into()
                 .map_err(|e: E| Error(e.to_string())),
@@ -1925,7 +2314,7 @@ where
                     };
                     Ok((name, plan_value))
                 })
-                .collect::<Result<_>>()?)
+                .try_collect()?)
         } else {
             Err(Error("invalid _vars".to_owned()))
         }
@@ -1977,7 +2366,7 @@ where
                     )))
                 })
                 .filter_map(Result::transpose)
-                .collect::<Result<_>>()?,
+                .try_collect()?,
             bindings::Table::Array(a) => a
                 .into_iter()
                 .map(|entry| {
@@ -1991,7 +2380,7 @@ where
                     )))
                 })
                 .filter_map(Result::transpose)
-                .collect::<Result<_>>()?,
+                .try_collect()?,
         }))
     }
 }
@@ -2062,12 +2451,12 @@ impl Evaluate<Vec<(IterableKey, PlanData)>> for IterablePlanValue {
                             PlanData(x),
                         ))
                     })
-                    .collect::<Result<_>>(),
+                    .try_collect(),
                 cel_interpreter::Value::Map(m) => Rc::try_unwrap(m.map)
                     .map_or_else(|arc| arc.as_ref().clone(), |val| val)
                     .into_iter()
                     .map(|(k, v)| Ok((k.into(), PlanData(v))))
-                    .collect::<Result<_>>(),
+                    .try_collect(),
                 _ => Err(Error("type not iterable".to_owned())),
             },
         }
@@ -2183,8 +2572,9 @@ where
     S: State<'a, O, I>,
     I: IntoIterator<Item = O>,
 {
-    ctx.add_variable("locals", cel_interpreter::Value::Map(state.locals()));
-    ctx.add_variable(
+    ctx.add_variable("locals", cel_interpreter::Value::Map(state.locals()))
+        .unwrap();
+    ctx.add_variable_from_value(
         "steps",
         state
             .iter()
@@ -2203,10 +2593,10 @@ where
             })
             .collect::<HashMap<_, _>>(),
     );
-    ctx.add_variable("current", state.current().to_owned());
-    ctx.add_variable("for", state.run_for().to_owned());
-    ctx.add_variable("while", state.run_while().to_owned());
-    ctx.add_variable("count", state.run_count().to_owned());
+    ctx.add_variable_from_value("current", state.current().to_owned());
+    ctx.add_variable_from_value("for", state.run_for().to_owned());
+    ctx.add_variable_from_value("while", state.run_while().to_owned());
+    ctx.add_variable_from_value("count", state.run_count().to_owned());
     ctx.add_function("parse_url", cel_functions::url);
     ctx.add_function(
         "parse_form_urlencoded",
@@ -2246,7 +2636,7 @@ where
     let program =
         Program::compile(cel).map_err(|e| Error(format!("compile cel {}: {}", cel, e)))?;
     let mut context = Context::default();
-    context.add_variable(
+    context.add_variable_from_value(
         "vars",
         vars.into_iter()
             .map(|(name, value)| (name.clone().into(), value.clone().into()))

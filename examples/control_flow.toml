@@ -40,6 +40,20 @@ url = "https://example.com/test"
 [if_example.run]
 if.cel = "steps.count_example[0].http.response.status_code == 400"
 
+[http2_multiplexing.h2]
+url = "https://example.com/test"
+[http2_multiplexing.run]
+count = 5
+share = "http2frames"
+parallel = true
+
+[http1_pipelining.h2]
+url = "https://example.com/test"
+[http1_pipelining.run]
+count = 5
+share = "tls"
+parallel = "pipelined"
+
 #[after_example.http]
 #url = "https://example.com/test"
 #[after_example.run]

@@ -94,8 +94,11 @@ In order of importance:
    command that automatically updates plans for any breaking changes that can't
    be avoided.
 5. Be fast. Time matters a lot for load testing, race conditions, and side
-   channel attacks. Anything that doesn't need to live in the hot-path of
-   running a request should be done elsewhere.
+   channel attacks. Although courier doesn't seek to be the best performing
+   network client overall, anything that doesn't need to live in the hot-path
+   of running a request should be done elsewhere. Courier is not a lightweight
+   client and will gladly use lots of extra memory to save a few microseconds
+   in the hot-path. 
 
 ## Non-goals
 

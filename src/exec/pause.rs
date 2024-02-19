@@ -1,6 +1,11 @@
-use std::{collections::VecDeque, mem, pin::Pin, sync::Arc, task::Poll, time::Instant};
+use std::{
+    collections::VecDeque,
+    pin::{pin, Pin},
+    sync::Arc,
+    task::Poll,
+};
 
-use futures::{future::join_all, Future, FutureExt};
+use futures::{future::join_all, ready, Future, FutureExt};
 use itertools::Itertools;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -55,10 +60,37 @@ struct AbsolutePlan {
     output_index: usize,
 }
 
+pub fn new_stream<T: Stream>(
+    ctx: Arc<super::Context>,
+    inner: T,
+    read_plans: impl IntoIterator<Item = PauseSpec>,
+    write_plans: impl IntoIterator<Item = PauseSpec>,
+) -> PauseStream<T> {
+    PauseReader::new(
+        ctx.clone(),
+        PauseWriter::new(ctx, inner, write_plans),
+        read_plans,
+    )
+}
+
+pub type PauseStream<T> = PauseReader<PauseWriter<T>>;
+
+impl<T: Stream> PauseStream<T> {
+    pub fn finish_stream(self) -> (T, Vec<Vec<PauseValueOutput>>, Vec<Vec<PauseValueOutput>>) {
+        let (inner, reads) = self.finish();
+        let (inner, writes) = inner.finish();
+        (inner, reads, writes)
+    }
+
+    pub fn add_writes(&mut self, write_plans: impl IntoIterator<Item = PauseSpec>) {
+        self.inner_mut().add_writes(write_plans)
+    }
+}
+
 #[derive(Debug)]
-pub struct PauseStream<T>
+pub struct PauseReader<T>
 where
-    T: Stream,
+    T: AsyncRead + Send + Unpin + std::fmt::Debug,
 {
     inner: T,
     ctx: Arc<super::Context>,
@@ -67,37 +99,26 @@ where
     read_pending: Option<(Pause, usize)>,
     read_plans: VecDeque<AbsolutePlan>,
     read_out: Vec<Vec<PauseValueOutput>>,
-
-    write_bytes: i64,
-    write_pending: Option<(Pause, usize)>,
-    write_plans: VecDeque<AbsolutePlan>,
-    write_out: Vec<Vec<PauseValueOutput>>,
 }
 
-impl<T> PauseStream<T>
+impl<T> PauseReader<T>
 where
-    T: Stream,
+    T: AsyncRead + Send + Unpin + std::fmt::Debug,
 {
     pub(crate) fn new(
         ctx: Arc<super::Context>,
         inner: T,
         read_plans: impl IntoIterator<Item = PauseSpec>,
-        write_plans: impl IntoIterator<Item = PauseSpec>,
     ) -> Self {
-        let mut result = PauseStream {
+        let mut result = Self {
             inner,
             ctx,
             read_bytes: 0,
             read_pending: None,
             read_plans: VecDeque::new(),
             read_out: Vec::new(),
-            write_bytes: 0,
-            write_pending: None,
-            write_plans: VecDeque::new(),
-            write_out: Vec::new(),
         };
         result.add_reads(read_plans);
-        result.add_writes(write_plans);
         result
     }
 
@@ -123,36 +144,18 @@ where
         );
     }
 
-    pub fn add_writes(&mut self, write_plans: impl IntoIterator<Item = PauseSpec>) {
-        let write_plans = write_plans.into_iter();
-        if let Some(s) = write_plans.size_hint().1 {
-            self.write_out.reserve(s);
-        }
-        self.write_plans.extend(
-            write_plans
-                .map(|spec| {
-                    let output_index = self.write_out.len();
-                    self.write_out.push(Vec::with_capacity(spec.plan.len()));
-                    let current_offset = spec.group_offset + self.write_bytes;
-                    spec.plan.into_iter().map(move |p| AbsolutePlan {
-                        absolute_offset: current_offset + p.offset_bytes,
-                        plan: p,
-                        output_index,
-                    })
-                })
-                .flatten()
-                .sorted_by(|a, b| a.absolute_offset.cmp(&b.absolute_offset)),
-        );
+    pub fn inner_mut(&mut self) -> &mut T {
+        &mut self.inner
     }
 
-    pub fn finish(self) -> (T, Vec<Vec<PauseValueOutput>>, Vec<Vec<PauseValueOutput>>) {
-        (self.inner, self.write_out, self.read_out)
+    pub fn finish(self) -> (T, Vec<Vec<PauseValueOutput>>) {
+        (self.inner, self.read_out)
     }
 }
 
-impl<T> AsyncRead for PauseStream<T>
+impl<T> AsyncRead for PauseReader<T>
 where
-    T: Stream,
+    T: AsyncRead + Send + Unpin + std::fmt::Debug,
 {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -202,7 +205,7 @@ where
         unsafe { sub_buf.assume_init(sub_buf.remaining()) }
 
         // Read some data.
-        let result = Pin::new(&mut self.inner).poll_read(cx, &mut sub_buf);
+        let result = ready!(Pin::new(&mut self.inner).poll_read(cx, &mut sub_buf));
 
         let bytes_read = sub_buf.filled().len();
 
@@ -211,13 +214,101 @@ where
         // Record the newly read bytes.
         self.read_bytes += i64::try_from(bytes_read).expect("too many bytes written");
 
-        result
+        Poll::Ready(result)
     }
 }
 
-impl<T> AsyncWrite for PauseStream<T>
+// Passthrough if T supports writes too.
+impl<T> AsyncWrite for PauseReader<T>
 where
     T: Stream,
+{
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        pin!(&mut self.inner).poll_write(cx, buf)
+    }
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        pin!(&mut self.inner).poll_flush(cx)
+    }
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        pin!(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+impl<T> Unpin for PauseReader<T> where T: AsyncRead + Send + Unpin + std::fmt::Debug {}
+
+#[derive(Debug)]
+pub struct PauseWriter<T: AsyncWrite> {
+    inner: T,
+    ctx: Arc<super::Context>,
+
+    write_bytes: i64,
+    write_pending: Option<(Pause, usize)>,
+    write_plans: VecDeque<AbsolutePlan>,
+    write_out: Vec<Vec<PauseValueOutput>>,
+}
+
+impl<T: AsyncWrite + std::fmt::Debug> PauseWriter<T> {
+    pub(crate) fn new(
+        ctx: Arc<super::Context>,
+        inner: T,
+        write_plans: impl IntoIterator<Item = PauseSpec>,
+    ) -> Self {
+        let mut result = Self {
+            inner,
+            ctx,
+            write_bytes: 0,
+            write_pending: None,
+            write_plans: VecDeque::new(),
+            write_out: Vec::new(),
+        };
+        result.add_writes(write_plans);
+        result
+    }
+
+    pub fn add_writes(&mut self, write_plans: impl IntoIterator<Item = PauseSpec>) {
+        let write_plans = write_plans.into_iter();
+        if let Some(s) = write_plans.size_hint().1 {
+            self.write_out.reserve(s);
+        }
+        self.write_plans.extend(
+            write_plans
+                .map(|spec| {
+                    let output_index = self.write_out.len();
+                    self.write_out.push(Vec::with_capacity(spec.plan.len()));
+                    let current_offset = spec.group_offset + self.write_bytes;
+                    spec.plan.into_iter().map(move |p| AbsolutePlan {
+                        absolute_offset: current_offset + p.offset_bytes,
+                        plan: p,
+                        output_index,
+                    })
+                })
+                .flatten()
+                .sorted_by(|a, b| a.absolute_offset.cmp(&b.absolute_offset)),
+        );
+    }
+
+    pub fn inner_mut(&mut self) -> &mut T {
+        &mut self.inner
+    }
+
+    pub fn finish(self) -> (T, Vec<Vec<PauseValueOutput>>) {
+        (self.inner, self.write_out)
+    }
+}
+
+impl<T> AsyncWrite for PauseWriter<T>
+where
+    T: AsyncWrite + std::fmt::Debug + Send + Unpin,
 {
     fn poll_write(
         mut self: std::pin::Pin<&mut Self>,
@@ -238,9 +329,9 @@ where
 
             // Always flush before pausing.
             if self.write_pending.is_some() {
-                if let Poll::Pending = self.as_mut().poll_flush(cx) {
-                    return Poll::Pending;
-                }
+                if let Err(e) = ready!(self.as_mut().poll_flush(cx)) {
+                    return Poll::Ready(Err(e));
+                };
             }
 
             // Execute any pending pauses.
@@ -268,16 +359,15 @@ where
             .unwrap_or_else(|| buf.len());
 
         // Write some bytes.
-        let result = Pin::new(&mut self.inner).poll_write(cx, &buf[0..write_len.min(buf.len())]);
+        let result =
+            ready!(Pin::new(&mut self.inner).poll_write(cx, &buf[0..write_len.min(buf.len())]));
 
-        let Poll::Ready(Ok(bytes_written)) = result else {
-            // Nothing else to do if no bytes were written.
-            return result;
+        if let Ok(bytes_written) = result {
+            // Record the newly read bytes.
+            self.write_bytes += i64::try_from(bytes_written).expect("too many bytes written");
         };
 
-        // Record the newly read bytes.
-        self.write_bytes += i64::try_from(bytes_written).expect("too many bytes written");
-        result
+        return Poll::Ready(result);
     }
 
     fn poll_flush(
@@ -296,7 +386,20 @@ where
     }
 }
 
-impl<T> Unpin for PauseStream<T> where T: Stream {}
+impl<T> AsyncRead for PauseWriter<T>
+where
+    T: Stream,
+{
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        pin!(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl<T> Unpin for PauseWriter<T> where T: AsyncWrite + std::fmt::Debug {}
 
 #[derive(Debug)]
 pub struct PauseSpec {
