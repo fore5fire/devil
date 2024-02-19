@@ -9,7 +9,7 @@ use chrono::Duration;
 use indexmap::IndexMap;
 use url::Url;
 
-use crate::TlsVersion;
+use crate::{Parallelism, ProtocolField, TlsVersion};
 
 pub trait State<'a, O: Into<&'a str>, I: IntoIterator<Item = O>> {
     fn get(&self, name: &'a str) -> Option<&IndexMap<crate::IterableKey, StepOutput>>;
@@ -28,7 +28,9 @@ pub enum Output {
     Http(HttpOutput),
     H1c(Http1Output),
     H1(Http1Output),
-    //Http2(Http2Output),
+    H2c(Http2Output),
+    H2(Http2Output),
+    Http2Frames(Http2FramesOutput),
     //Http3(Http3Output),
     Tls(TlsOutput),
     Tcp(TcpOutput),
@@ -40,7 +42,9 @@ pub enum StepPlanOutput {
     Http(HttpPlanOutput),
     H1c(Http1PlanOutput),
     H1(Http1PlanOutput),
-    //Http2(Http2PlanOutput),
+    H2c(Http2PlanOutput),
+    H2(Http2PlanOutput),
+    Http2Frames(Http2FramesPlanOutput),
     //Http3(Http3PlanOutput),
     Tls(TlsPlanOutput),
     Tcp(TcpPlanOutput),
@@ -52,7 +56,9 @@ pub struct StepPlanOutputs {
     pub http: Option<HttpPlanOutput>,
     pub h1c: Option<Http1PlanOutput>,
     pub h1: Option<Http1PlanOutput>,
-    //pub http2: Option<Http2PlanOutput>,
+    pub h2c: Option<Http2PlanOutput>,
+    pub h2: Option<Http2PlanOutput>,
+    pub http2frames: Option<Http2FramesPlanOutput>,
     //pub http3: Option<Http3PlanOutput>,
     pub tls: Option<TlsPlanOutput>,
     pub tcp: Option<TcpPlanOutput>,
@@ -79,6 +85,18 @@ impl From<StepPlanOutputs> for Value {
                     HashMap::from([("plan", Value::from(value.h1))]).into(),
                 ),
                 (
+                    "h2c".into(),
+                    HashMap::from([("plan", Value::from(value.h2c))]).into(),
+                ),
+                (
+                    "h2".into(),
+                    HashMap::from([("plan", Value::from(value.h2))]).into(),
+                ),
+                (
+                    "http2frames".into(),
+                    HashMap::from([("plan", Value::from(value.http2frames))]).into(),
+                ),
+                (
                     "tls".into(),
                     HashMap::from([("plan", Value::from(value.tls))]).into(),
                 ),
@@ -97,7 +115,9 @@ pub struct StepOutput {
     pub http: Option<HttpOutput>,
     pub h1c: Option<Http1Output>,
     pub h1: Option<Http1Output>,
-    //pub http2: Option<Http2Output>,
+    pub h2c: Option<Http2Output>,
+    pub h2: Option<Http2Output>,
+    pub http2frames: Option<Http2FramesOutput>,
     //pub http3: Option<Http3Output>,
     pub tls: Option<TlsOutput>,
     pub tcp: Option<TcpOutput>,
@@ -106,6 +126,9 @@ pub struct StepOutput {
 impl StepOutput {
     pub fn http1(&self) -> Option<&Http1Output> {
         self.h1.as_ref().or_else(|| self.h1c.as_ref())
+    }
+    pub fn http2(&self) -> Option<&Http2Output> {
+        self.h2.as_ref().or_else(|| self.h2c.as_ref())
     }
 }
 
@@ -117,7 +140,9 @@ impl From<StepOutput> for Value {
                 ("http".into(), value.http.into()),
                 ("h1c".into(), value.h1c.into()),
                 ("h1".into(), value.h1.into()),
-                //("http2".into(), value.http2.into()),
+                ("h2c".into(), value.h2c.into()),
+                ("h2".into(), value.h2.into()),
+                ("http2frames".into(), value.http2frames.into()),
                 //("http3".into(), value.http3.into()),
                 ("tls".into(), value.tls.into()),
                 ("tcp".into(), value.tcp.into()),
@@ -516,6 +541,273 @@ impl From<Http1Error> for Value {
 }
 
 #[derive(Debug, Clone)]
+pub struct Http2Output {
+    pub plan: Http2PlanOutput,
+    pub request: Option<Http2RequestOutput>,
+    pub response: Option<Http2Response>,
+    pub errors: Vec<Http2Error>,
+    pub duration: Duration,
+    pub pause: Http2PauseOutput,
+}
+
+impl From<Http2Output> for Value {
+    fn from(value: Http2Output) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("plan".into(), value.plan.into()),
+                ("request".into(), value.request.into()),
+                ("response".into(), value.response.into()),
+                ("errors".into(), value.errors.into()),
+                ("duration".into(), value.duration.into()),
+                ("pause".into(), value.pause.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Http2PlanOutput {
+    pub url: Url,
+    pub method: Option<Vec<u8>>,
+    pub content_length: Option<u64>,
+    pub headers: Vec<(Vec<u8>, Vec<u8>)>,
+    pub trailers: Vec<(Vec<u8>, Vec<u8>)>,
+    pub body: Vec<u8>,
+    pub pause: Http2PauseOutput,
+}
+
+impl From<Http2PlanOutput> for Value {
+    fn from(value: Http2PlanOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("url".into(), value.url.to_string().into()),
+                ("method".into(), value.method.into()),
+                (
+                    "headers".into(),
+                    Value::List(Arc::new(
+                        value.headers.into_iter().map(kv_pair_to_map).collect(),
+                    )),
+                ),
+                ("body".into(), value.body.clone().into()),
+                ("pause".into(), value.pause.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Http2PauseOutput {
+    pub open: PausePointsOutput,
+    pub request_headers: PausePointsOutput,
+    pub request_body: PausePointsOutput,
+    pub response_headers: PausePointsOutput,
+    pub response_body: PausePointsOutput,
+}
+
+impl From<Http2PauseOutput> for Value {
+    fn from(value: Http2PauseOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("open".into(), value.open.into()),
+                ("request_headers".into(), value.request_headers.into()),
+                ("request_body".into(), value.request_body.into()),
+                ("response_headers".into(), value.response_headers.into()),
+                ("response_body".into(), value.response_body.into()),
+            ])),
+        })
+    }
+}
+
+impl WithPlannedCapacity for Http2PauseOutput {
+    fn with_planned_capacity(planned: &Self) -> Self {
+        Self {
+            open: PausePointsOutput::with_planned_capacity(&planned.open),
+            request_headers: PausePointsOutput::with_planned_capacity(&planned.request_headers),
+            request_body: PausePointsOutput::with_planned_capacity(&planned.request_body),
+            response_headers: PausePointsOutput::with_planned_capacity(&planned.response_headers),
+            response_body: PausePointsOutput::with_planned_capacity(&planned.response_body),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Http2RequestOutput {
+    pub url: Url,
+    pub method: Option<Vec<u8>>,
+    pub content_length: Option<u64>,
+    pub headers: Vec<(Vec<u8>, Vec<u8>)>,
+    pub body: Vec<u8>,
+    pub duration: Duration,
+    pub headers_duration: Option<Duration>,
+    pub body_duration: Option<Duration>,
+    pub time_to_first_byte: Option<Duration>,
+}
+
+impl From<Http2RequestOutput> for Value {
+    fn from(value: Http2RequestOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("url".into(), value.url.to_string().into()),
+                ("method".into(), value.method.clone().into()),
+                (
+                    "headers".into(),
+                    Value::List(Arc::new(
+                        value.headers.into_iter().map(kv_pair_to_map).collect(),
+                    )),
+                ),
+                ("body".into(), value.body.clone().into()),
+                ("duration".into(), value.duration.into()),
+                ("body_duration".into(), value.body_duration.into()),
+                ("time_to_first_byte".into(), value.time_to_first_byte.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Http2Response {
+    pub status_code: Option<u16>,
+    pub content_length: Option<u64>,
+    pub headers: Option<Vec<(Vec<u8>, Vec<u8>)>>,
+    pub body: Option<Vec<u8>>,
+    pub trailers: Option<Vec<(Vec<u8>, Vec<u8>)>>,
+    pub duration: Duration,
+    pub header_duration: Option<Duration>,
+    pub time_to_first_byte: Option<Duration>,
+}
+
+impl From<Http2Response> for Value {
+    fn from(value: Http2Response) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                (
+                    "status_code".into(),
+                    value
+                        .status_code
+                        .clone()
+                        .map(|status_code| Value::UInt(status_code.into()))
+                        .into(),
+                ),
+                ("content_length".into(), value.content_length.into()),
+                (
+                    "headers".into(),
+                    value
+                        .headers
+                        .clone()
+                        .map(|headers| {
+                            Value::List(Arc::new(headers.into_iter().map(kv_pair_to_map).collect()))
+                        })
+                        .into(),
+                ),
+                ("body".into(), value.body.clone().into()),
+                ("duration".into(), value.duration.into()),
+                ("header_duration".into(), value.header_duration.into()),
+                ("time_to_first_byte".into(), value.time_to_first_byte.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Http2Error {
+    pub kind: String,
+    pub message: String,
+}
+
+impl From<Http2Error> for Value {
+    fn from(value: Http2Error) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("kind".into(), value.kind.into()),
+                ("message".into(), value.message.into()),
+            ])),
+        })
+    }
+}
+#[derive(Debug, Clone)]
+pub struct Http2FramesOutput {
+    pub plan: Http2FramesPlanOutput,
+    pub errors: Vec<Http2FramesError>,
+    pub duration: Duration,
+    pub pause: Http2FramesPauseOutput,
+}
+
+impl From<Http2FramesOutput> for Value {
+    fn from(value: Http2FramesOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("plan".into(), value.plan.into()),
+                ("errors".into(), value.errors.into()),
+                ("duration".into(), value.duration.into()),
+                ("pause".into(), value.pause.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Http2FramesPlanOutput {
+    pub host: String,
+    pub port: u16,
+    //pub preamble: Vec<u8>,
+    pub pause: Http2FramesPauseOutput,
+}
+
+impl From<Http2FramesPlanOutput> for Value {
+    fn from(value: Http2FramesPlanOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("host".into(), value.host.to_string().into()),
+                ("port".into(), u64::from(value.port).into()),
+                //("preamble".into(), value.preamble.into()),
+                ("pause".into(), value.pause.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Http2FramesPauseOutput {
+    pub handshake: PausePointsOutput,
+}
+
+impl From<Http2FramesPauseOutput> for Value {
+    fn from(value: Http2FramesPauseOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([(
+                "handshake".into(),
+                value.handshake.into(),
+            )])),
+        })
+    }
+}
+
+impl WithPlannedCapacity for Http2FramesPauseOutput {
+    fn with_planned_capacity(planned: &Self) -> Self {
+        Self {
+            handshake: PausePointsOutput::with_planned_capacity(&planned.handshake),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Http2FramesError {
+    pub kind: String,
+    pub message: String,
+}
+
+impl From<Http2FramesError> for Value {
+    fn from(value: Http2FramesError) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("kind".into(), value.kind.into()),
+                ("message".into(), value.message.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct GraphQlOutput {
     pub plan: GraphQlPlanOutput,
     pub request: Option<GraphQlRequestOutput>,
@@ -767,6 +1059,7 @@ impl WithPlannedCapacity for TlsPauseOutput {
 pub struct TlsPlanOutput {
     pub host: String,
     pub port: u16,
+    pub alpn: Vec<Vec<u8>>,
     pub body: Vec<u8>,
     pub pause: TlsPauseOutput,
 }
@@ -912,7 +1205,7 @@ impl From<TcpPlanOutput> for Value {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("host".into(), Value::String(Arc::new(value.host))),
-                ("port".into(), (value.port as u64).into()),
+                ("port".into(), u64::from(value.port).into()),
                 ("body".into(), Value::Bytes(Arc::new(value.body))),
                 ("pause".into(), value.pause.into()),
             ])),
@@ -933,7 +1226,7 @@ impl From<TcpRequestOutput> for Value {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("host".into(), Value::String(Arc::new(value.host))),
-                ("port".into(), (value.port as u64).into()),
+                ("port".into(), u64::from(value.port).into()),
                 ("body".into(), Value::Bytes(Arc::new(value.body))),
                 ("time_to_first_byte".into(), value.time_to_first_byte.into()),
                 ("time_to_last_byte".into(), value.time_to_last_byte.into()),
@@ -1155,7 +1448,8 @@ pub struct RunOutput {
     pub run_while: Option<bool>,
     pub run_for: Option<Vec<(crate::IterableKey, crate::PlanData)>>,
     pub count: u64,
-    pub parallel: bool,
+    pub parallel: Parallelism,
+    pub share: Option<ProtocolField>,
 }
 
 #[derive(Debug, Clone)]

@@ -54,11 +54,12 @@ courier.version = 0
 #duration = "500ms"
 
 # Sync parallel requests by pausing until all are ready.
-[parallel_join.h1c]
-url = "http://example.com/test"
+[parallel_join.h2]
+url = "https://example.com/test"
 headers.Content-Length = "3"
+content_length = 3
 body = "abc"
-[parallel_join.h1c.pause.request_body.end]
+[parallel_join.h2.pause.request_body.end]
 # Pause each parallel request a different number of seconds.
 duration = "5s"
 # Pause each parallel request at a different spot.
@@ -71,5 +72,5 @@ join = "a"
 # join = ["a"]
 [parallel_join.run]
 parallel = true
-count = 20
+count = 1
 

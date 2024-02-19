@@ -10,6 +10,7 @@ use chrono::Duration;
 use tokio::io::ReadBuf;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+use super::pause;
 use super::pause::PauseSpec;
 use super::pause::PauseStream;
 use super::runner::Runner;
@@ -18,7 +19,7 @@ use crate::Http1Error;
 use crate::Http1PlanOutput;
 use crate::Http1RequestOutput;
 use crate::WithPlannedCapacity;
-use crate::{Error, Http1Output, Http1Response, Output};
+use crate::{Error, Http1Output, Http1Response};
 
 #[derive(Debug)]
 pub(super) struct Http1Runner {
@@ -31,37 +32,21 @@ pub(super) struct Http1Runner {
     resp_start_time: Option<Instant>,
     resp_header_end_time: Option<Instant>,
     first_read: Option<Instant>,
-    end_time: Option<Instant>,
     resp_header_buf: BytesMut,
     req_body_buf: Vec<u8>,
     resp_body_buf: Vec<u8>,
+    size_hint: Option<usize>,
 }
 
 #[derive(Debug)]
 enum State {
-    Pending {
-        ctx: Arc<Context>,
-        header: BytesMut,
-        transport: Runner,
-    },
-    StartFailed {
-        transport: Runner,
-    },
-    SendingHeader {
-        transport: PauseStream<Runner>,
-    },
-    SendingBody {
-        transport: PauseStream<Runner>,
-    },
-    ReceivingHeader {
-        transport: PauseStream<Runner>,
-    },
-    ReceivingBody {
-        transport: PauseStream<Runner>,
-    },
-    Complete {
-        transport: Runner,
-    },
+    Pending { ctx: Arc<Context>, header: BytesMut },
+    StartFailed { transport: Runner },
+    SendingHeader { transport: PauseStream<Runner> },
+    SendingBody { transport: PauseStream<Runner> },
+    ReceivingHeader { transport: PauseStream<Runner> },
+    ReceivingBody { transport: PauseStream<Runner> },
+    Complete { transport: Option<Runner> },
     Invalid,
 }
 
@@ -72,16 +57,21 @@ impl AsyncRead for Http1Runner {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         let mut state = std::mem::replace(&mut self.state, State::Invalid);
+
+        // Update the state to ReceivingHeader.
         if let State::SendingBody { transport } = state {
-            // Record the response start time.
-            self.resp_start_time = Some(Instant::now());
-            // Update the state to ReceivingHeader.
-            state = State::ReceivingHeader { transport }
+            state = State::ReceivingHeader { transport };
         }
 
         match state {
             State::ReceivingHeader { mut transport } => {
                 let poll = self.poll_header(cx, buf, &mut transport);
+                if poll.is_ready() {
+                    // Record the response start time.
+                    if self.resp_start_time.is_none() {
+                        self.resp_start_time = Some(Instant::now());
+                    }
+                }
                 self.state = match &poll {
                     Poll::Ready(Ok(())) => {
                         // Schedule planned pauses for the response body.
@@ -130,7 +120,6 @@ impl AsyncRead for Http1Runner {
                 let poll = pin!(&mut transport).poll_read(cx, buf);
                 self.resp_body_buf
                     .extend_from_slice(&buf.filled()[old_len..]);
-                // TODO: determine end of request by content-length or transfer-encoding.
                 self.state = State::ReceivingBody { transport };
                 poll
             }
@@ -179,36 +168,29 @@ impl AsyncWrite for Http1Runner {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
-        match &mut self.state {
+        let poll = match &mut self.state {
             State::SendingHeader { transport, .. }
             | State::SendingBody { transport, .. }
             | State::ReceivingHeader { transport, .. }
-            | State::ReceivingBody { transport, .. } => {
-                let poll = pin!(transport).poll_shutdown(cx);
-                if poll.is_ready() {
-                    self.end_time = Some(Instant::now());
-                }
-                poll
-            }
-            State::Complete { transport } => {
-                let poll = pin!(transport).poll_shutdown(cx);
-                if poll.is_ready() {
-                    self.end_time = Some(Instant::now());
-                }
-                poll
-            }
-            _ => panic!("unexpected state for http1 poll_shutdown"),
+            | State::ReceivingBody { transport, .. } => pin!(transport).poll_shutdown(cx),
+            State::Complete {
+                transport: Some(transport),
+            } => pin!(transport).poll_shutdown(cx),
+            state => panic!("unexpected state {state:?} for http1 poll_shutdown"),
+        };
+        if poll.is_ready() {
+            self.complete();
         }
+        poll
     }
 }
 
 impl Http1Runner {
-    pub(super) fn new(ctx: Arc<Context>, transport: Runner, plan: Http1PlanOutput) -> Self {
+    pub(super) fn new(ctx: Arc<Context>, plan: Http1PlanOutput) -> Self {
         Self {
             state: State::Pending {
                 ctx,
                 header: Self::compute_header(&plan),
-                transport,
             },
             out: Http1Output {
                 request: None,
@@ -225,10 +207,10 @@ impl Http1Runner {
             resp_start_time: None,
             resp_header_end_time: None,
             first_read: None,
-            end_time: None,
             resp_header_buf: BytesMut::new(),
             req_body_buf: Vec::new(),
             resp_body_buf: Vec::new(),
+            size_hint: None,
         }
     }
 
@@ -385,37 +367,28 @@ impl Http1Runner {
         }
     }
 
+    pub fn size_hint(&mut self, size_hint: Option<usize>) -> Option<usize> {
+        let State::Pending { header, .. } = &self.state else {
+            panic!("invalid state {:?}", self.state);
+        };
+
+        self.size_hint = size_hint;
+        size_hint.map(|hint| header.len() + hint)
+    }
+
     pub async fn start(
         &mut self,
-        size_hint: Option<usize>,
+        transport: Runner,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let state = std::mem::replace(&mut self.state, State::Invalid);
-        let State::Pending {
-            mut header,
-            mut transport,
-            ctx,
-        } = state
-        else {
+        let State::Pending { mut header, ctx } = state else {
             return Err(Box::new(Error(
                 "attempt to start Http1Runner from invalid state".to_owned(),
             )));
         };
 
-        if let Err(e) = transport
-            .start(Some(header.len() + size_hint.unwrap_or(0)))
-            .await
-        {
-            self.out.errors.push(Http1Error {
-                kind: "transport start".to_owned(),
-                message: e.to_string(),
-            });
-            self.state = State::StartFailed { transport };
-            self.complete();
-            return Err(e);
-        };
-
         let header_len = i64::try_from(header.len()).unwrap();
-        let mut transport = PauseStream::new(
+        let mut transport = pause::new_stream(
             ctx,
             transport,
             [PauseSpec {
@@ -437,7 +410,7 @@ impl Http1Runner {
                 },
             ],
         );
-        if let Some(size_hint) = size_hint {
+        if let Some(size_hint) = self.size_hint {
             transport.add_writes([PauseSpec {
                 plan: self.out.plan.pause.request_body.end.clone(),
                 group_offset: i64::try_from(size_hint).unwrap() + header_len,
@@ -484,16 +457,11 @@ impl Http1Runner {
         Ok(())
     }
 
-    pub async fn execute(&mut self) {
-        // Send headers.
-        if let Err(e) = self.start(Some(self.out.plan.body.len())).await {
-            self.out.errors.push(Http1Error {
-                kind: "send headers".to_owned(),
-                message: e.to_string(),
-            });
-            return;
-        }
+    pub fn executor_size_hint(&self) -> Option<usize> {
+        Some(self.out.plan.body.len())
+    }
 
+    pub async fn execute(&mut self) {
         if !self.out.plan.body.is_empty() {
             let body = std::mem::take(&mut self.out.plan.body);
             if let Err(e) = self.write_all(body.as_slice()).await {
@@ -522,7 +490,7 @@ impl Http1Runner {
         }
     }
 
-    pub fn finish(mut self) -> (Http1Output, Runner) {
+    pub fn finish(mut self) -> (Http1Output, Option<Runner>) {
         self.complete();
         let State::Complete { transport } = self.state else {
             unreachable!();
@@ -531,7 +499,7 @@ impl Http1Runner {
     }
 
     fn complete(&mut self) {
-        let end_time = self.end_time.unwrap_or_else(Instant::now);
+        let end_time = Instant::now();
         let state = std::mem::replace(&mut self.state, State::Invalid);
         let transport = match state {
             State::SendingHeader { transport }
@@ -540,16 +508,24 @@ impl Http1Runner {
             | State::ReceivingBody { transport } => transport,
             // If we've already cleaned up or we never did anything then the output doesn't need
             // post processing.
-            State::Complete { transport }
-            | State::Pending { transport, .. }
-            | State::StartFailed { transport } => {
+            State::Complete { transport } => {
                 self.state = State::Complete { transport };
+                return;
+            }
+            State::StartFailed { transport } => {
+                self.state = State::Complete {
+                    transport: Some(transport),
+                };
+                return;
+            }
+            State::Pending { .. } => {
+                self.state = State::Complete { transport: None };
                 return;
             }
             State::Invalid => panic!(),
         };
 
-        let (inner, write_pause, read_pause) = transport.finish();
+        let (inner, write_pause, read_pause) = transport.finish_stream();
         let mut write_pause = write_pause.into_iter();
         self.out.pause.request_headers.start = write_pause.next().unwrap_or_default();
         self.out.pause.request_headers.end = write_pause.next().unwrap_or_default();
@@ -601,7 +577,9 @@ impl Http1Runner {
                 .unwrap();
         }
 
-        self.state = State::Complete { transport: inner };
+        self.state = State::Complete {
+            transport: Some(inner),
+        };
         self.out.duration = Duration::from_std(end_time - start_time).unwrap();
     }
 }

@@ -67,6 +67,7 @@ pub struct Defaults {
     pub h1: Option<Http1>,
     pub h2c: Option<Http2>,
     pub h2: Option<Http2>,
+    pub http2frames: Option<Http2Frames>,
     pub h3: Option<Http3>,
     pub tls: Option<Tls>,
     pub tcp: Option<Tcp>,
@@ -213,13 +214,22 @@ impl Step {
                     x.validate()?;
                 };
             }
-            StepProtocols::GraphQlH2c { graphql, h2c, tcp } => {
+            StepProtocols::GraphQlH2c {
+                graphql,
+                h2c,
+                http2frames,
+                tcp,
+            } => {
                 self.unrecognized.remove("graphql");
                 self.unrecognized.remove("h2c");
+                self.unrecognized.remove("http2frames");
                 self.unrecognized.remove("tls");
                 self.unrecognized.remove("tcp");
                 graphql.validate()?;
                 if let Some(x) = &h2c {
+                    x.validate()?;
+                };
+                if let Some(x) = &http2frames {
                     x.validate()?;
                 };
                 if let Some(x) = &tcp {
@@ -229,15 +239,20 @@ impl Step {
             StepProtocols::GraphQlH2 {
                 graphql,
                 h2,
+                http2frames,
                 tls,
                 tcp,
             } => {
                 self.unrecognized.remove("graphql");
                 self.unrecognized.remove("h2");
+                self.unrecognized.remove("http2frames");
                 self.unrecognized.remove("tls");
                 self.unrecognized.remove("tcp");
                 graphql.validate()?;
                 if let Some(x) = &h2 {
+                    x.validate()?;
+                };
+                if let Some(x) = &http2frames {
                     x.validate()?;
                 };
                 if let Some(x) = &tls {
@@ -292,19 +307,36 @@ impl Step {
                     x.validate()?;
                 };
             }
-            StepProtocols::H2c { h2c, tcp } => {
+            StepProtocols::H2c {
+                h2c,
+                http2frames,
+                tcp,
+            } => {
                 self.unrecognized.remove("h2c");
+                self.unrecognized.remove("http2frames");
                 self.unrecognized.remove("tcp");
                 h2c.validate()?;
+                if let Some(x) = &http2frames {
+                    x.validate()?;
+                };
                 if let Some(x) = &tcp {
                     x.validate()?;
                 };
             }
-            StepProtocols::H2 { h2, tls, tcp } => {
+            StepProtocols::H2 {
+                h2,
+                http2frames,
+                tls,
+                tcp,
+            } => {
                 self.unrecognized.remove("h2");
+                self.unrecognized.remove("http2frames");
                 self.unrecognized.remove("tls");
                 self.unrecognized.remove("tcp");
                 h2.validate()?;
+                if let Some(x) = &http2frames {
+                    x.validate()?;
+                };
                 if let Some(x) = &tls {
                     x.validate()?;
                 };
@@ -395,11 +427,13 @@ pub enum StepProtocols {
     GraphQlH2c {
         graphql: GraphQl,
         h2c: Option<Http2>,
+        http2frames: Option<Http2Frames>,
         tcp: Option<Tcp>,
     },
     GraphQlH2 {
         graphql: GraphQl,
         h2: Option<Http2>,
+        http2frames: Option<Http2Frames>,
         tls: Option<Tls>,
         tcp: Option<Tcp>,
     },
@@ -423,10 +457,12 @@ pub enum StepProtocols {
     },
     H2c {
         h2c: Http2,
+        http2frames: Option<Http2Frames>,
         tcp: Option<Tcp>,
     },
     H2 {
         h2: Http2,
+        http2frames: Option<Http2Frames>,
         tls: Option<Tls>,
         tcp: Option<Tcp>,
     },
@@ -488,19 +524,27 @@ impl StepProtocols {
                 tls: Some(tls.unwrap_or_default().merge(default.tls)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
             },
-            Self::GraphQlH2c { graphql, h2c, tcp } => Self::GraphQlH2c {
+            Self::GraphQlH2c {
+                graphql,
+                h2c,
+                http2frames,
+                tcp,
+            } => Self::GraphQlH2c {
                 graphql: graphql.merge(default.graphql),
                 h2c: Some(h2c.unwrap_or_default().merge(default.h2c)),
+                http2frames: Some(http2frames.unwrap_or_default().merge(default.http2frames)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
             },
             Self::GraphQlH2 {
                 graphql,
                 h2,
+                http2frames,
                 tls,
                 tcp,
             } => Self::GraphQlH2 {
                 graphql: graphql.merge(default.graphql),
                 h2: Some(h2.unwrap_or_default().merge(default.h2)),
+                http2frames: Some(http2frames.unwrap_or_default().merge(default.http2frames)),
                 tls: Some(tls.unwrap_or_default().merge(default.tls)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
             },
@@ -528,12 +572,23 @@ impl StepProtocols {
                 tls: Some(tls.unwrap_or_default().merge(default.tls)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
             },
-            Self::H2c { h2c, tcp } => Self::H2c {
+            Self::H2c {
+                h2c,
+                http2frames,
+                tcp,
+            } => Self::H2c {
                 h2c: h2c.merge(default.h2c),
+                http2frames: Some(http2frames.unwrap_or_default().merge(default.http2frames)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
             },
-            Self::H2 { h2, tls, tcp } => Self::H2 {
+            Self::H2 {
+                h2,
+                http2frames,
+                tls,
+                tcp,
+            } => Self::H2 {
                 h2: h2.merge(default.h2),
+                http2frames: Some(http2frames.unwrap_or_default().merge(default.http2frames)),
                 tls: Some(tls.unwrap_or_default().merge(default.tls)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
             },
@@ -594,6 +649,7 @@ pub struct Run {
     pub run_for: Option<Iterable>,
     pub count: Option<Value>,
     pub parallel: Option<Value>,
+    pub share: Option<Value>,
     #[serde(flatten)]
     pub unrecognized: toml::Table,
 }
@@ -612,6 +668,7 @@ impl Run {
             run_while: first.run_while.or(second.run_while),
             count: first.count.or(second.count),
             parallel: first.parallel.or(second.parallel),
+            share: first.share.or(second.share),
             unrecognized: toml::Table::new(),
         })
     }
@@ -681,7 +738,7 @@ impl Merge for GraphQlPause {
         let Some(second) = second else {
             return Some(first);
         };
-        Some(GraphQlPause {
+        Some(Self {
             unrecognized: toml::Table::new(),
         })
     }
@@ -770,7 +827,7 @@ impl Merge for HttpPause {
             return Some(first);
         };
 
-        Some(HttpPause {
+        Some(Self {
             open: PausePoints::merge(first.open, second.open),
             request_headers: PausePoints::merge(first.request_headers, second.request_headers),
             request_body: PausePoints::merge(first.request_body, second.request_body),
@@ -844,7 +901,7 @@ impl Merge for Http1Pause {
             return Some(first);
         };
 
-        Some(Http1Pause {
+        Some(Self {
             open: PausePoints::merge(first.open, second.open),
             request_headers: PausePoints::merge(first.request_headers, second.request_headers),
             request_body: PausePoints::merge(first.request_body, second.request_body),
@@ -877,8 +934,12 @@ impl Http1Pause {
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Http2 {
-    #[serde(flatten)]
+    pub content_length: Option<Value>,
+    pub trailers: Option<Table>,
+    #[serde(flatten, default)]
     pub common: Http,
+    #[serde(default)]
+    pub pause: Option<Http2Pause>,
 }
 
 impl Http2 {
@@ -887,12 +948,147 @@ impl Http2 {
             return self;
         };
         Self {
+            content_length: Value::merge(self.content_length, default.content_length),
+            trailers: Table::merge(self.trailers, default.trailers),
             common: self.common.merge(Some(default.common)),
+            pause: self.pause.or(default.pause),
         }
     }
 
     fn validate(&self) -> crate::Result<()> {
         self.common.validate()?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Http2Pause {
+    pub open: Option<PausePoints>,
+    pub request_headers: Option<PausePoints>,
+    pub request_body: Option<PausePoints>,
+    pub response_headers: Option<PausePoints>,
+    pub response_body: Option<PausePoints>,
+    #[serde(flatten)]
+    pub unrecognized: toml::Table,
+}
+
+impl Merge for Http2Pause {
+    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
+        let Some(first) = first else { return second };
+        let Some(second) = second else {
+            return Some(first);
+        };
+
+        Some(Self {
+            open: PausePoints::merge(first.open, second.open),
+            request_headers: PausePoints::merge(first.request_headers, second.request_headers),
+            request_body: PausePoints::merge(first.request_body, second.request_body),
+            response_headers: PausePoints::merge(first.response_headers, second.response_headers),
+            response_body: PausePoints::merge(first.response_body, second.response_body),
+            unrecognized: toml::Table::new(),
+        })
+    }
+}
+
+impl Http2Pause {
+    fn validate(&self) -> crate::Result<()> {
+        if let Some(open) = &self.open {
+            open.validate()?;
+        }
+        if !self.unrecognized.is_empty() {
+            return Err(crate::Error(format!(
+                "unrecognized field{} {}",
+                if self.unrecognized.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                self.unrecognized.keys().join(", "),
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct Http2Frames {
+    pub host: Option<Value>,
+    pub port: Option<Value>,
+    #[serde(default)]
+    pub pause: Option<Http2FramesPause>,
+    #[serde(flatten)]
+    pub unrecognized: toml::Table,
+}
+
+impl Http2Frames {
+    fn merge(self, default: Option<Self>) -> Self {
+        let Some(default) = default else {
+            return self;
+        };
+        Self {
+            host: Value::merge(self.host, default.host),
+            port: Value::merge(self.port, default.port),
+            pause: Http2FramesPause::merge(self.pause, default.pause),
+            unrecognized: toml::Table::new(),
+        }
+    }
+
+    fn validate(&self) -> crate::Result<()> {
+        if let Some(p) = &self.pause {
+            p.validate()?;
+        }
+        if !self.unrecognized.is_empty() {
+            return Err(crate::Error(format!(
+                "unrecognized field{} {}",
+                if self.unrecognized.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                self.unrecognized.keys().join(", "),
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Http2FramesPause {
+    pub handshake: Option<PausePoints>,
+    #[serde(flatten)]
+    pub unrecognized: toml::Table,
+}
+
+impl Merge for Http2FramesPause {
+    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
+        let Some(first) = first else { return second };
+        let Some(second) = second else {
+            return Some(first);
+        };
+
+        Some(Self {
+            handshake: PausePoints::merge(first.handshake, second.handshake),
+            unrecognized: toml::Table::new(),
+        })
+    }
+}
+
+impl Http2FramesPause {
+    fn validate(&self) -> crate::Result<()> {
+        if let Some(handshake) = &self.handshake {
+            handshake.validate()?;
+        }
+        if !self.unrecognized.is_empty() {
+            return Err(crate::Error(format!(
+                "unrecognized field{} {}",
+                if self.unrecognized.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                self.unrecognized.keys().join(", "),
+            )));
+        }
         Ok(())
     }
 }
@@ -923,6 +1119,7 @@ impl Http3 {
 pub struct Tls {
     pub host: Option<Value>,
     pub port: Option<Value>,
+    pub alpn: Option<ValueOrArray<Value>>,
     pub body: Option<Value>,
     pub version: Option<Value>,
     #[serde(default)]
@@ -939,6 +1136,7 @@ impl Tls {
         Self {
             host: Value::merge(self.host, default.host),
             port: Value::merge(self.port, default.port),
+            alpn: ValueOrArray::merge(self.alpn, default.alpn),
             body: Value::merge(self.body, default.body),
             version: Value::merge(self.version, default.version),
             pause: TlsPause::merge(self.pause, default.pause),
@@ -981,7 +1179,7 @@ impl Merge for TlsPause {
             return Some(first);
         };
 
-        Some(TlsPause {
+        Some(Self {
             handshake: PausePoints::merge(first.handshake, second.handshake),
             send_body: PausePoints::merge(first.send_body, second.send_body),
             receive_body: PausePoints::merge(first.receive_body, second.receive_body),
@@ -1067,7 +1265,7 @@ impl Merge for TcpPause {
             return Some(first);
         };
 
-        Some(TcpPause {
+        Some(Self {
             handshake: PausePoints::merge(first.handshake, second.handshake),
             send_body: PausePoints::merge(first.send_body, second.send_body),
             receive_body: PausePoints::merge(first.receive_body, second.receive_body),
@@ -1153,7 +1351,7 @@ impl Merge for QuicPause {
             return Some(first);
         };
 
-        Some(QuicPause {
+        Some(Self {
             handshake: PausePoints::merge(first.handshake, second.handshake),
             unrecognized: toml::Table::new(),
         })
@@ -1238,7 +1436,7 @@ impl Merge for UdpPause {
             return Some(first);
         };
 
-        Some(UdpPause {
+        Some(Self {
             send_body: PausePoints::merge(first.send_body, second.send_body),
             receive_body: PausePoints::merge(first.receive_body, second.receive_body),
             unrecognized: toml::Table::new(),
@@ -1342,7 +1540,7 @@ impl Merge for PauseValue {
             return Some(first);
         };
 
-        Some(PauseValue {
+        Some(Self {
             duration: Value::merge(first.duration, second.duration),
             offset_bytes: Value::merge(first.offset_bytes, second.offset_bytes),
             join: first.join.or(second.join),
@@ -1439,7 +1637,7 @@ impl Default for Value {
     }
 }
 
-impl Value {
+impl Merge for Value {
     /// Merge values, with taking presenence over second. For primitive types and arrays, the
     /// earliest non-empty value is used. For expressions, the earlier specified data is used for
     /// each field, except unset which indicates no more merging should be done.
@@ -1489,7 +1687,9 @@ impl Value {
             (Some(x), _) => Some(x),
         }
     }
+}
 
+impl Value {
     fn merge_vars(
         first: Option<IndexMap<String, String>>,
         second: Option<IndexMap<String, String>>,

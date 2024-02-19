@@ -28,37 +28,38 @@ selector = ["graphql", "graphqlh1c", "graphqlh1", "graphqlh2", "graphqlh2c", "gr
     headers.Content-Type = "application/json"
 
 [[courier.defaults]]
-selector = ["h1c"]
+selector = ["h1c", "graphqlh1c"]
     [courier.defaults.tcp]
     host.cel = "current.h1c.plan.url.parse_url().host"
     port.cel = "current.h1c.plan.url.parse_url().port_or_default"
 
 [[courier.defaults]]
-selector = ["h1"]
+selector = ["h1", "graphqlh1"]
     [courier.defaults.tls]
-    host.cel = "current.h1.plan.url.parse_url().host"
-    port.cel = "current.h1.plan.url.parse_url().port_or_default"
-    [courier.defaults.tcp]
     host.cel = "current.h1.plan.url.parse_url().host"
     port.cel = "current.h1.plan.url.parse_url().port_or_default"
 
 [[courier.defaults]]
-selector = ["h2c"]
-    [courier.defaults.tcp]
+selector = ["h2c", "graphqlh2c"]
+    [courier.defaults.http2frames]
     host.cel = "current.h2c.plan.url.parse_url().host"
     port.cel = "current.h2c.plan.url.parse_url().port_or_default"
-
-[[courier.defaults]]
-selector = ["h2"]
-    [courier.defaults.tls]
-    host.cel = "current.h2.plan.url.parse_url().host"
-    port.cel = "current.h2.plan.url.parse_url().port_or_default"
     [courier.defaults.tcp]
-    host.cel = "current.h2.plan.url.parse_url().host"
-    port.cel = "current.h2.plan.url.parse_url().port_or_default"
+    host.cel = "current.http2frames.plan.host"
+    port.cel = "current.http2frames.plan.port"
 
 [[courier.defaults]]
-selector = ["tls"]
+selector = ["h2", "graphqlh2"]
+    [courier.defaults.http2frames]
+    host.cel = "current.h2.plan.url.parse_url().host"
+    port.cel = "current.h2.plan.url.parse_url().port_or_default"
+    [courier.defaults.tls]
+    host.cel = "current.http2frames.plan.host"
+    port.cel = "current.http2frames.plan.port"
+    alpn = "h2"
+
+[[courier.defaults]]
+selector = ["tls", "h1", "h2", "graphqlh1", "graphqlh2"]
     [courier.defaults.tcp]
     host.cel = "current.tls.plan.host"
     port.cel = "current.tls.plan.port"

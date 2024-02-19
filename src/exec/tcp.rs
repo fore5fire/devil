@@ -13,7 +13,7 @@ use crate::{
     WithPlannedCapacity,
 };
 
-use super::pause::{PauseSpec, PauseStream};
+use super::pause::{self, PauseSpec, PauseStream};
 use super::tee::Tee;
 use super::Context;
 
@@ -26,6 +26,7 @@ pub(super) struct TcpRunner {
     last_read: Option<Instant>,
     first_write: Option<Instant>,
     last_write: Option<Instant>,
+    size_hint: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -70,18 +71,25 @@ impl TcpRunner {
             first_write: None,
             last_read: None,
             last_write: None,
+            size_hint: None,
         }
     }
 
-    pub async fn start(
-        &mut self,
-        size_hint: Option<usize>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn size_hint(&mut self, hint: Option<usize>) -> Option<usize> {
+        self.size_hint = hint;
+        None
+    }
+
+    pub fn executor_size_hint(&self) -> Option<usize> {
+        Some(self.out.plan.body.len())
+    }
+
+    pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let state = std::mem::replace(&mut self.state, State::Invalid);
         let State::Pending { addr, pause } = state else {
-            return Err(Box::new(Error(
-                "attempt to start TcpRunner from unexpected state".to_owned(),
-            )));
+            return Err(Box::new(Error(format!(
+                "attempt to start TcpRunner from unexpected state: {state:?}",
+            ))));
         };
         let start = Instant::now();
         self.out
@@ -138,7 +146,7 @@ impl TcpRunner {
         }
         self.state = State::Open {
             start,
-            stream: PauseStream::new(
+            stream: pause::new_stream(
                 self.ctx.clone(),
                 BufWriter::new(Tee::new(stream)),
                 // TODO: implement read size hints.
@@ -146,7 +154,7 @@ impl TcpRunner {
                     group_offset: 0,
                     plan: pause.receive_body.start,
                 }],
-                if let Some(size) = size_hint {
+                if let Some(size) = self.size_hint {
                     vec![
                         PauseSpec {
                             group_offset: 0,
@@ -169,20 +177,12 @@ impl TcpRunner {
                     }]
                 },
             ),
-            size_hint,
+            size_hint: self.size_hint,
         };
         Ok(())
     }
-}
 
-impl TcpRunner {
     pub async fn execute(&mut self) {
-        if let Err(e) = self.start(Some(self.out.plan.body.len())).await {
-            self.out.errors.push(TcpError {
-                kind: "tcp_start".to_owned(),
-                message: e.to_string(),
-            })
-        }
         let body = std::mem::take(&mut self.out.plan.body);
         if let Err(e) = self.write_all(&body).await {
             self.out.errors.push(TcpError {
@@ -227,7 +227,7 @@ impl TcpRunner {
         let end_time = Instant::now();
 
         // TODO: how to sort out which pause outputs came from first or last?
-        let (stream, send_pause, receive_pause) = stream.finish();
+        let (stream, send_pause, receive_pause) = stream.finish_stream();
         let stream = stream.into_inner();
         let (_, writes, reads) = stream.into_parts();
 
