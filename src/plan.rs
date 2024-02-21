@@ -216,8 +216,9 @@ impl Evaluate<crate::PauseValueOutput> for PauseValue {
 pub struct HttpRequest {
     pub url: PlanValue<Url>,
     pub method: Option<PlanValue<Vec<u8>>>,
-    pub body: Option<PlanValue<Vec<u8>>>,
     pub headers: PlanValueTable<Vec<u8>, Error, Vec<u8>, Error>,
+    pub add_content_length: PlanValue<AddContentLength>,
+    pub body: Option<PlanValue<Vec<u8>>>,
     pub pause: HttpPause,
 }
 
@@ -229,12 +230,16 @@ impl TryFrom<bindings::Http> for HttpRequest {
                 .url
                 .map(PlanValue::<Url>::try_from)
                 .ok_or_else(|| Error("http.url is required".to_owned()))??,
-            body: binding
-                .body
-                .map(PlanValue::<Vec<u8>>::try_from)
-                .transpose()?,
             method: binding
                 .method
+                .map(PlanValue::<Vec<u8>>::try_from)
+                .transpose()?,
+            add_content_length: binding
+                .add_content_length
+                .map(PlanValue::<AddContentLength>::try_from)
+                .ok_or_else(|| Error("http.add_content_length is required".to_owned()))??,
+            body: binding
+                .body
                 .map(PlanValue::<Vec<u8>>::try_from)
                 .transpose()?,
             headers: PlanValueTable::try_from(binding.headers.unwrap_or_default())?,
@@ -257,6 +262,7 @@ impl Evaluate<crate::HttpPlanOutput> for HttpRequest {
                 .as_ref()
                 .map(|body| body.evaluate(state))
                 .transpose()?,
+            add_content_length: self.add_content_length.evaluate(state)?,
             headers: self.headers.evaluate(state)?,
             body: self
                 .body
@@ -336,8 +342,9 @@ pub struct Http1Request {
     pub url: PlanValue<Url>,
     pub method: Option<PlanValue<Vec<u8>>>,
     pub version_string: Option<PlanValue<Vec<u8>>>,
-    pub body: Option<PlanValue<Vec<u8>>>,
+    pub add_content_length: PlanValue<AddContentLength>,
     pub headers: PlanValueTable<Vec<u8>, Error, Vec<u8>, Error>,
+    pub body: Option<PlanValue<Vec<u8>>>,
 
     pub pause: Http1Pause,
 }
@@ -361,6 +368,7 @@ impl Evaluate<crate::Http1PlanOutput> for Http1Request {
                 .as_ref()
                 .map(|v| v.evaluate(state))
                 .transpose()?,
+            add_content_length: self.add_content_length.evaluate(state)?,
             headers: self.headers.evaluate(state)?,
             body: self
                 .body
@@ -382,22 +390,26 @@ impl TryFrom<bindings::Http1> for Http1Request {
                 .url
                 .map(PlanValue::<Url>::try_from)
                 .ok_or_else(|| Error("http1.url is required".to_owned()))??,
+            version_string: binding
+                .version_string
+                .map(PlanValue::<Vec<u8>>::try_from)
+                .transpose()?,
             method: binding
                 .common
                 .method
                 .map(PlanValue::<Vec<u8>>::try_from)
                 .transpose()?,
-            version_string: binding
+            add_content_length: binding
                 .common
-                .version_string
-                .map(PlanValue::<Vec<u8>>::try_from)
-                .transpose()?,
+                .add_content_length
+                .map(PlanValue::<AddContentLength>::try_from)
+                .ok_or_else(|| Error("http.add_content_length is required".to_owned()))??,
+            headers: PlanValueTable::try_from(binding.common.headers.unwrap_or_default())?,
             body: binding
                 .common
                 .body
                 .map(PlanValue::<Vec<u8>>::try_from)
                 .transpose()?,
-            headers: PlanValueTable::try_from(binding.common.headers.unwrap_or_default())?,
             pause: binding.pause.unwrap_or_default().try_into()?,
         })
     }
@@ -469,9 +481,9 @@ impl Evaluate<Http1PauseOutput> for Http1Pause {
 pub struct Http2Request {
     pub url: PlanValue<Url>,
     pub method: Option<PlanValue<Vec<u8>>>,
-    pub content_length: Option<PlanValue<u64>>,
-    pub body: Option<PlanValue<Vec<u8>>>,
+    pub add_content_length: PlanValue<AddContentLength>,
     pub headers: PlanValueTable<Vec<u8>, Error, Vec<u8>, Error>,
+    pub body: Option<PlanValue<Vec<u8>>>,
     pub trailers: PlanValueTable<Vec<u8>, Error, Vec<u8>, Error>,
 
     pub pause: Http2Pause,
@@ -491,11 +503,7 @@ impl Evaluate<crate::Http2PlanOutput> for Http2Request {
                 .as_ref()
                 .map(|body| body.evaluate(state))
                 .transpose()?,
-            content_length: self
-                .content_length
-                .as_ref()
-                .map(|body| body.evaluate(state))
-                .transpose()?,
+            add_content_length: self.add_content_length.evaluate(state)?,
             headers: self.headers.evaluate(state)?,
             trailers: self.trailers.evaluate(state)?,
             body: self
@@ -517,7 +525,7 @@ impl TryFrom<bindings::Http2> for Http2Request {
                 .common
                 .url
                 .map(PlanValue::<Url>::try_from)
-                .ok_or_else(|| Error("http1.url is required".to_owned()))??,
+                .ok_or_else(|| Error("http2.url is required".to_owned()))??,
             method: binding
                 .common
                 .method
@@ -528,10 +536,11 @@ impl TryFrom<bindings::Http2> for Http2Request {
                 .body
                 .map(PlanValue::<Vec<u8>>::try_from)
                 .transpose()?,
-            content_length: binding
-                .content_length
-                .map(PlanValue::<u64>::try_from)
-                .transpose()?,
+            add_content_length: binding
+                .common
+                .add_content_length
+                .map(PlanValue::<AddContentLength>::try_from)
+                .ok_or_else(|| Error("http2.add_content_length is required".to_owned()))??,
             headers: PlanValueTable::try_from(binding.common.headers.unwrap_or_default())?,
             trailers: PlanValueTable::try_from(binding.trailers.unwrap_or_default())?,
             pause: binding.pause.unwrap_or_default().try_into()?,
@@ -1568,6 +1577,50 @@ impl TryFrom<PlanData> for Parallelism {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AddContentLength {
+    Never,
+    Auto,
+    Force,
+}
+
+impl FromStr for AddContentLength {
+    type Err = Error;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s {
+            "never" => Ok(Self::Never),
+            "auto" => Ok(Self::Auto),
+            "force" => Ok(Self::Force),
+            val => Err(Error(format!(
+                "unrecognized add_content_length string {val}"
+            ))),
+        }
+    }
+}
+
+impl ToString for AddContentLength {
+    fn to_string(&self) -> String {
+        match self {
+            Self::Never => "never",
+            Self::Auto => "auto",
+            Self::Force => "force",
+        }
+        .to_owned()
+    }
+}
+
+impl TryFrom<PlanData> for AddContentLength {
+    type Error = Error;
+    fn try_from(value: PlanData) -> std::result::Result<Self, Self::Error> {
+        match value.0 {
+            cel_interpreter::Value::String(s) => s.parse(),
+            val => Err(Error(format!(
+                "unsupported value {val:?} for field add_content_length"
+            ))),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Run {
     pub run_if: PlanValue<bool>,
@@ -2196,15 +2249,24 @@ impl TryFrom<bindings::Value> for PlanValue<Parallelism> {
                     ))
                 })?,
             ))),
-            bindings::Value::LiteralInt(i) => Ok(Self::Literal(Parallelism::Parallel(
-                i.try_into().map_err(|_| {
-                    Error(format!(
-                        "parallelism value {i} must fit in platform word size"
-                    ))
-                })?,
-            ))),
             val => Err(Error(format!(
                 "invalid value {val:?} for field run.parallel"
+            ))),
+        }
+    }
+}
+
+impl TryFrom<bindings::Value> for PlanValue<AddContentLength> {
+    type Error = Error;
+    fn try_from(binding: bindings::Value) -> Result<Self> {
+        match binding {
+            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
+                cel,
+                vars: vars.unwrap_or_default().into_iter().collect(),
+            }),
+            bindings::Value::LiteralString(x) => Ok(Self::Literal(x.parse()?)),
+            val => Err(Error(format!(
+                "invalid value {val:?} for field add_content_length"
             ))),
         }
     }

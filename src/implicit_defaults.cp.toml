@@ -6,26 +6,34 @@ selector = ["graphql", "graphqlh1c", "graphqlh1", "graphqlh2", "graphqlh2c", "gr
     url.cel = "current.graphql.plan.url"
     method = "POST"
     headers.Content-Type = "application/json"
+    headers.Host.cel = "current.graphql.plan.url.parse_url().host"
     [courier.defaults.h1c]
     url.cel = "current.graphql.plan.url"
     method = "POST"
     headers.Content-Type = "application/json"
+    headers.Host.cel = "current.graphql.plan.url.parse_url().host"
     [courier.defaults.h1]
     url.cel = "current.graphql.plan.url"
     method = "POST"
     headers.Content-Type = "application/json"
+    headers.Host.cel = "current.graphql.plan.url.parse_url().host"
     [courier.defaults.h2c]
     url.cel = "current.graphql.plan.url"
     method = "POST"
     headers.Content-Type = "application/json"
+    headers.Host.cel = "current.graphql.plan.url.parse_url().host"
     [courier.defaults.h2]
     url.cel = "current.graphql.plan.url"
     method = "POST"
     headers.Content-Type = "application/json"
+    headers.Host.cel = "current.graphql.plan.url.parse_url().host"
     [courier.defaults.h3]
     url.cel = "current.graphql.plan.url"
     method = "POST"
+    body.cel = "current.graphql.plan.body.to_json()"
     headers.Content-Type = "application/json"
+    headers.Content-Length.cel = "current.graphql.plan.body.to_json().len()"
+    headers.Host.cel = "current.graphql.plan.url.parse_url().host"
 
 [[courier.defaults]]
 selector = ["h1c", "graphqlh1c"]
@@ -72,9 +80,14 @@ selector = ["dtls"]
 
 [[courier.defaults]]
     http.method = "GET"
+    http.add_content_length = "auto"
     h1c.method = "GET"
+    h1c.add_content_length = "auto"
     h1c.version_string = "HTTP/1.1"
     h1.method = "GET"
+    h1.add_content_length = "auto"
     h1.version_string = "HTTP/1.1"
     h2c.method = "GET"
+    h2c.add_content_length = "auto"
     h2.method = "GET"
+    h2.add_content_length = "auto"

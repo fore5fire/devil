@@ -10,7 +10,7 @@ use bytes::Bytes;
 use chrono::Duration;
 use futures::FutureExt;
 use h2::{client::SendRequest, Reason, RecvStream, SendStream};
-use http::{response::Parts, HeaderName, Request, Uri};
+use http::{response::Parts, HeaderMap, HeaderName, HeaderValue, Request, Uri};
 use nom::AsBytes;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -18,7 +18,10 @@ use tokio::{
     task::JoinHandle,
 };
 
-use crate::{Http2Error, Http2Output, Http2PauseOutput, Http2PlanOutput, Http2RequestOutput};
+use crate::{
+    AddContentLength, Http2Error, Http2Output, Http2PauseOutput, Http2PlanOutput,
+    Http2RequestOutput,
+};
 
 use super::{
     http2frames::Http2FramesRunner,
@@ -45,12 +48,16 @@ pub struct Http2Runner {
     trailer_receive_end: Option<Instant>,
     size_hint: Option<usize>,
     close_reason: Option<h2::Reason>,
-    trailers: Option<http::HeaderMap>,
+    send_headers: http::HeaderMap,
+    receive_trailers: Option<http::HeaderMap>,
 }
 
 #[derive(Debug)]
 enum WriteState {
     Pending {
+        request_out: Http2RequestOutput,
+    },
+    Ready {
         request: http::Request<()>,
         request_out: Http2RequestOutput,
     },
@@ -84,11 +91,9 @@ impl Http2Runner {
         Ok(Self {
             ctx,
             write_state: WriteState::Pending {
-                request: Self::build_request(&plan).map_err(|e| crate::Error(e.to_string()))?,
                 request_out: Http2RequestOutput {
                     url: plan.url.clone(),
                     method: plan.method.clone(),
-                    content_length: plan.content_length.clone(),
                     headers: plan.headers.clone(),
                     body: plan.body.clone(),
                     duration: chrono::Duration::zero(),
@@ -119,7 +124,8 @@ impl Http2Runner {
             trailer_receive_end: None,
             size_hint: None,
             close_reason: None,
-            trailers: None,
+            receive_trailers: None,
+            send_headers: HeaderMap::new(),
         })
     }
 
@@ -142,6 +148,38 @@ impl Http2Runner {
 
     pub fn size_hint(&mut self, hint: Option<usize>) -> Option<usize> {
         self.size_hint = hint;
+        // Add a Content-Length header if the size_hint has a value and either:
+        //   automatic_content_length is auto (the default) and
+        //   we don't have a content length header specified,
+        // or
+        //   automatic_content_length is force
+        if let Some(size_hint) = hint {
+            if self.out.plan.add_content_length == AddContentLength::Force
+                || self.out.plan.add_content_length == AddContentLength::Auto
+                    && self
+                        .send_headers
+                        .iter()
+                        .find(|(k, _)| k.as_str().eq_ignore_ascii_case("content-length"))
+                        .is_none()
+            {
+                self.send_headers.append(
+                    HeaderName::from_static("content-length"),
+                    HeaderValue::from_str(&size_hint.to_string())
+                        .expect("u64::to_string should always produce a valid header value"),
+                );
+            }
+        }
+
+        let WriteState::Pending { request_out } =
+            mem::replace(&mut self.write_state, WriteState::Invalid)
+        else {
+            panic!("invalid write_state for size_hint {:?}", self.write_state)
+        };
+        self.write_state = WriteState::Ready {
+            request: Self::build_request(&self.out.plan).expect("build h2 request: {e}"),
+            request_out,
+        };
+
         None
     }
 
@@ -164,7 +202,7 @@ impl Http2Runner {
         transport: SendRequest<Bytes>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let state = mem::replace(&mut self.write_state, WriteState::Invalid);
-        let WriteState::Pending {
+        let WriteState::Ready {
             request,
             mut request_out,
         } = state
@@ -312,7 +350,7 @@ impl Http2Runner {
         });
 
         match read_trailers {
-            Ok(trailers) => self.trailers = trailers,
+            Ok(trailers) => self.receive_trailers = trailers,
             Err(e) => self.set_error("read trailers", e),
         }
 
@@ -360,7 +398,7 @@ impl Http2Runner {
                     .collect(),
             ),
             body: resp_body,
-            trailers: mem::take(&mut self.trailers).map(|trailers| {
+            trailers: mem::take(&mut self.receive_trailers).map(|trailers| {
                 trailers
                     .into_iter()
                     .map(|(k, v)| {
@@ -407,8 +445,10 @@ impl Http2Runner {
                 }
             }
             WriteState::Completed { stream } => WriteState::Completed { stream },
-            WriteState::Pending { .. } => WriteState::Completed { stream: None },
-            write_state => panic!("invalid http2 write state for {:?}", write_state),
+            WriteState::Pending { .. } | WriteState::Ready { .. } => {
+                WriteState::Completed { stream: None }
+            }
+            write_state => panic!("invalid http2 write state for completion {:?}", write_state),
         }
     }
 

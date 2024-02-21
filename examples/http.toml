@@ -1,89 +1,89 @@
 courier.version = 0
 
 # Simple HTTPS GET
-#[https_get.http]
-#url = "https://example.com/"
-#
-## Simple HTTP GET
-#[http_get.http]
-#url = "http://example.com/test"
-#
-## HTTPS GET with headers
-#[get_with_headers.http]
-#url = "https://example.com/test"
-#[get_with_headers.http.headers]
-#Content-Type = "application/json"
-#X-Custom-Header = "foo"
-#X-Repeated-Header = ["foo", "bar"]
-## Don't include default Host header
-#Host = { unset = true }
-#
-## HTTPS GET with array format for non-adjacent repeated headers
-#[ordered_headers.http]
-#url = "https://example.com/test"
-#[[ordered_headers.http.headers]]
-#key =   "Content-Type"
-#value = "application/json"
-#[[ordered_headers.http.headers]]
-#key =   "X-Repeated-Header"
-#value = "foo"
-#[[ordered_headers.http.headers]]
-#key =   "X-Custom-Header" 
-#value = "foo"
-#[[ordered_headers.http.headers]]
-#key =   "X-Repeated-Header"
-#value = "bar"
-## Don't include default Host header
-#[[ordered_headers.http.headers]]
-#key =   "Host"
-#value = { unset = true }
-#
-## HTTPS POST
-#[simple_post.http]
-#url = "https://example.com/test"
-#method = "POST"
-#body = 'sample body'
-#
-## HTTP POST with multiline literal body
-#[multiline_literal.http]
-#url = "http://example.com/test"
-#method = "POST"
-#body = '''
-#Line 1
-#Line 2
-#Line 3'''
-#
-## HTTP POST with multiline literal body
-#[multiline_formatted.http]
-#url = "http://example.com/test"
-#method = "POST"
-#body = """
-#Line\t1\r
-#Line\t2\r
-#Line\t3"""
-#
-## HTTP POST with formatted body
-#[singleline_formatted.http]
-#url = "http://example.com/test"
-#method = "POST" 
-#body = "\tAB\u0043\r\n"
-#
-## HTTP request non-standard options
-#[non-standard.http]
-#url = "http://example.com/test"
-#method = "invalid-method"
-#headers."IllegalHeaderName\u0000" = "foo"
-##headers."" = "empty name"
-#headers.Content-Length = "1"
-#body = "A body longer than 1 \r\n\r\n"
-#
-## Force HTTP/1
-#[http1_example.h1]
-#url = "https://example.com/test"
-#
-## Force HTTP/1 without TLS
-#[h1c_example.h1c]
-#url = "http://example.com/test"
+[https_get.http]
+url = "https://example.com/"
+
+# Simple HTTP GET
+[http_get.http]
+url = "http://example.com/test"
+
+# HTTPS GET with headers
+[get_with_headers.http]
+url = "https://example.com/test"
+[get_with_headers.http.headers]
+Content-Type = "application/json"
+X-Custom-Header = "foo"
+X-Repeated-Header = ["foo", "bar"]
+# Don't include default Host header
+Host = { unset = true }
+
+# HTTPS GET with array format for non-adjacent repeated headers
+[ordered_headers.http]
+url = "https://example.com/test"
+[[ordered_headers.http.headers]]
+key =   "Content-Type"
+value = "application/json"
+[[ordered_headers.http.headers]]
+key =   "X-Repeated-Header"
+value = "foo"
+[[ordered_headers.http.headers]]
+key =   "X-Custom-Header" 
+value = "foo"
+[[ordered_headers.http.headers]]
+key =   "X-Repeated-Header"
+value = "bar"
+# Don't include default Host header
+[[ordered_headers.http.headers]]
+key =   "Host"
+value = { unset = true }
+
+# HTTPS POST
+[simple_post.http]
+url = "https://example.com/test"
+method = "POST"
+body = 'sample body'
+
+# HTTP POST with multiline literal body
+[multiline_literal.http]
+url = "http://example.com/test"
+method = "POST"
+body = '''
+Line 1
+Line 2
+Line 3'''
+
+# HTTP POST with multiline literal body
+[multiline_formatted.http]
+url = "http://example.com/test"
+method = "POST"
+body = """
+Line\t1\r
+Line\t2\r
+Line\t3"""
+
+# HTTP POST with formatted body
+[singleline_formatted.http]
+url = "http://example.com/test"
+method = "POST" 
+body = "\tAB\u0043\r\n"
+
+# HTTP request non-standard options
+[non-standard.http]
+url = "http://example.com/test"
+method = "invalid-method"
+headers."IllegalHeaderName\u0000" = "foo"
+#headers."" = "empty name"
+headers.Content-Length = "1"
+body = "A body longer than 1 \r\n\r\n"
+
+# Force HTTP/1
+[http1_example.h1]
+url = "https://example.com/test"
+
+# Force HTTP/1 without TLS
+[h1c_example.h1c]
+url = "http://example.com/test"
 
 # Force HTTP/2
 [http2_example.h2]

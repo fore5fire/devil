@@ -87,7 +87,7 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                 }
             }
             Protocol::TLS => {
-                if let Some(tls) = &proto.tcp {
+                if let Some(tls) = &proto.tls {
                     if let Some(req) = &tls.request {
                         println!(
                             "> {}",
