@@ -95,10 +95,10 @@ where
     inner: T,
     ctx: Arc<super::Context>,
 
-    read_bytes: i64,
-    read_pending: Option<(Pause, usize)>,
-    read_plans: VecDeque<AbsolutePlan>,
-    read_out: Vec<Vec<PauseValueOutput>>,
+    bytes_read: i64,
+    pending: Option<(Pause, usize)>,
+    plans: VecDeque<AbsolutePlan>,
+    out: Vec<Vec<PauseValueOutput>>,
 }
 
 impl<T> PauseReader<T>
@@ -113,10 +113,10 @@ where
         let mut result = Self {
             inner,
             ctx,
-            read_bytes: 0,
-            read_pending: None,
-            read_plans: VecDeque::new(),
-            read_out: Vec::new(),
+            bytes_read: 0,
+            pending: None,
+            plans: VecDeque::new(),
+            out: Vec::new(),
         };
         result.add_reads(read_plans);
         result
@@ -125,14 +125,14 @@ where
     pub(crate) fn add_reads(&mut self, read_plans: impl IntoIterator<Item = PauseSpec>) {
         let read_plans = read_plans.into_iter();
         if let Some(s) = read_plans.size_hint().1 {
-            self.read_out.reserve(s);
+            self.out.reserve(s);
         }
-        self.read_plans.extend(
+        self.plans.extend(
             read_plans
                 .map(|spec| {
-                    let output_index = self.read_out.len();
-                    self.read_out.push(Vec::with_capacity(spec.plan.len()));
-                    let current_offset = spec.group_offset + self.read_bytes;
+                    let output_index = self.out.len();
+                    self.out.push(Vec::with_capacity(spec.plan.len()));
+                    let current_offset = spec.group_offset + self.bytes_read;
                     spec.plan.into_iter().map(move |p| AbsolutePlan {
                         absolute_offset: current_offset + p.offset_bytes,
                         plan: p,
@@ -149,7 +149,7 @@ where
     }
 
     pub fn finish(self) -> (T, Vec<Vec<PauseValueOutput>>) {
-        (self.inner, self.read_out)
+        (self.inner, self.out)
     }
 }
 
@@ -164,24 +164,23 @@ where
     ) -> std::task::Poll<std::io::Result<()>> {
         // Look for required or running pauses before reading any more bytes.
         loop {
-            if self.read_pending.is_none() {
-                if let Some(plan) = self.read_plans.front() {
-                    if plan.absolute_offset == self.read_bytes {
-                        self.read_pending =
-                            Some((Pause::new(&self.ctx, &plan.plan), plan.output_index));
-                        self.read_plans.pop_front();
+            if self.pending.is_none() {
+                if let Some(plan) = self.plans.front() {
+                    if plan.absolute_offset == self.bytes_read {
+                        self.pending = Some((Pause::new(&self.ctx, &plan.plan), plan.output_index));
+                        self.plans.pop_front();
                     }
                 }
             }
 
             // Execute any pending pauses.
-            let Some(mut pause) = std::mem::take(&mut self.read_pending) else {
+            let Some(mut pause) = std::mem::take(&mut self.pending) else {
                 break;
             };
             match pause.0.poll_unpin(cx) {
-                Poll::Ready(actual) => self.read_out[pause.1].push(actual?),
+                Poll::Ready(actual) => self.out[pause.1].push(actual?),
                 Poll::Pending => {
-                    self.read_pending = Some(pause);
+                    self.pending = Some(pause);
                     return Poll::Pending;
                 }
             }
@@ -189,9 +188,9 @@ where
 
         // Don't read more bytes than we need to get to the next pause.
         let read_len = self
-            .read_plans
+            .plans
             .front()
-            .map(|p| p.absolute_offset - self.read_bytes)
+            .map(|p| p.absolute_offset - self.bytes_read)
             .map(usize::try_from)
             .transpose()
             .expect("bytes to read should fit in a usize")
@@ -212,7 +211,7 @@ where
         buf.advance(bytes_read);
 
         // Record the newly read bytes.
-        self.read_bytes += i64::try_from(bytes_read).expect("too many bytes written");
+        self.bytes_read += i64::try_from(bytes_read).expect("too many bytes read");
 
         Poll::Ready(result)
     }
@@ -251,10 +250,10 @@ pub struct PauseWriter<T: AsyncWrite> {
     inner: T,
     ctx: Arc<super::Context>,
 
-    write_bytes: i64,
-    write_pending: Option<(Pause, usize)>,
-    write_plans: VecDeque<AbsolutePlan>,
-    write_out: Vec<Vec<PauseValueOutput>>,
+    bytes_written: i64,
+    pending: Option<(Pause, usize)>,
+    plans: VecDeque<AbsolutePlan>,
+    out: Vec<Vec<PauseValueOutput>>,
 }
 
 impl<T: AsyncWrite + std::fmt::Debug> PauseWriter<T> {
@@ -266,10 +265,10 @@ impl<T: AsyncWrite + std::fmt::Debug> PauseWriter<T> {
         let mut result = Self {
             inner,
             ctx,
-            write_bytes: 0,
-            write_pending: None,
-            write_plans: VecDeque::new(),
-            write_out: Vec::new(),
+            bytes_written: 0,
+            pending: None,
+            plans: VecDeque::new(),
+            out: Vec::new(),
         };
         result.add_writes(write_plans);
         result
@@ -278,14 +277,14 @@ impl<T: AsyncWrite + std::fmt::Debug> PauseWriter<T> {
     pub fn add_writes(&mut self, write_plans: impl IntoIterator<Item = PauseSpec>) {
         let write_plans = write_plans.into_iter();
         if let Some(s) = write_plans.size_hint().1 {
-            self.write_out.reserve(s);
+            self.out.reserve(s);
         }
-        self.write_plans.extend(
+        self.plans.extend(
             write_plans
                 .map(|spec| {
-                    let output_index = self.write_out.len();
-                    self.write_out.push(Vec::with_capacity(spec.plan.len()));
-                    let current_offset = spec.group_offset + self.write_bytes;
+                    let output_index = self.out.len();
+                    self.out.push(Vec::with_capacity(spec.plan.len()));
+                    let current_offset = spec.group_offset + self.bytes_written;
                     spec.plan.into_iter().map(move |p| AbsolutePlan {
                         absolute_offset: current_offset + p.offset_bytes,
                         plan: p,
@@ -302,7 +301,7 @@ impl<T: AsyncWrite + std::fmt::Debug> PauseWriter<T> {
     }
 
     pub fn finish(self) -> (T, Vec<Vec<PauseValueOutput>>) {
-        (self.inner, self.write_out)
+        (self.inner, self.out)
     }
 }
 
@@ -317,32 +316,31 @@ where
     ) -> std::task::Poll<Result<usize, std::io::Error>> {
         // Look for required or running pauses before writing any more bytes.
         loop {
-            if self.write_pending.is_none() {
-                if let Some(plan) = self.write_plans.front() {
-                    if plan.absolute_offset == self.write_bytes {
-                        self.write_pending =
-                            Some((Pause::new(&self.ctx, &plan.plan), plan.output_index));
-                        self.write_plans.pop_front();
+            if self.pending.is_none() {
+                if let Some(plan) = self.plans.front() {
+                    if plan.absolute_offset == self.bytes_written {
+                        self.pending = Some((Pause::new(&self.ctx, &plan.plan), plan.output_index));
+                        self.plans.pop_front();
                     }
                 }
             }
 
             // Always flush before pausing.
-            if self.write_pending.is_some() {
+            if self.pending.is_some() {
                 if let Err(e) = ready!(self.as_mut().poll_flush(cx)) {
                     return Poll::Ready(Err(e));
                 };
             }
 
             // Execute any pending pauses.
-            let Some(mut pause) = std::mem::take(&mut self.write_pending) else {
+            let Some(mut pause) = std::mem::take(&mut self.pending) else {
                 break;
             };
 
             match pause.0.poll_unpin(cx) {
-                Poll::Ready(actual) => self.write_out[pause.1].push(actual?),
+                Poll::Ready(actual) => self.out[pause.1].push(actual?),
                 Poll::Pending => {
-                    self.write_pending = Some(pause);
+                    self.pending = Some(pause);
                     return Poll::Pending;
                 }
             }
@@ -350,9 +348,9 @@ where
 
         // Don't write more bytes than we need to get to the next pause.
         let write_len = self
-            .write_plans
+            .plans
             .front()
-            .map(|p| p.absolute_offset - self.write_bytes)
+            .map(|p| p.absolute_offset - self.bytes_written)
             .map(usize::try_from)
             .transpose()
             .expect("bytes to write should fit in a usize")
@@ -364,7 +362,7 @@ where
 
         if let Ok(bytes_written) = result {
             // Record the newly read bytes.
-            self.write_bytes += i64::try_from(bytes_written).expect("too many bytes written");
+            self.bytes_written += i64::try_from(bytes_written).expect("too many bytes written");
         };
 
         return Poll::Ready(result);
@@ -381,8 +379,7 @@ where
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
-        let poll = Pin::new(&mut self.inner).poll_shutdown(cx);
-        poll
+        Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }
 

@@ -1,3 +1,4 @@
+use std::mem;
 use std::pin::pin;
 use std::sync::Arc;
 use std::task::Poll;
@@ -15,6 +16,7 @@ use super::pause::PauseSpec;
 use super::pause::PauseStream;
 use super::runner::Runner;
 use super::Context;
+use crate::AddContentLength;
 use crate::Http1Error;
 use crate::Http1PlanOutput;
 use crate::Http1RequestOutput;
@@ -36,11 +38,13 @@ pub(super) struct Http1Runner {
     req_body_buf: Vec<u8>,
     resp_body_buf: Vec<u8>,
     size_hint: Option<usize>,
+    send_headers: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
 #[derive(Debug)]
 enum State {
-    Pending { ctx: Arc<Context>, header: BytesMut },
+    Pending { ctx: Arc<Context> },
+    Ready { ctx: Arc<Context>, header: BytesMut },
     StartFailed { transport: Runner },
     SendingHeader { transport: PauseStream<Runner> },
     SendingBody { transport: PauseStream<Runner> },
@@ -188,10 +192,8 @@ impl AsyncWrite for Http1Runner {
 impl Http1Runner {
     pub(super) fn new(ctx: Arc<Context>, plan: Http1PlanOutput) -> Self {
         Self {
-            state: State::Pending {
-                ctx,
-                header: Self::compute_header(&plan),
-            },
+            state: State::Pending { ctx },
+            send_headers: plan.headers.clone(),
             out: Http1Output {
                 request: None,
                 response: None,
@@ -215,7 +217,7 @@ impl Http1Runner {
     }
 
     #[inline]
-    fn compute_header(plan: &Http1PlanOutput) -> BytesMut {
+    fn compute_header(plan: &Http1PlanOutput, headers: &[(Vec<u8>, Vec<u8>)]) -> BytesMut {
         // Build a buffer with the header contents to avoid the overhead of separate writes.
         // TODO: We may actually want to split packets based on info at the HTTP layer, that logic
         // will go here once I figure out the right configuration to express it.
@@ -227,8 +229,7 @@ impl Http1Runner {
                 + 1
                 + plan.version_string.as_ref().map(Vec::len).unwrap_or(0)
                 + 2
-                + plan
-                    .headers
+                + headers
                     .iter()
                     .fold(0, |sum, (k, v)| sum + k.len() + 2 + v.len() + 2)
                 + 2
@@ -248,7 +249,7 @@ impl Http1Runner {
             buf.put_slice(p);
         }
         buf.put(b"\r\n".as_slice());
-        for (k, v) in &plan.headers {
+        for (k, v) in headers {
             buf.put_slice(k.as_slice());
             buf.put_slice(b": ");
             buf.put_slice(v.as_slice());
@@ -336,14 +337,13 @@ impl Http1Runner {
                     time_to_first_byte: self
                         .first_read
                         .map(|first_read| {
-                            first_read
-                                - self.resp_start_time.expect(
-                                    "response start time should be set before header is processed",
-                                )
+                            self.resp_start_time
+                                .map(|start| first_read - start)
+                                .unwrap_or_default()
                         })
                         .map(Duration::from_std)
                         .transpose()
-                        .unwrap(),
+                        .expect("durations should fit in std"),
                 });
                 match result {
                     httparse::Status::Partial => Poll::Pending,
@@ -368,12 +368,40 @@ impl Http1Runner {
     }
 
     pub fn size_hint(&mut self, size_hint: Option<usize>) -> Option<usize> {
-        let State::Pending { header, .. } = &self.state else {
+        let State::Pending { ctx } = mem::replace(&mut self.state, State::Invalid) else {
             panic!("invalid state {:?}", self.state);
         };
 
         self.size_hint = size_hint;
-        size_hint.map(|hint| header.len() + hint)
+
+        // Add a Content-Length header if the size_hint has a value and either:
+        //   automatic_content_length is auto (the default),
+        //   we don't have a content length header specified,
+        //   and TODO: we aren't using chunked transport encoding
+        // or
+        //   automatic_content_length is force
+        if let Some(size_hint) = size_hint {
+            if self.out.plan.add_content_length == AddContentLength::Force
+                || self.out.plan.add_content_length == AddContentLength::Auto
+                    && self
+                        .send_headers
+                        .iter()
+                        .find(|(k, _)| k.eq_ignore_ascii_case(b"content-length"))
+                        .is_none()
+            //&& self.out.plan.chunked_transfer_encoding != ChunkedTransferEncoding::Force
+            {
+                self.send_headers.push((
+                    b"Content-Length".to_vec(),
+                    size_hint.to_string().into_bytes(),
+                ))
+            }
+        }
+
+        let header = Self::compute_header(&self.out.plan, &self.send_headers);
+        let header_len = header.len();
+        self.state = State::Ready { ctx, header };
+
+        size_hint.map(|hint| header_len + hint)
     }
 
     pub async fn start(
@@ -381,7 +409,7 @@ impl Http1Runner {
         transport: Runner,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let state = std::mem::replace(&mut self.state, State::Invalid);
-        let State::Pending { mut header, ctx } = state else {
+        let State::Ready { mut header, ctx } = state else {
             return Err(Box::new(Error(
                 "attempt to start Http1Runner from invalid state".to_owned(),
             )));
@@ -446,7 +474,7 @@ impl Http1Runner {
 
         self.out.request = Some(Http1RequestOutput {
             url: self.out.plan.url.clone(),
-            headers: self.out.plan.headers.clone(),
+            headers: self.send_headers.clone(),
             method: self.out.plan.method.clone(),
             version_string: self.out.plan.version_string.clone(),
             body: Vec::new(),
@@ -518,7 +546,7 @@ impl Http1Runner {
                 };
                 return;
             }
-            State::Pending { .. } => {
+            State::Pending { .. } | State::Ready { .. } => {
                 self.state = State::Complete { transport: None };
                 return;
             }
@@ -563,15 +591,18 @@ impl Http1Runner {
         if let Some(resp) = &mut self.out.response {
             resp.body = Some(self.resp_body_buf.to_vec());
             resp.duration = Duration::from_std(
-                end_time
-                    - self
-                        .resp_start_time
-                        .expect("response start time should be recorded when response is set"),
+                self.resp_start_time
+                    .map(|start| end_time - start)
+                    .unwrap_or_default(),
             )
             .unwrap();
             resp.header_duration = self
                 .resp_header_end_time
-                .map(|end| end - self.resp_start_time.expect("response start time should be set if the response header has been received"))
+                .map(|end| {
+                    self.resp_start_time
+                        .map(|start| end - start)
+                        .unwrap_or_default()
+                })
                 .map(Duration::from_std)
                 .transpose()
                 .unwrap();

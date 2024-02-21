@@ -126,6 +126,7 @@ impl HttpRunner {
                     url: plan.url,
                     method: plan.method,
                     version_string: Some("HTTP/1.1".into()),
+                    add_content_length: plan.add_content_length,
                     headers: plan.headers,
                     body: plan.body,
                     pause: crate::Http1PauseOutput {
@@ -192,6 +193,7 @@ impl HttpRunner {
                         plan: HttpPlanOutput {
                             url: out.plan.url,
                             method: out.plan.method,
+                            add_content_length: out.plan.add_content_length,
                             headers: out.plan.headers,
                             body: out.plan.body,
                             pause: HttpPauseOutput {

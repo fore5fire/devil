@@ -405,7 +405,7 @@ impl Step {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(untagged, deny_unknown_fields)]
 pub enum StepProtocols {
     GraphQl {
         graphql: GraphQl,
@@ -764,10 +764,10 @@ impl GraphQlPause {
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Http {
     pub url: Option<Value>,
-    pub body: Option<Value>,
     pub method: Option<Value>,
-    pub version_string: Option<Value>,
     pub headers: Option<Table>,
+    pub add_content_length: Option<Value>,
+    pub body: Option<Value>,
     #[serde(default)]
     pub pause: Option<HttpPause>,
     #[serde(flatten)]
@@ -781,9 +781,9 @@ impl Http {
         };
         Self {
             url: Value::merge(self.url, second.url),
-            version_string: Value::merge(self.version_string, second.version_string),
-            headers: Table::merge(self.headers, second.headers),
             method: Value::merge(self.method, second.method),
+            headers: Table::merge(self.headers, second.headers),
+            add_content_length: Value::merge(self.add_content_length, second.add_content_length),
             body: Value::merge(self.body, second.body),
             pause: HttpPause::merge(self.pause, second.pause),
             unrecognized: toml::Table::new(),
@@ -857,6 +857,7 @@ impl HttpPause {
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Http1 {
+    pub version_string: Option<Value>,
     #[serde(flatten, default)]
     pub common: Http,
     #[serde(default)]
@@ -869,6 +870,7 @@ impl Http1 {
             return self;
         };
         Self {
+            version_string: Value::merge(self.version_string, default.version_string),
             common: self.common.merge(Some(default.common)),
             pause: Http1Pause::merge(self.pause, default.pause),
         }
@@ -934,7 +936,6 @@ impl Http1Pause {
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Http2 {
-    pub content_length: Option<Value>,
     pub trailers: Option<Table>,
     #[serde(flatten, default)]
     pub common: Http,
@@ -948,7 +949,6 @@ impl Http2 {
             return self;
         };
         Self {
-            content_length: Value::merge(self.content_length, default.content_length),
             trailers: Table::merge(self.trailers, default.trailers),
             common: self.common.merge(Some(default.common)),
             pause: self.pause.or(default.pause),

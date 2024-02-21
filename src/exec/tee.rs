@@ -1,5 +1,5 @@
-use std::pin::Pin;
-use std::{fmt::Debug, ops::DerefMut};
+use std::fmt::Debug;
+use std::pin::{pin, Pin};
 
 use tokio::io::{self, AsyncRead, AsyncWrite};
 
@@ -40,7 +40,7 @@ impl<T: Stream> AsyncRead for Tee<T> {
         buf: &mut io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         let old_len = buf.filled().len();
-        let poll = Pin::new(&mut self.deref_mut().inner).poll_read(cx, buf);
+        let poll = pin!(&mut self.inner).poll_read(cx, buf);
         self.reads.extend_from_slice(&buf.filled()[old_len..]);
         poll
     }
@@ -52,9 +52,9 @@ impl<T: Stream> AsyncWrite for Tee<T> {
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<Result<usize, std::io::Error>> {
-        let poll = Pin::new(&mut self.deref_mut().inner).poll_write(cx, buf);
+        let poll = pin!(&mut self.inner).poll_write(cx, buf);
         if poll.is_ready() {
-            self.get_mut().writes.extend_from_slice(&buf);
+            self.writes.extend_from_slice(&buf);
         }
         poll
     }
@@ -62,12 +62,12 @@ impl<T: Stream> AsyncWrite for Tee<T> {
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
-        Pin::new(&mut self.deref_mut().inner).poll_flush(cx)
+        pin!(&mut self.inner).poll_flush(cx)
     }
     fn poll_shutdown(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
-        Pin::new(&mut self.deref_mut().inner).poll_shutdown(cx)
+        pin!(&mut self.inner).poll_shutdown(cx)
     }
 }

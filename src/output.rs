@@ -9,7 +9,7 @@ use chrono::Duration;
 use indexmap::IndexMap;
 use url::Url;
 
-use crate::{Parallelism, ProtocolField, TlsVersion};
+use crate::{AddContentLength, Parallelism, ProtocolField, TlsVersion};
 
 pub trait State<'a, O: Into<&'a str>, I: IntoIterator<Item = O>> {
     fn get(&self, name: &'a str) -> Option<&IndexMap<crate::IterableKey, StepOutput>>;
@@ -194,6 +194,7 @@ impl From<HttpOutput> for Value {
 pub struct HttpPlanOutput {
     pub url: Url,
     pub method: Option<Vec<u8>>,
+    pub add_content_length: AddContentLength,
     pub headers: Vec<(Vec<u8>, Vec<u8>)>,
     pub body: Vec<u8>,
     pub pause: HttpPauseOutput,
@@ -375,6 +376,7 @@ pub struct Http1PlanOutput {
     pub url: Url,
     pub method: Option<Vec<u8>>,
     pub version_string: Option<Vec<u8>>,
+    pub add_content_length: AddContentLength,
     pub headers: Vec<(Vec<u8>, Vec<u8>)>,
     pub body: Vec<u8>,
     pub pause: Http1PauseOutput,
@@ -387,6 +389,10 @@ impl From<Http1PlanOutput> for Value {
                 ("url".into(), value.url.to_string().into()),
                 ("method".into(), value.method.into()),
                 ("version_string".into(), value.version_string.into()),
+                (
+                    "add_content_length".into(),
+                    value.add_content_length.to_string().into(),
+                ),
                 (
                     "headers".into(),
                     Value::List(Arc::new(
@@ -569,7 +575,7 @@ impl From<Http2Output> for Value {
 pub struct Http2PlanOutput {
     pub url: Url,
     pub method: Option<Vec<u8>>,
-    pub content_length: Option<u64>,
+    pub add_content_length: AddContentLength,
     pub headers: Vec<(Vec<u8>, Vec<u8>)>,
     pub trailers: Vec<(Vec<u8>, Vec<u8>)>,
     pub body: Vec<u8>,
@@ -634,7 +640,6 @@ impl WithPlannedCapacity for Http2PauseOutput {
 pub struct Http2RequestOutput {
     pub url: Url,
     pub method: Option<Vec<u8>>,
-    pub content_length: Option<u64>,
     pub headers: Vec<(Vec<u8>, Vec<u8>)>,
     pub body: Vec<u8>,
     pub duration: Duration,
