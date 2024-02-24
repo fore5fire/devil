@@ -196,7 +196,7 @@ dependencies = [
 [[package]]
 name = "cel-interpreter"
 version = "0.6.0"
-source = "git+https://github.com/fore5fire/cel-rust.git#a6f184f6782ca43f96e50fe52f1e24427f285971"
+source = "git+https://github.com/fore5fire/cel-rust.git#db510f86c6c630195dee70e80fb7d2df702e3c78"
 dependencies = [
  "cel-parser",
  "chrono",
@@ -209,7 +209,7 @@ dependencies = [
 [[package]]
 name = "cel-parser"
 version = "0.6.0"
-source = "git+https://github.com/fore5fire/cel-rust.git#a6f184f6782ca43f96e50fe52f1e24427f285971"
+source = "git+https://github.com/fore5fire/cel-rust.git#db510f86c6c630195dee70e80fb7d2df702e3c78"
 dependencies = [
  "lalrpop",
  "lalrpop-util",

@@ -69,13 +69,11 @@ impl AsyncRead for Http1Runner {
 
         match state {
             State::ReceivingHeader { mut transport } => {
-                let poll = self.poll_header(cx, buf, &mut transport);
-                if poll.is_ready() {
-                    // Record the response start time.
-                    if self.resp_start_time.is_none() {
-                        self.resp_start_time = Some(Instant::now());
-                    }
+                // Record the time we start listening for a response.
+                if self.resp_start_time.is_none() {
+                    self.resp_start_time = Some(Instant::now());
                 }
+                let poll = self.poll_header(cx, buf, &mut transport);
                 self.state = match &poll {
                     Poll::Ready(Ok(())) => {
                         // Schedule planned pauses for the response body.
@@ -146,7 +144,9 @@ impl AsyncWrite for Http1Runner {
                     if self.req_body_start_time.is_none() {
                         self.req_body_start_time = Some(Instant::now());
                     }
-                    self.get_mut().req_body_buf.extend_from_slice(&buf);
+                    if let Poll::Ready(Ok(len)) = &poll {
+                        self.get_mut().req_body_buf.extend_from_slice(&buf[0..*len]);
+                    }
                 }
                 poll
             }
@@ -272,6 +272,10 @@ impl Http1Runner {
         loop {
             let mut header_buf = ReadBuf::new(header_vec.as_mut());
             let poll = pin!(&mut *transport).poll_read(cx, &mut header_buf);
+            // Record when we first get any response data.
+            if poll.is_ready() && self.first_read.is_none() {
+                self.first_read = Some(Instant::now());
+            }
             self.resp_header_buf.put_slice(header_buf.filled());
             match poll {
                 Poll::Pending => return Poll::Pending,
@@ -287,9 +291,6 @@ impl Http1Runner {
                 }
             }
             // Data was read - try to process it.
-            if self.first_read.is_none() {
-                self.first_read = Some(Instant::now());
-            }
             match self.receive_header() {
                 // Not enough data, let's read some more.
                 Poll::Pending => {}
