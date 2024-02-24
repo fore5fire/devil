@@ -20,7 +20,7 @@ query = '''{
         }
     }
 }'''
-[get.http]
+[get.h1c]
 method = "GET"
 
 #[query_string.graphql]
