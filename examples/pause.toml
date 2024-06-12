@@ -1,4 +1,4 @@
-courier.version = 0
+devil.version = 0
 
 #[http_pause.http]
 #url = "https://example.com/"
@@ -72,5 +72,5 @@ join = "a"
 # join = ["a"]
 [parallel_join.run]
 parallel = true
-count = 1
+count = 5
 
