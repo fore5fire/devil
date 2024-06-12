@@ -1,33 +1,33 @@
-courier.version = 0
+devil.version = 0
 
-[[courier.defaults]]
+[[devil.defaults]]
 selector = ["graphql", "graphqlh1c", "graphqlh1", "graphqlh2", "graphqlh2c", "graphqlh3"]
-    [courier.defaults.http]
+    [devil.defaults.http]
     url.cel = "current.graphql.plan.url"
     method = "POST"
     headers.Content-Type = "application/json"
     headers.Host.cel = "current.graphql.plan.url.parse_url().host"
-    [courier.defaults.h1c]
+    [devil.defaults.h1c]
     url.cel = "current.graphql.plan.url"
     method = "POST"
     headers.Content-Type = "application/json"
     headers.Host.cel = "current.graphql.plan.url.parse_url().host"
-    [courier.defaults.h1]
+    [devil.defaults.h1]
     url.cel = "current.graphql.plan.url"
     method = "POST"
     headers.Content-Type = "application/json"
     headers.Host.cel = "current.graphql.plan.url.parse_url().host"
-    [courier.defaults.h2c]
+    [devil.defaults.h2c]
     url.cel = "current.graphql.plan.url"
     method = "POST"
     headers.Content-Type = "application/json"
     headers.Host.cel = "current.graphql.plan.url.parse_url().host"
-    [courier.defaults.h2]
+    [devil.defaults.h2]
     url.cel = "current.graphql.plan.url"
     method = "POST"
     headers.Content-Type = "application/json"
     headers.Host.cel = "current.graphql.plan.url.parse_url().host"
-    [courier.defaults.h3]
+    [devil.defaults.h3]
     url.cel = "current.graphql.plan.url"
     method = "POST"
     body.cel = "current.graphql.plan.body.to_json()"
@@ -35,50 +35,50 @@ selector = ["graphql", "graphqlh1c", "graphqlh1", "graphqlh2", "graphqlh2c", "gr
     headers.Content-Length.cel = "current.graphql.plan.body.to_json().len()"
     headers.Host.cel = "current.graphql.plan.url.parse_url().host"
 
-[[courier.defaults]]
+[[devil.defaults]]
 selector = ["h1c", "graphqlh1c"]
-    [courier.defaults.tcp]
+    [devil.defaults.tcp]
     host.cel = "current.h1c.plan.url.parse_url().host"
     port.cel = "current.h1c.plan.url.parse_url().port_or_default"
 
-[[courier.defaults]]
+[[devil.defaults]]
 selector = ["h1", "graphqlh1"]
-    [courier.defaults.tls]
+    [devil.defaults.tls]
     host.cel = "current.h1.plan.url.parse_url().host"
     port.cel = "current.h1.plan.url.parse_url().port_or_default"
 
-[[courier.defaults]]
+[[devil.defaults]]
 selector = ["h2c", "graphqlh2c"]
-    [courier.defaults.http2frames]
+    [devil.defaults.http2frames]
     host.cel = "current.h2c.plan.url.parse_url().host"
     port.cel = "current.h2c.plan.url.parse_url().port_or_default"
-    [courier.defaults.tcp]
+    [devil.defaults.tcp]
     host.cel = "current.http2frames.plan.host"
     port.cel = "current.http2frames.plan.port"
 
-[[courier.defaults]]
+[[devil.defaults]]
 selector = ["h2", "graphqlh2"]
-    [courier.defaults.http2frames]
+    [devil.defaults.http2frames]
     host.cel = "current.h2.plan.url.parse_url().host"
     port.cel = "current.h2.plan.url.parse_url().port_or_default"
-    [courier.defaults.tls]
+    [devil.defaults.tls]
     host.cel = "current.http2frames.plan.host"
     port.cel = "current.http2frames.plan.port"
     alpn = "h2"
 
-[[courier.defaults]]
+[[devil.defaults]]
 selector = ["tls", "h1", "h2", "graphqlh1", "graphqlh2"]
-    [courier.defaults.tcp]
+    [devil.defaults.tcp]
     host.cel = "current.tls.plan.host"
     port.cel = "current.tls.plan.port"
 
-[[courier.defaults]]
+[[devil.defaults]]
 selector = ["dtls"]
-    [courier.defaults.udp]
+    [devil.defaults.udp]
     host.cel = "current.dtls.plan.host"
     port.cel = "current.dtls.plan.port"
 
-[[courier.defaults]]
+[[devil.defaults]]
     http.method = "GET"
     http.add_content_length = "auto"
     h1c.method = "GET"
@@ -91,3 +91,6 @@ selector = ["dtls"]
     h2c.add_content_length = "auto"
     h2.method = "GET"
     h2.add_content_length = "auto"
+    tcp_segments.remote_host.cel = "current.tcp.plan.host"
+    tcp_segments.remote_port.cel = "current.tcp.plan.port"
+

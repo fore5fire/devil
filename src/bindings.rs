@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use indexmap::IndexMap;
 use itertools::{Either, Itertools};
 use serde::{Deserialize, Serialize};
@@ -8,7 +10,7 @@ pub trait Merge: std::fmt::Debug + Clone + Serialize + Deserialize<'static> {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Plan {
-    pub courier: Settings,
+    pub devil: Settings,
     #[serde(flatten)]
     pub steps: IndexMap<String, Step>,
 }
@@ -21,7 +23,7 @@ impl Plan {
     }
 
     fn validate(&mut self) -> crate::Result<()> {
-        self.courier.validate()?;
+        self.devil.validate()?;
         for (name, step) in &mut self.steps {
             step.validate()
                 .map_err(|e| crate::Error(format!("validate step {}: {}", name, e)))?;
@@ -45,7 +47,7 @@ impl Settings {
     fn validate(&self) -> crate::Result<()> {
         if !self.unrecognized.is_empty() {
             return Err(crate::Error(format!(
-                "unrecognized field courier.{} {}",
+                "unrecognized field devil.{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
                 } else {
@@ -67,10 +69,11 @@ pub struct Defaults {
     pub h1: Option<Http1>,
     pub h2c: Option<Http2>,
     pub h2: Option<Http2>,
-    pub http2frames: Option<Http2Frames>,
+    pub http2_frames: Option<Http2Frames>,
     pub h3: Option<Http3>,
     pub tls: Option<Tls>,
     pub tcp: Option<Tcp>,
+    pub tcp_segments: Option<TcpSegments>,
     pub quic: Option<Quic>,
     pub dtls: Option<Tls>,
     pub udp: Option<Udp>,
@@ -117,6 +120,8 @@ pub enum ProtocolKind {
     Tls,
     #[serde(rename = "tcp")]
     Tcp,
+    #[serde(rename = "tcp_segments")]
+    TcpSegments,
     #[serde(rename = "dtls")]
     Dtls,
     #[serde(rename = "quic")]
@@ -180,16 +185,25 @@ impl Step {
                     x.validate()?;
                 };
             }
-            StepProtocols::GraphQlH1c { graphql, h1c, tcp } => {
+            StepProtocols::GraphQlH1c {
+                graphql,
+                h1c,
+                tcp,
+                tcp_segments,
+            } => {
                 self.unrecognized.remove("graphql");
                 self.unrecognized.remove("h1c");
                 self.unrecognized.remove("tls");
                 self.unrecognized.remove("tcp");
+                self.unrecognized.remove("tcp_segments");
                 graphql.validate()?;
                 if let Some(x) = &h1c {
                     x.validate()?;
                 };
                 if let Some(x) = &tcp {
+                    x.validate()?;
+                };
+                if let Some(x) = &tcp_segments {
                     x.validate()?;
                 };
             }
@@ -198,11 +212,13 @@ impl Step {
                 h1,
                 tls,
                 tcp,
+                tcp_segments,
             } => {
                 self.unrecognized.remove("graphql");
                 self.unrecognized.remove("h1");
                 self.unrecognized.remove("tls");
                 self.unrecognized.remove("tcp");
+                self.unrecognized.remove("tcp_segments");
                 graphql.validate()?;
                 if let Some(x) = &h1 {
                     x.validate()?;
@@ -213,52 +229,65 @@ impl Step {
                 if let Some(x) = &tcp {
                     x.validate()?;
                 };
+                if let Some(x) = &tcp_segments {
+                    x.validate()?;
+                };
             }
             StepProtocols::GraphQlH2c {
                 graphql,
                 h2c,
-                http2frames,
+                http2_frames,
                 tcp,
+                tcp_segments,
             } => {
                 self.unrecognized.remove("graphql");
                 self.unrecognized.remove("h2c");
-                self.unrecognized.remove("http2frames");
+                self.unrecognized.remove("http2_frames");
                 self.unrecognized.remove("tls");
                 self.unrecognized.remove("tcp");
+                self.unrecognized.remove("tcp_segments");
                 graphql.validate()?;
                 if let Some(x) = &h2c {
                     x.validate()?;
                 };
-                if let Some(x) = &http2frames {
+                if let Some(x) = &http2_frames {
                     x.validate()?;
                 };
                 if let Some(x) = &tcp {
+                    x.validate()?;
+                };
+                if let Some(x) = &tcp_segments {
                     x.validate()?;
                 };
             }
             StepProtocols::GraphQlH2 {
                 graphql,
                 h2,
-                http2frames,
+                http2_frames,
                 tls,
                 tcp,
+                tcp_segments,
             } => {
                 self.unrecognized.remove("graphql");
                 self.unrecognized.remove("h2");
-                self.unrecognized.remove("http2frames");
+                self.unrecognized.remove("http2_frames");
                 self.unrecognized.remove("tls");
                 self.unrecognized.remove("tcp");
+                self.unrecognized.remove("tcp_segments");
                 graphql.validate()?;
                 if let Some(x) = &h2 {
                     x.validate()?;
                 };
-                if let Some(x) = &http2frames {
+                if let Some(x) = &http2_frames {
                     x.validate()?;
                 };
                 if let Some(x) = &tls {
                     x.validate()?;
                 };
                 if let Some(x) = &tcp {
+                    x.validate()?;
+                };
+                if let Some(x) = &tcp_segments {
                     x.validate()?;
                 };
             }
@@ -287,18 +316,32 @@ impl Step {
                 self.unrecognized.remove("http");
                 http.validate()?;
             }
-            StepProtocols::H1c { h1c, tcp } => {
+            StepProtocols::H1c {
+                h1c,
+                tcp,
+                tcp_segments,
+            } => {
                 self.unrecognized.remove("h1c");
                 self.unrecognized.remove("tcp");
+                self.unrecognized.remove("tcp_segments");
                 h1c.validate()?;
                 if let Some(x) = &tcp {
                     x.validate()?;
                 };
+                if let Some(x) = &tcp_segments {
+                    x.validate()?;
+                };
             }
-            StepProtocols::H1 { h1, tls, tcp } => {
+            StepProtocols::H1 {
+                h1,
+                tls,
+                tcp,
+                tcp_segments,
+            } => {
                 self.unrecognized.remove("h1");
                 self.unrecognized.remove("tls");
                 self.unrecognized.remove("tcp");
+                self.unrecognized.remove("tcp_segments");
                 h1.validate()?;
                 if let Some(x) = &tls {
                     x.validate()?;
@@ -306,41 +349,54 @@ impl Step {
                 if let Some(x) = &tcp {
                     x.validate()?;
                 };
+                if let Some(x) = &tcp_segments {
+                    x.validate()?;
+                };
             }
             StepProtocols::H2c {
                 h2c,
-                http2frames,
+                http2_frames,
                 tcp,
+                tcp_segments,
             } => {
                 self.unrecognized.remove("h2c");
-                self.unrecognized.remove("http2frames");
+                self.unrecognized.remove("http2_frames");
                 self.unrecognized.remove("tcp");
+                self.unrecognized.remove("tcp_segments");
                 h2c.validate()?;
-                if let Some(x) = &http2frames {
+                if let Some(x) = &http2_frames {
                     x.validate()?;
                 };
                 if let Some(x) = &tcp {
                     x.validate()?;
                 };
+                if let Some(x) = &tcp_segments {
+                    x.validate()?;
+                };
             }
             StepProtocols::H2 {
                 h2,
-                http2frames,
+                http2_frames,
                 tls,
                 tcp,
+                tcp_segments,
             } => {
                 self.unrecognized.remove("h2");
-                self.unrecognized.remove("http2frames");
+                self.unrecognized.remove("http2_frames");
                 self.unrecognized.remove("tls");
                 self.unrecognized.remove("tcp");
+                self.unrecognized.remove("tcp_segments");
                 h2.validate()?;
-                if let Some(x) = &http2frames {
+                if let Some(x) = &http2_frames {
                     x.validate()?;
                 };
                 if let Some(x) = &tls {
                     x.validate()?;
                 };
                 if let Some(x) = &tcp {
+                    x.validate()?;
+                };
+                if let Some(x) = &tcp_segments {
                     x.validate()?;
                 };
             }
@@ -356,11 +412,19 @@ impl Step {
                     x.validate()?;
                 };
             }
-            StepProtocols::Tls { tls, tcp } => {
+            StepProtocols::Tls {
+                tls,
+                tcp,
+                tcp_segments,
+            } => {
                 self.unrecognized.remove("tls");
                 self.unrecognized.remove("tcp");
+                self.unrecognized.remove("tcp_segments");
                 tls.validate()?;
                 if let Some(x) = &tcp {
+                    x.validate()?;
+                };
+                if let Some(x) = &tcp_segments {
                     x.validate()?;
                 };
             }
@@ -372,9 +436,17 @@ impl Step {
                     x.validate()?;
                 };
             }
-            StepProtocols::Tcp { tcp } => {
+            StepProtocols::Tcp { tcp, tcp_segments } => {
                 self.unrecognized.remove("tcp");
+                self.unrecognized.remove("tcp_segments");
                 tcp.validate()?;
+                if let Some(x) = &tcp_segments {
+                    x.validate()?;
+                };
+            }
+            StepProtocols::TcpSegments { tcp_segments } => {
+                self.unrecognized.remove("tcp_segments");
+                tcp_segments.validate()?;
             }
             StepProtocols::Quic { quic, udp } => {
                 self.unrecognized.remove("quic");
@@ -416,6 +488,7 @@ pub enum StepProtocols {
         graphql: GraphQl,
         h1c: Option<Http1>,
         tcp: Option<Tcp>,
+        tcp_segments: Option<TcpSegments>,
     },
     // If only graphql and tls are specified we assume GraphQLH1.
     GraphQlH1 {
@@ -423,19 +496,22 @@ pub enum StepProtocols {
         h1: Option<Http1>,
         tls: Option<Tls>,
         tcp: Option<Tcp>,
+        tcp_segments: Option<TcpSegments>,
     },
     GraphQlH2c {
         graphql: GraphQl,
         h2c: Option<Http2>,
-        http2frames: Option<Http2Frames>,
+        http2_frames: Option<Http2Frames>,
         tcp: Option<Tcp>,
+        tcp_segments: Option<TcpSegments>,
     },
     GraphQlH2 {
         graphql: GraphQl,
         h2: Option<Http2>,
-        http2frames: Option<Http2Frames>,
+        http2_frames: Option<Http2Frames>,
         tls: Option<Tls>,
         tcp: Option<Tcp>,
+        tcp_segments: Option<TcpSegments>,
     },
     GraphQlH3 {
         graphql: GraphQl,
@@ -449,22 +525,26 @@ pub enum StepProtocols {
     H1c {
         h1c: Http1,
         tcp: Option<Tcp>,
+        tcp_segments: Option<TcpSegments>,
     },
     H1 {
         h1: Http1,
         tls: Option<Tls>,
         tcp: Option<Tcp>,
+        tcp_segments: Option<TcpSegments>,
     },
     H2c {
         h2c: Http2,
-        http2frames: Option<Http2Frames>,
+        http2_frames: Option<Http2Frames>,
         tcp: Option<Tcp>,
+        tcp_segments: Option<TcpSegments>,
     },
     H2 {
         h2: Http2,
-        http2frames: Option<Http2Frames>,
+        http2_frames: Option<Http2Frames>,
         tls: Option<Tls>,
         tcp: Option<Tcp>,
+        tcp_segments: Option<TcpSegments>,
     },
     H3 {
         h3: Http3,
@@ -474,6 +554,7 @@ pub enum StepProtocols {
     Tls {
         tls: Tls,
         tcp: Option<Tcp>,
+        tcp_segments: Option<TcpSegments>,
     },
     Dtls {
         dtls: Tls,
@@ -481,6 +562,10 @@ pub enum StepProtocols {
     },
     Tcp {
         tcp: Tcp,
+        tcp_segments: Option<TcpSegments>,
+    },
+    TcpSegments {
+        tcp_segments: TcpSegments,
     },
     Quic {
         quic: Quic,
@@ -508,45 +593,57 @@ impl StepProtocols {
                 graphql: GraphQl::merge(graphql, default.graphql),
                 http: Some(http.unwrap_or_default().merge(default.http)),
             },
-            Self::GraphQlH1c { graphql, h1c, tcp } => Self::GraphQlH1c {
+            Self::GraphQlH1c {
+                graphql,
+                h1c,
+                tcp,
+                tcp_segments,
+            } => Self::GraphQlH1c {
                 graphql: graphql.merge(default.graphql),
                 h1c: Some(h1c.unwrap_or_default().merge(default.h1c)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
+                tcp_segments: Some(tcp_segments.unwrap_or_default().merge(default.tcp_segments)),
             },
             Self::GraphQlH1 {
                 graphql,
                 h1,
                 tls,
                 tcp,
+                tcp_segments,
             } => Self::GraphQlH1 {
                 graphql: graphql.merge(default.graphql),
                 h1: Some(h1.unwrap_or_default().merge(default.h1)),
                 tls: Some(tls.unwrap_or_default().merge(default.tls)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
+                tcp_segments: Some(tcp_segments.unwrap_or_default().merge(default.tcp_segments)),
             },
             Self::GraphQlH2c {
                 graphql,
                 h2c,
-                http2frames,
+                http2_frames,
                 tcp,
+                tcp_segments,
             } => Self::GraphQlH2c {
                 graphql: graphql.merge(default.graphql),
                 h2c: Some(h2c.unwrap_or_default().merge(default.h2c)),
-                http2frames: Some(http2frames.unwrap_or_default().merge(default.http2frames)),
+                http2_frames: Some(http2_frames.unwrap_or_default().merge(default.http2_frames)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
+                tcp_segments: Some(tcp_segments.unwrap_or_default().merge(default.tcp_segments)),
             },
             Self::GraphQlH2 {
                 graphql,
                 h2,
-                http2frames,
+                http2_frames,
                 tls,
                 tcp,
+                tcp_segments,
             } => Self::GraphQlH2 {
                 graphql: graphql.merge(default.graphql),
                 h2: Some(h2.unwrap_or_default().merge(default.h2)),
-                http2frames: Some(http2frames.unwrap_or_default().merge(default.http2frames)),
+                http2_frames: Some(http2_frames.unwrap_or_default().merge(default.http2_frames)),
                 tls: Some(tls.unwrap_or_default().merge(default.tls)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
+                tcp_segments: Some(tcp_segments.unwrap_or_default().merge(default.tcp_segments)),
             },
 
             Self::GraphQlH3 {
@@ -563,46 +660,70 @@ impl StepProtocols {
             Self::Http { http } => Self::Http {
                 http: http.merge(default.http),
             },
-            Self::H1c { h1c, tcp } => Self::H1c {
+            Self::H1c {
+                h1c,
+                tcp,
+                tcp_segments,
+            } => Self::H1c {
                 h1c: h1c.merge(default.h1c),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
+                tcp_segments: Some(tcp_segments.unwrap_or_default().merge(default.tcp_segments)),
             },
-            Self::H1 { h1, tls, tcp } => Self::H1 {
+            Self::H1 {
+                h1,
+                tls,
+                tcp,
+                tcp_segments,
+            } => Self::H1 {
                 h1: h1.merge(default.h1),
                 tls: Some(tls.unwrap_or_default().merge(default.tls)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
+                tcp_segments: Some(tcp_segments.unwrap_or_default().merge(default.tcp_segments)),
             },
             Self::H2c {
                 h2c,
-                http2frames,
+                http2_frames,
                 tcp,
+                tcp_segments,
             } => Self::H2c {
                 h2c: h2c.merge(default.h2c),
-                http2frames: Some(http2frames.unwrap_or_default().merge(default.http2frames)),
+                http2_frames: Some(http2_frames.unwrap_or_default().merge(default.http2_frames)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
+                tcp_segments: Some(tcp_segments.unwrap_or_default().merge(default.tcp_segments)),
             },
             Self::H2 {
                 h2,
-                http2frames,
+                http2_frames,
                 tls,
                 tcp,
+                tcp_segments,
             } => Self::H2 {
                 h2: h2.merge(default.h2),
-                http2frames: Some(http2frames.unwrap_or_default().merge(default.http2frames)),
+                http2_frames: Some(http2_frames.unwrap_or_default().merge(default.http2_frames)),
                 tls: Some(tls.unwrap_or_default().merge(default.tls)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
+                tcp_segments: Some(tcp_segments.unwrap_or_default().merge(default.tcp_segments)),
             },
             Self::H3 { h3, quic, udp } => Self::H3 {
                 h3: h3.merge(default.h3),
                 quic: Some(quic.unwrap_or_default().merge(default.quic)),
                 udp: Some(udp.unwrap_or_default().merge(default.udp)),
             },
-            Self::Tls { tls, tcp } => Self::Tls {
+            Self::Tls {
+                tls,
+                tcp,
+                tcp_segments,
+            } => Self::Tls {
                 tls: tls.merge(default.tls),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
+                tcp_segments: Some(tcp_segments.unwrap_or_default().merge(default.tcp_segments)),
             },
-            Self::Tcp { tcp } => Self::Tcp {
+            Self::Tcp { tcp, tcp_segments } => Self::Tcp {
                 tcp: tcp.merge(default.tcp),
+                tcp_segments: Some(tcp_segments.unwrap_or_default().merge(default.tcp_segments)),
+            },
+            Self::TcpSegments { tcp_segments } => Self::TcpSegments {
+                tcp_segments: tcp_segments.merge(default.tcp_segments),
             },
 
             Self::Dtls { dtls, udp } => Self::Dtls {
@@ -633,6 +754,7 @@ impl StepProtocols {
             Self::Tls { .. } => ProtocolKind::Tls,
             Self::Dtls { .. } => ProtocolKind::Dtls,
             Self::Tcp { .. } => ProtocolKind::Tcp,
+            Self::TcpSegments { .. } => ProtocolKind::TcpSegments,
             Self::Quic { .. } => ProtocolKind::Quic,
             Self::Udp { .. } => ProtocolKind::Udp,
         }
@@ -1292,6 +1414,158 @@ impl TcpPause {
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct TcpSegments {
+    pub remote_host: Option<Value>,
+    pub remote_port: Option<Value>,
+    pub local_host: Option<Value>,
+    pub local_port: Option<Value>,
+    pub isn: Option<Value>,
+    pub segments: Option<ValueOrArray<TcpSegment>>,
+    #[serde(default)]
+    pub pause: Option<TcpSegmentsPause>,
+    #[serde(flatten)]
+    pub unrecognized: toml::Table,
+}
+
+impl TcpSegments {
+    fn merge(self, default: Option<Self>) -> Self {
+        let Some(default) = default else {
+            return self;
+        };
+        Self {
+            remote_host: Value::merge(self.remote_host, default.remote_host),
+            remote_port: Value::merge(self.remote_port, default.remote_port),
+            local_host: Value::merge(self.local_host, default.local_host),
+            local_port: Value::merge(self.local_port, default.local_port),
+            isn: Value::merge(self.isn, default.isn),
+            segments: ValueOrArray::merge(self.segments, default.segments),
+            pause: TcpSegmentsPause::merge(self.pause, default.pause),
+            unrecognized: toml::Table::new(),
+        }
+    }
+
+    fn validate(&self) -> crate::Result<()> {
+        for s in self.segments.iter().flatten() {
+            s.validate()?;
+        }
+        if let Some(p) = &self.pause {
+            p.validate()?;
+        }
+        if !self.unrecognized.is_empty() {
+            return Err(crate::Error(format!(
+                "unrecognized field{} {}",
+                if self.unrecognized.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                self.unrecognized.keys().join(", "),
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct TcpSegment {
+    pub source: Option<Value>,
+    pub destination: Option<Value>,
+    pub sequence_number: Option<Value>,
+    pub acknowledgment: Option<Value>,
+    pub data_offset: Option<Value>,
+    pub reserved: Option<Value>,
+    pub flags: Option<Value>,
+    pub window: Option<Value>,
+    pub checksum: Option<Value>,
+    pub urgent_ptr: Option<Value>,
+    pub options: Option<ValueOrArray<Value>>,
+    pub payload: Option<Value>,
+    #[serde(flatten)]
+    pub unrecognized: toml::Table,
+}
+
+impl Merge for TcpSegment {
+    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
+        let Some(first) = first else {
+            return second;
+        };
+        let Some(second) = second else {
+            return Some(first);
+        };
+        Some(Self {
+            source: Value::merge(first.source, second.source),
+            destination: Value::merge(first.destination, second.destination),
+            sequence_number: Value::merge(first.sequence_number, second.sequence_number),
+            acknowledgment: Value::merge(first.acknowledgment, second.acknowledgment),
+            data_offset: Value::merge(first.data_offset, second.data_offset),
+            reserved: Value::merge(first.reserved, second.reserved),
+            flags: Value::merge(first.flags, second.flags),
+            window: Value::merge(first.window, second.window),
+            checksum: Value::merge(first.checksum, second.checksum),
+            urgent_ptr: Value::merge(first.urgent_ptr, second.urgent_ptr),
+            options: ValueOrArray::merge(first.options, second.options),
+            payload: Value::merge(first.payload, second.payload),
+            unrecognized: toml::Table::new(),
+        })
+    }
+}
+
+impl TcpSegment {
+    fn validate(&self) -> crate::Result<()> {
+        if !self.unrecognized.is_empty() {
+            return Err(crate::Error(format!(
+                "unrecognized field{} {}",
+                if self.unrecognized.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                self.unrecognized.keys().join(", "),
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TcpSegmentsPause {
+    pub handshake: Option<PausePoints>,
+    #[serde(flatten)]
+    pub unrecognized: toml::Table,
+}
+
+impl Merge for TcpSegmentsPause {
+    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
+        let Some(first) = first else { return second };
+        let Some(second) = second else {
+            return Some(first);
+        };
+
+        Some(Self {
+            handshake: PausePoints::merge(first.handshake, second.handshake),
+            unrecognized: toml::Table::new(),
+        })
+    }
+}
+
+impl TcpSegmentsPause {
+    fn validate(&self) -> crate::Result<()> {
+        if !self.unrecognized.is_empty() {
+            return Err(crate::Error(format!(
+                "unrecognized field{} {}",
+                if self.unrecognized.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                self.unrecognized.keys().join(", "),
+            )));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Quic {
     pub host: Option<Value>,
     pub port: Option<Value>,
@@ -1486,10 +1760,10 @@ impl PausePoints {
     }
 
     fn validate(&self) -> crate::Result<()> {
-        for pause in self.start.as_ref().map(|x| x.iter()).into_iter().flatten() {
+        for pause in self.start.iter().flatten() {
             pause.validate()?;
         }
-        for pause in self.end.as_ref().map(|x| x.iter()).into_iter().flatten() {
+        for pause in self.end.iter().flatten() {
             pause.validate()?;
         }
         if !self.unrecognized.is_empty() {
@@ -1549,7 +1823,7 @@ impl Merge for PauseValue {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum ValueOrArray<T> {
     Value(T),
@@ -1596,6 +1870,28 @@ impl<T> IntoIterator for ValueOrArray<T> {
     }
 }
 
+impl<'a, T> IntoIterator for &'a ValueOrArray<T> {
+    type Item = &'a T;
+    type IntoIter = Either<std::iter::Once<&'a T>, std::slice::Iter<'a, T>>;
+    fn into_iter(self) -> Self::IntoIter {
+        match self {
+            ValueOrArray::Value(val) => Either::Left(std::iter::once(val)),
+            ValueOrArray::Array(vec) => Either::Right(vec.iter()),
+        }
+    }
+}
+
+impl<'a, T> IntoIterator for &'a mut ValueOrArray<T> {
+    type Item = &'a mut T;
+    type IntoIter = Either<std::iter::Once<&'a mut T>, std::slice::IterMut<'a, T>>;
+    fn into_iter(self) -> Self::IntoIter {
+        match self {
+            ValueOrArray::Value(val) => Either::Left(std::iter::once(val)),
+            ValueOrArray::Array(vec) => Either::Right(vec.iter_mut()),
+        }
+    }
+}
+
 impl<T> ValueOrArray<T> {
     fn iter(&self) -> impl Iterator<Item = &T> {
         match self {
@@ -1607,18 +1903,36 @@ impl<T> ValueOrArray<T> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
-pub enum Value {
-    LiteralString(String),
-    LiteralInt(i64),
-    LiteralFloat(f64),
-    LiteralBool(bool),
-    LiteralDatetime(toml::value::Datetime),
-    LiteralToml {
+pub enum Literal {
+    String(String),
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Datetime(toml::value::Datetime),
+    Toml {
         literal: toml::Value,
     },
-    LiteralBase64 {
+    Base64 {
         base64: String,
     },
+    Enum {
+        kind: EnumKind,
+        #[serde(flatten)]
+        fields: HashMap<String, ValueOrArray<Literal>>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum EnumKind {
+    Named(String),
+    Numeric(u64),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum Value {
+    Literal(Literal),
     Unset {
         unset: bool,
     },
@@ -1742,7 +2056,7 @@ impl Table {
                     ValueOrArray::Value(value) => vec![(key, value)],
                 })
                 .map(|(key, value)| TableEntry {
-                    key: Value::LiteralString(key),
+                    key: Value::Literal(Literal::String(key)),
                     value,
                 })
                 .collect(),
@@ -1755,11 +2069,11 @@ impl Table {
                 .filter(|(key, _)| {
                     !table
                         .iter()
-                        .any(|x| matches!(&x.key, Value::LiteralString(k) if k == key))
+                        .any(|x| matches!(&x.key, Value::Literal(Literal::String(k)) if k == key))
                 })
                 .flat_map(|(key, value)| {
                     Vec::from(value).into_iter().map(move |v| TableEntry {
-                        key: Value::LiteralString(key.clone()),
+                        key: Value::Literal(Literal::String(key.clone())),
                         value: v,
                     })
                 })

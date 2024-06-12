@@ -1,3 +1,4 @@
+use std::mem;
 use std::pin::pin;
 use std::sync::Arc;
 use std::task::Poll;
@@ -5,15 +6,14 @@ use std::time::Instant;
 
 use chrono::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
-use tokio::net::TcpStream;
 
-use crate::exec::pause::Pause;
 use crate::{
     Error, TcpError, TcpOutput, TcpPauseOutput, TcpPlanOutput, TcpRequestOutput, TcpResponse,
     WithPlannedCapacity,
 };
 
 use super::pause::{self, PauseSpec, PauseStream};
+use super::tcpsegments::TcpSegmentsRunner;
 use super::tee::Tee;
 use super::Context;
 
@@ -32,15 +32,16 @@ pub(super) struct TcpRunner {
 #[derive(Debug)]
 pub enum State {
     Pending {
-        addr: String,
         pause: TcpPauseOutput,
     },
     Open {
         start: Instant,
-        stream: PauseStream<BufWriter<Tee<TcpStream>>>,
+        stream: PauseStream<BufWriter<Tee<TcpSegmentsRunner>>>,
         size_hint: Option<usize>,
     },
-    Completed,
+    Completed {
+        transport: TcpSegmentsRunner,
+    },
     Invalid,
 }
 
@@ -48,7 +49,6 @@ impl TcpRunner {
     pub(super) fn new(ctx: Arc<Context>, plan: TcpPlanOutput) -> TcpRunner {
         TcpRunner {
             state: State::Pending {
-                addr: format!("{}:{}", plan.host, plan.port),
                 pause: plan.pause.clone(),
             },
             out: TcpOutput {
@@ -84,71 +84,20 @@ impl TcpRunner {
         Some(self.out.plan.body.len())
     }
 
-    pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let state = std::mem::replace(&mut self.state, State::Invalid);
-        let State::Pending { addr, pause } = state else {
-            return Err(Box::new(Error(format!(
-                "attempt to start TcpRunner from unexpected state: {state:?}",
-            ))));
-        };
+    pub async fn start(
+        &mut self,
+        transport: TcpSegmentsRunner,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let start = Instant::now();
-        self.out
-            .pause
-            .handshake
-            .start
-            .reserve_exact(self.out.plan.pause.handshake.start.len());
-        for p in &self.out.plan.pause.handshake.start {
-            if p.offset_bytes != 0 {
-                return Err(Box::new(Error(
-                    "pause offset not yet supported for tcp handshake".to_string(),
-                )));
-            }
-            println!("pausing before tcp handshake for {:?}", p.duration);
-            self.out
-                .pause
-                .handshake
-                .start
-                .push(Pause::new(&self.ctx, p).await?);
-        }
-        let stream = TcpStream::connect(addr).await.map_err(|e| {
-            self.out.errors.push(TcpError {
-                kind: e.kind().to_string(),
-                message: e.to_string(),
-            });
-            self.state = State::Completed;
-            Error(e.to_string())
-        })?;
-        let handshake_duration = start.elapsed();
-        self.out
-            .pause
-            .handshake
-            .end
-            .reserve_exact(self.out.plan.pause.handshake.end.len());
-        for p in self.out.plan.pause.handshake.end.iter() {
-            if p.offset_bytes != 0 {
-                return Err(Box::new(Error(
-                    "pause offset not yet supported for tcp handshake".to_string(),
-                )));
-            }
-            println!("pausing after tcp handshake for {:?}", p.duration);
-            self.out
-                .pause
-                .handshake
-                .end
-                .push(Pause::new(&self.ctx, p).await?);
-        }
+        let State::Pending { pause } = mem::replace(&mut self.state, State::Invalid) else {
+            panic!("invalid state to start tcp {:?}", self.state)
+        };
 
-        self.out.handshake_duration = Some(chrono::Duration::from_std(handshake_duration).unwrap());
-        if !pause.receive_body.end.is_empty() {
-            return Err(Box::new(Error(
-                "tcp.pause.receive_body.end is unsupported in this request".to_owned(),
-            )));
-        }
         self.state = State::Open {
             start,
             stream: pause::new_stream(
                 self.ctx.clone(),
-                BufWriter::new(Tee::new(stream)),
+                BufWriter::new(Tee::new(transport)),
                 // TODO: implement read size hints.
                 vec![PauseSpec {
                     group_offset: 0,
@@ -213,13 +162,16 @@ impl TcpRunner {
         }
     }
 
-    pub fn finish(mut self) -> TcpOutput {
+    pub fn finish(mut self) -> (TcpOutput, TcpSegmentsRunner) {
         self.complete();
-        self.out
+        let State::Completed { transport } = self.state else {
+            panic!("invalid completion state {:?}", self.state)
+        };
+        (self.out, transport)
     }
 
     fn complete(&mut self) {
-        let state = std::mem::replace(&mut self.state, State::Completed);
+        let state = std::mem::replace(&mut self.state, State::Invalid);
         let State::Open { start, stream, .. } = state else {
             return;
         };
@@ -229,7 +181,7 @@ impl TcpRunner {
         // TODO: how to sort out which pause outputs came from first or last?
         let (stream, send_pause, receive_pause) = stream.finish_stream();
         let stream = stream.into_inner();
-        let (_, writes, reads) = stream.into_parts();
+        let (transport, writes, reads) = stream.into_parts();
 
         let mut receive_pause = receive_pause.into_iter();
         self.out.pause.receive_body.start = receive_pause.next().unwrap_or_default();
@@ -267,6 +219,7 @@ impl TcpRunner {
             });
         }
         self.out.duration = chrono::Duration::from_std(end_time - start).unwrap();
+        self.state = State::Completed { transport };
     }
 }
 

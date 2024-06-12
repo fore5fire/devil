@@ -1,4 +1,4 @@
-courier.version = 0
+devil.version = 0
 
 # Simple HTTPS GET
 [https_get.http]

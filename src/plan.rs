@@ -1,7 +1,8 @@
+use crate::bindings::{EnumKind, Literal, ValueOrArray};
 use crate::{
     bindings, cel_functions, Error, GraphQlPauseOutput, Http1PauseOutput, Http2FramesPauseOutput,
     Http2PauseOutput, HttpPauseOutput, Result, State, StepPlanOutput, TcpPauseOutput,
-    TlsPauseOutput,
+    TcpSegmentOptionOutput, TcpSegmentOutput, TcpSegmentsPauseOutput, TlsPauseOutput,
 };
 use base64::Engine;
 use cel_interpreter::{Context, Program};
@@ -9,6 +10,7 @@ use chrono::{Duration, NaiveDateTime, TimeZone};
 use go_parse_duration::parse_duration;
 use indexmap::IndexMap;
 use itertools::Itertools;
+use rand::RngCore;
 use std::convert::Infallible;
 use std::fmt::Display;
 use std::str::FromStr;
@@ -37,22 +39,22 @@ impl<'a> Plan {
             let raw = include_str!("implicit_defaults.cp.toml");
             toml::de::from_str::<bindings::Plan>(raw).unwrap()
         });
-        plan.courier
+        plan.devil
             .defaults
-            .extend(implicit_defaults.courier.defaults.clone());
+            .extend(implicit_defaults.devil.defaults.clone());
         // Generate final steps.
         let steps: IndexMap<String, Step> = plan
             .steps
             .into_iter()
             .map(|(name, value)| {
                 // Apply the user and implicit defaults.
-                let value = value.apply_defaults(plan.courier.defaults.clone());
+                let value = value.apply_defaults(plan.devil.defaults.clone());
                 // Apply planner requirements and convert to planner structure.
                 Ok((name, Step::from_bindings(value)?))
             })
             .collect::<Result<_>>()?;
         let locals = plan
-            .courier
+            .devil
             .locals
             .into_iter()
             .map(|(k, v)| Ok((k, PlanValue::try_from(v)?)))
@@ -865,6 +867,253 @@ impl Evaluate<TcpPauseOutput> for TcpPause {
 }
 
 #[derive(Debug, Clone)]
+pub struct TcpSegmentsRequest {
+    pub remote_host: PlanValue<String>,
+    pub remote_port: PlanValue<u16>,
+    pub local_host: PlanValue<String>,
+    // 0 asks the implementation to select an unused port.
+    pub local_port: PlanValue<u16>,
+    pub isn: PlanValue<u32>,
+    pub segments: Vec<TcpSegment>,
+    pub pause: TcpSegmentsPause,
+}
+
+impl Evaluate<crate::TcpSegmentsPlanOutput> for TcpSegmentsRequest {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::TcpSegmentsPlanOutput>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O>,
+    {
+        Ok(crate::TcpSegmentsPlanOutput {
+            remote_host: self.remote_host.evaluate(state)?,
+            remote_port: self.remote_port.evaluate(state)?,
+            local_host: self.local_host.evaluate(state)?,
+            local_port: self.local_port.evaluate(state)?,
+            isn: self.isn.evaluate(state)?,
+            window: self.window.evaluate(state)?,
+            segments: self
+                .segments
+                .iter()
+                .map(|segments| segments.evaluate(state))
+                .try_collect()?,
+            pause: self.pause.evaluate(state)?,
+        })
+    }
+}
+
+impl TryFrom<bindings::TcpSegments> for TcpSegmentsRequest {
+    type Error = Error;
+    fn try_from(binding: bindings::TcpSegments) -> Result<Self> {
+        Ok(Self {
+            remote_host: binding
+                .remote_host
+                .map(PlanValue::<String>::try_from)
+                .ok_or_else(|| Error("tcp_segments.remote_host is required".to_owned()))??,
+            remote_port: binding
+                .remote_port
+                .map(PlanValue::<u16>::try_from)
+                .ok_or_else(|| Error("tcp_segments.remote_port is required".to_owned()))??,
+            local_host: binding
+                .local_host
+                .map(PlanValue::<String>::try_from)
+                .transpose()?
+                .unwrap_or_else(|| PlanValue::Literal("localhost".to_owned())),
+            local_port: binding
+                .local_port
+                .map(PlanValue::<u16>::try_from)
+                .transpose()?
+                .unwrap_or(PlanValue::Literal(0)),
+            isn: binding
+                .isn
+                .map(PlanValue::<u32>::try_from)
+                .transpose()?
+                // Random sequence number if not specified.
+                .unwrap_or_else(|| PlanValue::Literal(rand::thread_rng().next_u32())),
+            segments: binding
+                .segments
+                .into_iter()
+                .flatten()
+                .map(TcpSegment::try_from)
+                .try_collect()?,
+            pause: binding.pause.unwrap_or_default().try_into()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TcpSegment {
+    pub source: PlanValue<u16>,
+    pub destination: PlanValue<u16>,
+    pub sequence_number: PlanValue<u32>,
+    pub acknowledgment: PlanValue<u32>,
+    pub data_offset: PlanValue<u8>,
+    pub reserved: PlanValue<u8>,
+    pub flags: PlanValue<u8>,
+    pub window: PlanValue<u16>,
+    pub checksum: PlanValue<u16>,
+    pub urgent_ptr: PlanValue<u16>,
+    pub options: Vec<PlanValue<TcpSegmentOptionOutput>>,
+    pub payload: PlanValue<Vec<u8>>,
+}
+
+impl Evaluate<TcpSegmentOutput> for TcpSegment {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<TcpSegmentOutput>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O>,
+    {
+        Ok(TcpSegmentOutput {
+            source: self.source.evaluate(state)?,
+            destination: self.destination.evaluate(state)?,
+            sequence_number: self.sequence_number.evaluate(state)?,
+            acknowledgment: self.acknowledgment.evaluate(state)?,
+            data_offset: self.data_offset.evaluate(state)?,
+            reserved: self.reserved.evaluate(state)?,
+            flags: self.flags.evaluate(state)?,
+            window: self.window.evaluate(state)?,
+            checksum: self.checksum.evaluate(state)?,
+            urgent_ptr: self.urgent_ptr.evaluate(state)?,
+            options: self.options.evaluate(state)?,
+            payload: self.payload.evaluate(state)?,
+        })
+    }
+}
+
+impl TryFrom<bindings::TcpSegment> for TcpSegment {
+    type Error = crate::Error;
+    fn try_from(value: bindings::TcpSegment) -> std::result::Result<Self, Self::Error> {
+        Ok(Self {
+            source: value
+                .source
+                .map(PlanValue::<u16>::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+            destination: value
+                .destination
+                .map(PlanValue::<u16>::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+            sequence_number: value
+                .sequence_number
+                .map(PlanValue::<u32>::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+            acknowledgment: value
+                .acknowledgment
+                .map(PlanValue::<u32>::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+            data_offset: value
+                .data_offset
+                .map(PlanValue::<u8>::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+            reserved: value
+                .reserved
+                .map(PlanValue::<u8>::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+            flags: value
+                .flags
+                .map(PlanValue::<u8>::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+            window: value
+                .window
+                .map(PlanValue::<u16>::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+            checksum: value
+                .checksum
+                .map(PlanValue::<u16>::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+            urgent_ptr: value
+                .urgent_ptr
+                .map(PlanValue::<u16>::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+            options: value
+                .options
+                .unwrap_or_default()
+                .into_iter()
+                .map(PlanValue::<TcpSegmentOptionOutput>::try_from)
+                .collect::<Result<_>>()?,
+            payload: value
+                .payload
+                .map(PlanValue::<Vec<u8>>::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+        })
+    }
+}
+
+//#[derive(Debug, Clone)]
+//pub enum TcpSegmentOption {
+//    Nop,
+//    Timestamps { tsval: u32, tsecr: u32 },
+//    Mss(u16),
+//    Wscale(u8),
+//    SackPermitted,
+//    Sack(Vec<u32>),
+//    Raw { kind: u8, value: Vec<u8> },
+//}
+//
+//impl TryFrom<bindings::EnumValue> for TcpSegmentOption {
+//    type Error = crate::Error;
+//    fn try_from(value: bindings::EnumValue) -> std::prelude::v1::Result<Self, Self::Error> {
+//        match value {
+//            bindings::Value::LiteralEnum { kind, fields } => Ok(PlanValue::Literal(
+//                PlanData(cel_interpreter::Value::Map(cel_interpreter::objects::Map {
+//                    map: Rc::new(
+//                        fields
+//                            .into_iter()
+//                            .map(|(k, v)| Ok((k.into(), Self::try_from(v)?)))
+//                            .collect::<Result<Vec<_>>>()?,
+//                    ),
+//                }))
+//                .try_into()?,
+//            )),
+//        }
+//    }
+//}
+
+#[derive(Debug, Clone, Default)]
+pub struct TcpSegmentsPause {
+    pub handshake: PausePoints,
+}
+
+impl PauseJoins for TcpSegmentsPause {
+    fn joins(&self) -> impl Iterator<Item = String> {
+        self.handshake.joins()
+    }
+}
+
+impl TryFrom<bindings::TcpSegmentsPause> for TcpSegmentsPause {
+    type Error = Error;
+    fn try_from(value: bindings::TcpSegmentsPause) -> std::result::Result<Self, Self::Error> {
+        Ok(Self {
+            handshake: PausePoints::try_from(value.handshake.unwrap_or_default())?,
+        })
+    }
+}
+
+impl Evaluate<TcpSegmentsPauseOutput> for TcpSegmentsPause {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<TcpSegmentsPauseOutput>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O>,
+    {
+        Ok(TcpSegmentsPauseOutput {
+            handshake: self.handshake.evaluate(state)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct PlanData(pub cel_interpreter::Value);
 
 impl TryFrom<PlanData> for String {
@@ -874,6 +1123,23 @@ impl TryFrom<PlanData> for String {
             cel_interpreter::Value::String(x) => Ok(x.deref().clone()),
             cel_interpreter::Value::Bytes(x) => Ok(String::from_utf8_lossy(&x).to_string()),
             val => Err(Error(format!("{val:?} has invalid value for string value"))),
+        }
+    }
+}
+
+impl TryFrom<PlanData> for u8 {
+    type Error = Error;
+    fn try_from(value: PlanData) -> std::result::Result<Self, Self::Error> {
+        match value.0 {
+            cel_interpreter::Value::UInt(x) => {
+                Ok(u8::try_from(x).map_err(|e| Error(e.to_string()))?)
+            }
+            cel_interpreter::Value::Int(x) => {
+                Ok(u8::try_from(x).map_err(|e| Error(e.to_string()))?)
+            }
+            val => Err(Error(format!(
+                "{val:?} has invalid value for 8 bit unsigned int value",
+            ))),
         }
     }
 }
@@ -890,6 +1156,23 @@ impl TryFrom<PlanData> for u16 {
             }
             val => Err(Error(format!(
                 "{val:?} has invalid value for 16 bit unsigned int value",
+            ))),
+        }
+    }
+}
+
+impl TryFrom<PlanData> for u32 {
+    type Error = Error;
+    fn try_from(value: PlanData) -> std::result::Result<Self, Self::Error> {
+        match value.0 {
+            cel_interpreter::Value::UInt(x) => {
+                Ok(u32::try_from(x).map_err(|e| Error(e.to_string()))?)
+            }
+            cel_interpreter::Value::Int(x) => {
+                Ok(u32::try_from(x).map_err(|e| Error(e.to_string()))?)
+            }
+            val => Err(Error(format!(
+                "{val:?} has invalid value for 32 bit unsigned int value",
             ))),
         }
     }
@@ -972,14 +1255,127 @@ impl TryFrom<PlanData> for TlsVersion {
             return Err(Error("TLS version must be a string".to_owned()));
         };
         match x.as_str() {
-            "ssl1" => Ok(TlsVersion::SSL1),
-            "ssl2" => Ok(TlsVersion::SSL2),
-            "ssl3" => Ok(TlsVersion::SSL3),
-            "tls1_0" => Ok(TlsVersion::TLS1_0),
-            "tls1_1" => Ok(TlsVersion::TLS1_1),
-            "tls1_2" => Ok(TlsVersion::TLS1_2),
-            "tls1_3" => Ok(TlsVersion::TLS1_3),
+            "ssl1" => Ok(Self::SSL1),
+            "ssl2" => Ok(Self::SSL2),
+            "ssl3" => Ok(Self::SSL3),
+            "tls1_0" => Ok(Self::TLS1_0),
+            "tls1_1" => Ok(Self::TLS1_1),
+            "tls1_2" => Ok(Self::TLS1_2),
+            "tls1_3" => Ok(Self::TLS1_3),
             val => Err(Error(format!("invalid TLS version {val:?}"))),
+        }
+    }
+}
+
+impl TryFrom<PlanData> for TcpSegmentOptionOutput {
+    type Error = Error;
+    fn try_from(value: PlanData) -> Result<Self> {
+        match value.0 {
+            cel_interpreter::Value::Map(x) => match x.get(&Self::KIND_KEY.into()) {
+                Some(cel_interpreter::Value::String(kind)) if kind.as_str() == Self::NOP_KIND => {
+                    Ok(Self::Nop)
+                }
+                Some(cel_interpreter::Value::String(kind)) if kind.as_str() == Self::TIMESTAMPS_KIND => {
+                    Ok(Self::Timestamps {
+                        tsval: x
+                            .get(&Self::TSVAL_KEY.into())
+                            .map(|x| match x {
+                                cel_interpreter::Value::UInt(val) => u32::try_from(*val).map_err(|e| Error(e.to_string())),
+                                cel_interpreter::Value::Int(val) => u32::try_from(*val).map_err(|e| Error(e.to_string())),
+                                _ => Err(Error("tcp segment option timestamps `tsval` must be convertible to 32 bit unsigned int".to_owned())),
+                            })
+                            .ok_or_else(|| Error(
+                                "tcp segment option timestamps missing `tsval`".to_owned(),
+                            ))??
+                            .into(),
+                        tsecr: x
+                            .get(&Self::TSECR_KEY.into())
+                            .map(|x| match x {
+                                cel_interpreter::Value::UInt(val) => u32::try_from(*val).map_err(|e| Error(e.to_string())),
+                                cel_interpreter::Value::Int(val) => u32::try_from(*val).map_err(|e| Error(e.to_string())),
+                                _ => Err(Error("tcp segment option timestamps `tsecr` must be convertible to 32 bit unsigned int".to_owned())),
+                            })
+                            .ok_or_else(|| Error(
+                                "tcp segment option timestamps missing `tsecr`".to_owned(),
+                            ))??
+                            .into(),
+                    })
+                }
+                Some(cel_interpreter::Value::String(kind)) if kind.as_str() == Self::MSS_KIND => {
+                    Ok(Self::Mss(x.get(&Self::VALUE_KEY.into())
+                            .map(|x| match x {
+                                cel_interpreter::Value::UInt(val) => u16::try_from(*val).map_err(|e| Error(e.to_string())),
+                                cel_interpreter::Value::Int(val) => u16::try_from(*val).map_err(|e| Error(e.to_string())),
+                                _ => Err(Error("tcp segment option mss value must be convertible to 16 bit unsigned int".to_owned())),
+                            })
+                            .ok_or_else(|| Error(
+                                "tcp segment option mss missing value".to_owned(),
+                            ))??))
+                }
+                Some(cel_interpreter::Value::String(kind)) if kind.as_str() == Self::WSCALE_KIND => {
+                    Ok(Self::Wscale(x.get(&Self::VALUE_KEY.into())
+                            .map(|x| match x {
+                                cel_interpreter::Value::UInt(val) => u8::try_from(*val).map_err(|e| Error(e.to_string())),
+                                cel_interpreter::Value::Int(val) => u8::try_from(*val).map_err(|e| Error(e.to_string())),
+                                _ => Err(Error("tcp segment option wscale value must be convertible to 8 bit unsigned int".to_owned())),
+                            })
+                            .ok_or_else(|| Error(
+                                "tcp segment option wscale missing value".to_owned(),
+                            ))??))
+                }
+                Some(cel_interpreter::Value::String(kind)) if kind.as_str() == Self::SACK_PERMITTED_KIND => {
+                    Ok(Self::SackPermitted)
+                }
+                Some(cel_interpreter::Value::String(kind)) if kind.as_str() == Self::SACK_KIND => {
+                    Ok(Self::Sack(x.get(&Self::VALUE_KEY.into())
+                            .map(|x| match x {
+                                cel_interpreter::Value::List(vals) => vals.iter().map(|x| match x {
+                                    cel_interpreter::Value::Int(val) => u32::try_from(*val).map_err(|e| Error(e.to_string())),
+                                    cel_interpreter::Value::UInt(val) => u32::try_from(*val).map_err(|e| Error(e.to_string())),
+                                    _ => Err(Error("tcp segment option sack must be convertible to list of 32 bit unsigned int".to_owned()))
+                                }).try_collect(),
+                                _ => Err(Error("tcp segment option sack value must be convertible to list of 32 bit unsigned int".to_owned())),
+                            })
+                            .ok_or_else(|| Error(
+                                "tcp segment option wscale missing value".to_owned(),
+                            ))??))
+                }
+                Some(cel_interpreter::Value::UInt(kind)) => {
+                    Ok(Self::Raw{ kind: u8::try_from(*kind).map_err(|e| Error(e.to_string()))?,
+                        value: x.get(&Self::VALUE_KEY.into())
+                            .map(|x| match x {
+                                cel_interpreter::Value::Bytes(data) => Ok(data.as_ref().to_owned()),
+                                cel_interpreter::Value::String(data) => Ok(data.as_bytes().to_vec()),
+                                _ => Err(Error("tcp segment option sack value must be convertible to list of 32 bit unsigned int".to_owned())),
+                            })
+                            .ok_or_else(|| Error(
+                                "tcp segment option raw missing value".to_owned(),
+                            ))??})
+                }
+                Some(cel_interpreter::Value::Int(kind)) => {
+                    Ok(Self::Raw{ kind: u8::try_from(*kind).map_err(|e| Error(e.to_string()))?,
+                        value: x.get(&Self::VALUE_KEY.into())
+                            .map(|x| match x {
+                                cel_interpreter::Value::Bytes(data) => Ok(data.as_ref().to_owned()),
+                                cel_interpreter::Value::String(data) => Ok(data.as_bytes().to_vec()),
+                                _ => Err(Error("tcp segment option sack value must be convertible to list of 32 bit unsigned int".to_owned())),
+                            })
+                            .ok_or_else(|| Error(
+                                "tcp segment option raw missing value".to_owned(),
+                            ))??})
+                }
+                _ => Err(Error(
+                    "tcp segment option expression result requires string value for key `kind`".to_owned(),
+                )),
+            },
+            cel_interpreter::Value::String(x) => match x.as_str() {
+                "nop" => Ok(Self::Nop),
+                "sack_permitted" => Ok(Self::SackPermitted),
+                val => Err(Error(format!("invalid TLS version {val:?}"))),
+            },
+            _ => Err(Error(
+                "TCP segment option must be a string or map".to_owned(),
+            )),
         }
     }
 }
@@ -1004,7 +1400,7 @@ impl TryFrom<PlanData> for serde_json::Value {
                     .into_iter()
                     .map(PlanData)
                     .map(Self::try_from)
-                    .collect::<Result<_>>()?,
+                    .try_collect()?,
             ),
             cel_interpreter::Value::Map(m) => Self::Object(
                 Rc::try_unwrap(m.map)
@@ -1021,7 +1417,7 @@ impl TryFrom<PlanData> for serde_json::Value {
                             Self::try_from(PlanData(v))?,
                         ))
                     })
-                    .collect::<Result<_>>()?,
+                    .try_collect()?,
             ),
             cel_interpreter::Value::Int(n) => Self::Number(serde_json::Number::from(n)),
             cel_interpreter::Value::UInt(n) => Self::Number(serde_json::Number::from(n)),
@@ -1372,47 +1768,57 @@ impl Step {
                 graphql: graphql.try_into()?,
                 http: http.unwrap_or_default().try_into()?,
             },
-            bindings::StepProtocols::GraphQlH1c { graphql, h1c, tcp } => {
-                StepProtocols::GraphQlH1c {
-                    graphql: graphql.try_into()?,
-                    h1c: h1c.unwrap_or_default().try_into()?,
-                    tcp: tcp.unwrap_or_default().try_into()?,
-                }
-            }
+            bindings::StepProtocols::GraphQlH1c {
+                graphql,
+                h1c,
+                tcp,
+                tcp_segments,
+            } => StepProtocols::GraphQlH1c {
+                graphql: graphql.try_into()?,
+                h1c: h1c.unwrap_or_default().try_into()?,
+                tcp: tcp.unwrap_or_default().try_into()?,
+                tcp_segments: tcp_segments.unwrap_or_default().try_into()?,
+            },
             bindings::StepProtocols::GraphQlH1 {
                 graphql,
                 h1,
                 tls,
                 tcp,
+                tcp_segments,
             } => StepProtocols::GraphQlH1 {
                 graphql: graphql.try_into()?,
                 h1: h1.unwrap_or_default().try_into()?,
                 tls: tls.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
+                tcp_segments: tcp_segments.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::GraphQlH2c {
                 graphql,
                 h2c,
-                http2frames,
+                http2_frames,
                 tcp,
+                tcp_segments,
             } => StepProtocols::GraphQlH2c {
                 graphql: graphql.try_into()?,
                 h2c: h2c.unwrap_or_default().try_into()?,
-                http2frames: http2frames.unwrap_or_default().try_into()?,
+                http2_frames: http2_frames.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
+                tcp_segments: tcp_segments.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::GraphQlH2 {
                 graphql,
                 h2,
-                http2frames,
+                http2_frames,
                 tls,
                 tcp,
+                tcp_segments,
             } => StepProtocols::GraphQlH2 {
                 graphql: graphql.try_into()?,
                 h2: h2.unwrap_or_default().try_into()?,
-                http2frames: http2frames.unwrap_or_default().try_into()?,
+                http2_frames: http2_frames.unwrap_or_default().try_into()?,
                 tls: tls.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
+                tcp_segments: tcp_segments.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::GraphQlH3 {
                 graphql,
@@ -1428,50 +1834,74 @@ impl Step {
             bindings::StepProtocols::Http { http } => StepProtocols::Http {
                 http: http.try_into()?,
             },
-            bindings::StepProtocols::H1c { h1c, tcp } => StepProtocols::H1c {
+            bindings::StepProtocols::H1c {
+                h1c,
+                tcp,
+                tcp_segments,
+            } => StepProtocols::H1c {
                 h1c: h1c.try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
+                tcp_segments: tcp_segments.unwrap_or_default().try_into()?,
             },
-            bindings::StepProtocols::H1 { h1, tls, tcp } => StepProtocols::H1 {
+            bindings::StepProtocols::H1 {
+                h1,
+                tls,
+                tcp,
+                tcp_segments,
+            } => StepProtocols::H1 {
                 h1: h1.try_into()?,
                 tls: tls.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
+                tcp_segments: tcp_segments.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::H2c {
                 h2c,
-                http2frames,
+                http2_frames,
                 tcp,
+                tcp_segments,
             } => StepProtocols::H2c {
                 h2c: h2c.try_into()?,
-                http2frames: http2frames.unwrap_or_default().try_into()?,
+                http2_frames: http2_frames.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
+                tcp_segments: tcp_segments.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::H2 {
                 h2,
-                http2frames,
+                http2_frames,
                 tls,
                 tcp,
+                tcp_segments,
             } => StepProtocols::H2 {
                 h2: h2.try_into()?,
-                http2frames: http2frames.unwrap_or_default().try_into()?,
+                http2_frames: http2_frames.unwrap_or_default().try_into()?,
                 tls: tls.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
+                tcp_segments: tcp_segments.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::H3 { h3, quic, udp } => StepProtocols::H3 {
                 h3: h3.try_into()?,
                 quic: quic.unwrap_or_default().try_into()?,
                 udp: udp.unwrap_or_default().try_into()?,
             },
-            bindings::StepProtocols::Tls { tls, tcp } => StepProtocols::Tls {
+            bindings::StepProtocols::Tls {
+                tls,
+                tcp,
+                tcp_segments,
+            } => StepProtocols::Tls {
                 tls: tls.try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
+                tcp_segments: tcp_segments.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::Dtls { dtls, udp } => StepProtocols::Dtls {
                 dtls: dtls.try_into()?,
                 udp: udp.unwrap_or_default().try_into()?,
             },
-            bindings::StepProtocols::Tcp { tcp } => StepProtocols::Tcp {
+            bindings::StepProtocols::Tcp { tcp, tcp_segments } => StepProtocols::Tcp {
                 tcp: tcp.try_into()?,
+                tcp_segments: tcp_segments.unwrap_or_default().try_into()?,
+            },
+            bindings::StepProtocols::TcpSegments { tcp_segments } => StepProtocols::TcpSegments {
+                tcp_segments: tcp_segments.try_into()?,
             },
             bindings::StepProtocols::Quic { quic, udp } => StepProtocols::Quic {
                 quic: quic.try_into()?,
@@ -1694,25 +2124,29 @@ pub enum StepProtocols {
         graphql: GraphQlRequest,
         h1c: Http1Request,
         tcp: TcpRequest,
+        tcp_segments: TcpSegmentsRequest,
     },
     GraphQlH1 {
         graphql: GraphQlRequest,
         h1: Http1Request,
         tls: TlsRequest,
         tcp: TcpRequest,
+        tcp_segments: TcpSegmentsRequest,
     },
     GraphQlH2c {
         graphql: GraphQlRequest,
         h2c: Http2Request,
-        http2frames: Http2FramesRequest,
+        http2_frames: Http2FramesRequest,
         tcp: TcpRequest,
+        tcp_segments: TcpSegmentsRequest,
     },
     GraphQlH2 {
         graphql: GraphQlRequest,
         h2: Http2Request,
-        http2frames: Http2FramesRequest,
+        http2_frames: Http2FramesRequest,
         tls: TlsRequest,
         tcp: TcpRequest,
+        tcp_segments: TcpSegmentsRequest,
     },
     GraphQlH3 {
         graphql: GraphQlRequest,
@@ -1726,22 +2160,26 @@ pub enum StepProtocols {
     H1c {
         h1c: Http1Request,
         tcp: TcpRequest,
+        tcp_segments: TcpSegmentsRequest,
     },
     H1 {
         h1: Http1Request,
         tls: TlsRequest,
         tcp: TcpRequest,
+        tcp_segments: TcpSegmentsRequest,
     },
     H2c {
         h2c: Http2Request,
-        http2frames: Http2FramesRequest,
+        http2_frames: Http2FramesRequest,
         tcp: TcpRequest,
+        tcp_segments: TcpSegmentsRequest,
     },
     H2 {
         h2: Http2Request,
-        http2frames: Http2FramesRequest,
+        http2_frames: Http2FramesRequest,
         tls: TlsRequest,
         tcp: TcpRequest,
+        tcp_segments: TcpSegmentsRequest,
     },
     H3 {
         h3: Http3Request,
@@ -1751,6 +2189,7 @@ pub enum StepProtocols {
     Tls {
         tls: TlsRequest,
         tcp: TcpRequest,
+        tcp_segments: TcpSegmentsRequest,
     },
     Dtls {
         dtls: TlsRequest,
@@ -1758,6 +2197,10 @@ pub enum StepProtocols {
     },
     Tcp {
         tcp: TcpRequest,
+        tcp_segments: TcpSegmentsRequest,
+    },
+    TcpSegments {
+        tcp_segments: TcpSegmentsRequest,
     },
     Quic {
         quic: QuicRequest,
@@ -1774,11 +2217,17 @@ impl StepProtocols {
             Self::GraphQlHttp { graphql, http } => {
                 vec![Protocol::GraphQl(graphql), Protocol::Http(http)]
             }
-            Self::GraphQlH1c { graphql, h1c, tcp } => {
+            Self::GraphQlH1c {
+                graphql,
+                h1c,
+                tcp,
+                tcp_segments,
+            } => {
                 vec![
                     Protocol::GraphQl(graphql),
                     Protocol::H1c(h1c),
                     Protocol::Tcp(tcp),
+                    Protocol::TcpSegments(tcp_segments),
                 ]
             }
             Self::GraphQlH1 {
@@ -1786,40 +2235,46 @@ impl StepProtocols {
                 h1,
                 tls,
                 tcp,
+                tcp_segments,
             } => {
                 vec![
                     Protocol::GraphQl(graphql),
                     Protocol::H1(h1),
                     Protocol::Tls(tls),
                     Protocol::Tcp(tcp),
+                    Protocol::TcpSegments(tcp_segments),
                 ]
             }
             Self::GraphQlH2c {
                 graphql,
                 h2c,
-                http2frames,
+                http2_frames,
                 tcp,
+                tcp_segments,
             } => {
                 vec![
                     Protocol::GraphQl(graphql),
                     Protocol::H2c(h2c),
-                    Protocol::Http2Frames(http2frames),
+                    Protocol::Http2Frames(http2_frames),
                     Protocol::Tcp(tcp),
+                    Protocol::TcpSegments(tcp_segments),
                 ]
             }
             Self::GraphQlH2 {
                 graphql,
                 h2,
-                http2frames,
+                http2_frames,
                 tls,
                 tcp,
+                tcp_segments,
             } => {
                 vec![
                     Protocol::GraphQl(graphql),
                     Protocol::H2(h2),
-                    Protocol::Http2Frames(http2frames),
+                    Protocol::Http2Frames(http2_frames),
                     Protocol::Tls(tls),
                     Protocol::Tcp(tcp),
+                    Protocol::TcpSegments(tcp_segments),
                 ]
             }
             Self::GraphQlH3 {
@@ -1838,47 +2293,80 @@ impl StepProtocols {
             Self::Http { http } => {
                 vec![Protocol::Http(http)]
             }
-            Self::H1c { h1c, tcp } => {
-                vec![Protocol::H1c(h1c), Protocol::Tcp(tcp)]
+            Self::H1c {
+                h1c,
+                tcp,
+                tcp_segments,
+            } => {
+                vec![
+                    Protocol::H1c(h1c),
+                    Protocol::Tcp(tcp),
+                    Protocol::TcpSegments(tcp_segments),
+                ]
             }
-            Self::H1 { h1, tls, tcp } => {
-                vec![Protocol::H1(h1), Protocol::Tls(tls), Protocol::Tcp(tcp)]
+            Self::H1 {
+                h1,
+                tls,
+                tcp,
+                tcp_segments,
+            } => {
+                vec![
+                    Protocol::H1(h1),
+                    Protocol::Tls(tls),
+                    Protocol::Tcp(tcp),
+                    Protocol::TcpSegments(tcp_segments),
+                ]
             }
             Self::H2c {
                 h2c,
-                http2frames,
+                http2_frames,
                 tcp,
+                tcp_segments,
             } => {
                 vec![
                     Protocol::H2c(h2c),
-                    Protocol::Http2Frames(http2frames),
+                    Protocol::Http2Frames(http2_frames),
                     Protocol::Tcp(tcp),
+                    Protocol::TcpSegments(tcp_segments),
                 ]
             }
             Self::H2 {
                 h2,
-                http2frames,
+                http2_frames,
                 tls,
                 tcp,
+                tcp_segments,
             } => {
                 vec![
                     Protocol::H2(h2),
-                    Protocol::Http2Frames(http2frames),
+                    Protocol::Http2Frames(http2_frames),
                     Protocol::Tls(tls),
                     Protocol::Tcp(tcp),
+                    Protocol::TcpSegments(tcp_segments),
                 ]
             }
             Self::H3 { h3, quic, udp } => {
                 vec![Protocol::H3(h3), Protocol::Quic(quic), Protocol::Udp(udp)]
             }
-            Self::Tls { tls, tcp } => {
-                vec![Protocol::Tls(tls), Protocol::Tcp(tcp)]
+            Self::Tls {
+                tls,
+                tcp,
+                tcp_segments,
+            } => {
+                vec![
+                    Protocol::Tls(tls),
+                    Protocol::Tcp(tcp),
+                    Protocol::TcpSegments(tcp_segments),
+                ]
             }
             Self::Dtls { dtls, udp } => {
                 vec![Protocol::Tls(dtls), Protocol::Udp(udp)]
             }
-            Self::Tcp { tcp } => {
-                vec![Protocol::Tcp(tcp)]
+            Self::Tcp { tcp, tcp_segments } => {
+                vec![Protocol::Tcp(tcp), Protocol::TcpSegments(tcp_segments)]
+            }
+            Self::TcpSegments { tcp_segments } => {
+                vec![Protocol::TcpSegments(tcp_segments)]
             }
             Self::Quic { quic, udp } => {
                 vec![Protocol::Udp(udp), Protocol::Quic(quic)]
@@ -1902,6 +2390,7 @@ pub enum Protocol {
     H3(Http3Request),
     Tls(TlsRequest),
     Tcp(TcpRequest),
+    TcpSegments(TcpSegmentsRequest),
     Quic(QuicRequest),
     Udp(UdpRequest),
 }
@@ -1919,6 +2408,7 @@ impl Protocol {
             Self::H3(proto) => Vec::new(),
             Self::Tls(proto) => proto.pause.joins().collect(),
             Self::Tcp(proto) => proto.pause.joins().collect(),
+            Self::TcpSegments(proto) => proto.pause.joins().collect(),
             Self::Quic(proto) => proto.pause.joins().collect(),
             Self::Udp(proto) => proto.pause.joins().collect(),
         }
@@ -1936,6 +2426,7 @@ impl Protocol {
             Self::H3(_) => ProtocolField::H3,
             Self::Tls(_) => ProtocolField::Tls,
             Self::Tcp(_) => ProtocolField::Tcp,
+            Self::TcpSegments(_) => ProtocolField::TcpSegments,
             Self::Quic(_) => ProtocolField::Quic,
             Self::Udp(_) => ProtocolField::Udp,
         }
@@ -1960,6 +2451,7 @@ impl Evaluate<StepPlanOutput> for Protocol {
             //Self::Http3(proto) => ProtocolOutput::Http3(proto.evaluate(state)?),
             Self::Tls(proto) => StepPlanOutput::Tls(proto.evaluate(state)?),
             Self::Tcp(proto) => StepPlanOutput::Tcp(proto.evaluate(state)?),
+            Self::TcpSegments(proto) => StepPlanOutput::TcpSegments(proto.evaluate(state)?),
             //Self::Quic(proto) => ProtocolOutput::Quic(proto.evaluate(state)?),
             //Self::Udp(proto) => ProtocolOutput::Udp(proto.evaluate(state)?),
             proto => {
@@ -1983,6 +2475,7 @@ pub enum ProtocolField {
     H3,
     Tls,
     Tcp,
+    TcpSegments,
     Dtls,
     Quic,
     Udp,
@@ -1995,6 +2488,7 @@ impl FromStr for ProtocolField {
             "udp" => Ok(Self::Udp),
             "quic" => Ok(Self::Quic),
             "dtls" => Ok(Self::Dtls),
+            "tcp_segments" => Ok(Self::TcpSegments),
             "tcp" => Ok(Self::Tcp),
             "tls" => Ok(Self::Tls),
             "http" => Ok(Self::Http),
@@ -2002,6 +2496,7 @@ impl FromStr for ProtocolField {
             "h1" => Ok(Self::H1),
             "h2c" => Ok(Self::H2c),
             "h2" => Ok(Self::H2),
+            "http2_frames" => Ok(Self::Http2Frames),
             "h3" => Ok(Self::H3),
             "graphql" => Ok(Self::GraphQl),
             _ => return Err(Error(format!("invalid tls version string {}", s))),
@@ -2078,7 +2573,7 @@ impl TryFrom<bindings::Value> for PlanValue<String> {
     type Error = Error;
     fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
-            bindings::Value::LiteralString(x) => Ok(Self::Literal(x)),
+            bindings::Value::Literal(Literal::String(x)) => Ok(Self::Literal(x)),
             bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
@@ -2087,11 +2582,30 @@ impl TryFrom<bindings::Value> for PlanValue<String> {
         }
     }
 }
+impl TryFrom<bindings::Value> for PlanValue<u8> {
+    type Error = Error;
+    fn try_from(binding: bindings::Value) -> Result<Self> {
+        match binding {
+            bindings::Value::Literal(Literal::Int(x)) => {
+                Ok(Self::Literal(x.try_into().map_err(|_| {
+                    Error("out-of-bounds unsigned 8 bit integer literal".to_owned())
+                })?))
+            }
+            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
+                cel,
+                vars: vars.unwrap_or_default().into_iter().collect(),
+            }),
+            _ => Err(Error(format!(
+                "invalid value {binding:?} for unsigned 8 bit integer field"
+            ))),
+        }
+    }
+}
 impl TryFrom<bindings::Value> for PlanValue<u16> {
     type Error = Error;
     fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
-            bindings::Value::LiteralInt(x) => {
+            bindings::Value::Literal(Literal::Int(x)) => {
                 Ok(Self::Literal(x.try_into().map_err(|_| {
                     Error("out-of-bounds unsigned 16 bit integer literal".to_owned())
                 })?))
@@ -2106,11 +2620,30 @@ impl TryFrom<bindings::Value> for PlanValue<u16> {
         }
     }
 }
+impl TryFrom<bindings::Value> for PlanValue<u32> {
+    type Error = Error;
+    fn try_from(binding: bindings::Value) -> Result<Self> {
+        match binding {
+            bindings::Value::Literal(Literal::Int(x)) => {
+                Ok(Self::Literal(x.try_into().map_err(|_| {
+                    Error("out-of-bounds unsigned 32 bit integer literal".to_owned())
+                })?))
+            }
+            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
+                cel,
+                vars: vars.unwrap_or_default().into_iter().collect(),
+            }),
+            _ => Err(Error(format!(
+                "invalid value {binding:?} for unsigned 32 bit integer field"
+            ))),
+        }
+    }
+}
 impl TryFrom<bindings::Value> for PlanValue<u64> {
     type Error = Error;
     fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
-            bindings::Value::LiteralInt(x) => {
+            bindings::Value::Literal(Literal::Int(x)) => {
                 Ok(Self::Literal(x.try_into().map_err(|_| {
                     Error("out-of-bounds unsigned 64 bit integer literal".to_owned())
                 })?))
@@ -2129,7 +2662,7 @@ impl TryFrom<bindings::Value> for PlanValue<i64> {
     type Error = Error;
     fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
-            bindings::Value::LiteralInt(x) => {
+            bindings::Value::Literal(Literal::Int(x)) => {
                 Ok(Self::Literal(x.try_into().map_err(|_| {
                     Error("out-of-bounds signed 64 bit integer literal".to_owned())
                 })?))
@@ -2148,7 +2681,7 @@ impl TryFrom<bindings::Value> for PlanValue<bool> {
     type Error = Error;
     fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
-            bindings::Value::LiteralBool(x) => Ok(Self::Literal(x)),
+            bindings::Value::Literal(Literal::Bool(x)) => Ok(Self::Literal(x)),
             bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
@@ -2163,8 +2696,8 @@ impl TryFrom<bindings::Value> for PlanValue<Vec<u8>> {
     type Error = Error;
     fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
-            bindings::Value::LiteralString(x) => Ok(PlanValue::Literal(x.into_bytes())),
-            bindings::Value::LiteralBase64 { base64: data } => Ok(Self::Literal(
+            bindings::Value::Literal(Literal::String(x)) => Ok(PlanValue::Literal(x.into_bytes())),
+            bindings::Value::Literal(Literal::Base64 { base64: data }) => Ok(Self::Literal(
                 base64::prelude::BASE64_STANDARD_NO_PAD
                     .decode(data)
                     .map_err(|e| Error(format!("base64 decode: {}", e)))?,
@@ -2181,7 +2714,7 @@ impl TryFrom<bindings::Value> for PlanValue<Duration> {
     type Error = Error;
     fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
-            bindings::Value::LiteralString(x) => Ok(Self::Literal(
+            bindings::Value::Literal(Literal::String(x)) => Ok(Self::Literal(
                 parse_duration(x.as_str())
                     .map(Duration::nanoseconds)
                     .map_err(|_| Error(format!("invalid duration string")))?,
@@ -2201,7 +2734,131 @@ impl TryFrom<bindings::Value> for PlanValue<TlsVersion> {
     type Error = Error;
     fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
-            bindings::Value::LiteralString(x) => Ok(Self::Literal(x.parse()?)),
+            bindings::Value::Literal(Literal::String(x)) => Ok(Self::Literal(x.parse()?)),
+            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
+                cel,
+                vars: vars.unwrap_or_default().into_iter().collect(),
+            }),
+            _ => Err(Error(format!(
+                "invalid value {binding:?} for tls version field"
+            ))),
+        }
+    }
+}
+
+impl TryFrom<bindings::Value> for PlanValue<TcpSegmentOptionOutput> {
+    type Error = Error;
+    fn try_from(binding: bindings::Value) -> Result<Self> {
+        match binding {
+            bindings::Value::Literal(Literal::Enum { kind, mut fields }) => match kind {
+                EnumKind::Named(kind) if kind.as_str() == TcpSegmentOptionOutput::NOP_KIND => {
+                    Ok(PlanValue::Literal(TcpSegmentOptionOutput::Nop))
+                }
+                EnumKind::Named(kind)
+                    if kind.as_str() == TcpSegmentOptionOutput::TIMESTAMPS_KIND =>
+                {
+                    Ok(PlanValue::Literal(TcpSegmentOptionOutput::Timestamps {
+                        tsval: fields
+                            .remove(TcpSegmentOptionOutput::TSVAL_KEY)
+                            .map(|val| match val {
+                                ValueOrArray::Value(Literal::Int(i)) => {
+                                    u32::try_from(i).map_err(|e| Error(e.to_string()))
+                                }
+                                _ => Err(Error("invalid type for tsval".to_owned())),
+                            })
+                            .ok_or_else(|| {
+                                Error(
+                                    "tsval is required for tcp segment option 'timestamps'"
+                                        .to_owned(),
+                                )
+                            })??,
+                        tsecr: fields
+                            .remove(TcpSegmentOptionOutput::TSECR_KEY)
+                            .map(|val| match val {
+                                ValueOrArray::Value(Literal::Int(i)) => {
+                                    u32::try_from(i).map_err(|e| Error(e.to_string()))
+                                }
+                                _ => Err(Error("invalid type for tsecr".to_owned())),
+                            })
+                            .ok_or_else(|| {
+                                Error(
+                                    "tsecr is required for tcp segment option 'timestamps'"
+                                        .to_owned(),
+                                )
+                            })??,
+                    }))
+                }
+                EnumKind::Named(kind) if kind.as_str() == TcpSegmentOptionOutput::MSS_KIND => {
+                    Ok(PlanValue::Literal(TcpSegmentOptionOutput::Mss(fields
+                        .remove(TcpSegmentOptionOutput::VALUE_KEY)
+                        .map(|val| match val {
+                            ValueOrArray::Value(Literal::Int(i)) => Ok(u16::try_from(i).map_err(|e| Error(e.to_string()))?),
+                            _ => Err(Error("invalid type for mss value (expect 16 bit unsigned integer)".to_owned())),
+                        })
+                        .ok_or_else(|| {
+                            Error(
+                                "value is required for tcp segment option 'mss'".to_owned(),
+                            )
+                        })??)))
+                }
+                EnumKind::Named(kind) if kind.as_str() == TcpSegmentOptionOutput::WSCALE_KIND => {
+                    Ok(PlanValue::Literal(TcpSegmentOptionOutput::Wscale(fields
+                        .remove(TcpSegmentOptionOutput::VALUE_KEY)
+                        .map(|val| match val {
+                            ValueOrArray::Value(Literal::Int(i)) => Ok(u8::try_from(i).map_err(|e| Error(e.to_string()))?),
+                            _ => Err(Error("invalid type for wscale value (expect 8 bit unsigned integer)".to_owned())),
+                        })
+                        .ok_or_else(|| {
+                            Error(
+                                "value is required for tcp segment option 'wscale'".to_owned(),
+                            )
+                        })??)))
+                }
+                EnumKind::Named(kind)
+                    if kind.as_str() == TcpSegmentOptionOutput::SACK_PERMITTED_KIND =>
+                {
+                    Ok(PlanValue::Literal(TcpSegmentOptionOutput::SackPermitted))
+                }
+                EnumKind::Named(kind) if kind.as_str() == TcpSegmentOptionOutput::SACK_KIND => {
+                    Ok(PlanValue::Literal(TcpSegmentOptionOutput::Sack(fields
+                        .remove(TcpSegmentOptionOutput::VALUE_KEY)
+                        .map(|val| match val {
+                            ValueOrArray::Array(array) => Ok(array.into_iter().map(|literal| match literal {
+                                Literal::Int(i) => u32::try_from(i).map_err(|e| Error(e.to_string())),
+                                _ => Err(Error("invalid type for sack value (expect list of 32 bit unsigned integers)".to_owned())),
+                            }).try_collect()),
+                            _ => Err(Error("invalid type for sack value (expect list of 32 bit unsigned integers)".to_owned())),
+                        })
+                        .ok_or_else(|| {
+                            Error(
+                                "value is required for tcp segment option 'sack'".to_owned(),
+                            )
+                        })???)))
+                }
+                EnumKind::Numeric(kind) => Ok(PlanValue::Literal(TcpSegmentOptionOutput::Raw {
+                    kind: u8::try_from(kind).map_err(|e| Error(e.to_string()))?,
+                    value: fields
+                        .remove(TcpSegmentOptionOutput::VALUE_KEY)
+                        .map(|val| match val {
+                            ValueOrArray::Value(Literal::String(s)) => Ok(s.into_bytes()),
+                            ValueOrArray::Value(Literal::Base64 { base64 }) => {
+                                Ok(base64::prelude::BASE64_STANDARD_NO_PAD
+                                    .decode(base64)
+                                    .map_err(|e| Error(format!("base64 decode: {}", e)))?)
+                            }
+                            _ => Err(Error("invalid type for raw value (expect either a string literal or '{ base64: \"...\" }')".to_owned())),
+                        })
+                        .ok_or_else(|| {
+                            Error(
+                                "value is required for raw tcp segment option".to_owned(),
+                            )
+                        })??,
+                })),
+                _ => Err(Error(format!(
+                    "invalid kind '{:?}' for tcp segment option",
+                    kind
+                ))),
+            },
             bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
@@ -2217,7 +2874,7 @@ impl TryFrom<bindings::Value> for PlanValue<ProtocolField> {
     type Error = Error;
     fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
-            bindings::Value::LiteralString(x) => Ok(Self::Literal(x.parse()?)),
+            bindings::Value::Literal(Literal::String(x)) => Ok(Self::Literal(x.parse()?)),
             bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
@@ -2237,12 +2894,12 @@ impl TryFrom<bindings::Value> for PlanValue<Parallelism> {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            bindings::Value::LiteralString(x) => Ok(Self::Literal(x.parse()?)),
-            bindings::Value::LiteralBool(b) if b => {
+            bindings::Value::Literal(Literal::String(x)) => Ok(Self::Literal(x.parse()?)),
+            bindings::Value::Literal(Literal::Bool(b)) if b => {
                 Ok(Self::Literal(Parallelism::Parallel(Semaphore::MAX_PERMITS)))
             }
-            bindings::Value::LiteralBool(b) => Ok(Self::Literal(Parallelism::Serial)),
-            bindings::Value::LiteralInt(i) => Ok(Self::Literal(Parallelism::Parallel(
+            bindings::Value::Literal(Literal::Bool(_)) => Ok(Self::Literal(Parallelism::Serial)),
+            bindings::Value::Literal(Literal::Int(i)) => Ok(Self::Literal(Parallelism::Parallel(
                 i.try_into().map_err(|_| {
                     Error(format!(
                         "parallelism value {i} must fit in platform word size"
@@ -2264,7 +2921,7 @@ impl TryFrom<bindings::Value> for PlanValue<AddContentLength> {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            bindings::Value::LiteralString(x) => Ok(Self::Literal(x.parse()?)),
+            bindings::Value::Literal(Literal::String(x)) => Ok(Self::Literal(x.parse()?)),
             val => Err(Error(format!(
                 "invalid value {val:?} for field add_content_length"
             ))),
@@ -2276,7 +2933,7 @@ impl TryFrom<bindings::Value> for PlanValue<Url> {
     type Error = Error;
     fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
-            bindings::Value::LiteralString(x) => Ok(Self::Literal(
+            bindings::Value::Literal(Literal::String(x)) => Ok(Self::Literal(
                 Url::parse(&x).map_err(|e| Error(e.to_string()))?,
             )),
             bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
@@ -2292,14 +2949,14 @@ impl TryFrom<bindings::Value> for PlanValue<serde_json::Value> {
     type Error = Error;
     fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
-            bindings::Value::LiteralString(x) => Ok(Self::Literal(x.into())),
-            bindings::Value::LiteralInt(x) => Ok(Self::Literal(x.into())),
-            bindings::Value::LiteralFloat(x) => Ok(Self::Literal(x.into())),
-            bindings::Value::LiteralBool(x) => Ok(Self::Literal(x.into())),
-            bindings::Value::LiteralToml { literal: x } => Ok(Self::Literal(
+            bindings::Value::Literal(Literal::String(x)) => Ok(Self::Literal(x.into())),
+            bindings::Value::Literal(Literal::Int(x)) => Ok(Self::Literal(x.into())),
+            bindings::Value::Literal(Literal::Float(x)) => Ok(Self::Literal(x.into())),
+            bindings::Value::Literal(Literal::Bool(x)) => Ok(Self::Literal(x.into())),
+            bindings::Value::Literal(Literal::Toml { literal: x }) => Ok(Self::Literal(
                 serde_json::to_value(x).map_err(|e| Error(e.to_string()))?,
             )),
-            bindings::Value::LiteralBase64 { base64 } => Ok(Self::Literal(
+            bindings::Value::Literal(Literal::Base64 { base64 }) => Ok(Self::Literal(
                 base64::prelude::BASE64_STANDARD_NO_PAD
                     .decode(base64)
                     .map_err(|e| Error(format!("base64 decode: {}", e)))?
@@ -2318,17 +2975,26 @@ impl TryFrom<bindings::Value> for PlanValue<PlanData, Infallible> {
     type Error = Error;
     fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
-            bindings::Value::LiteralString(x) => Ok(PlanValue::Literal(PlanData(x.into()))),
-            bindings::Value::LiteralInt(x) => Ok(PlanValue::Literal(PlanData(x.into()))),
-            bindings::Value::LiteralFloat(x) => Ok(PlanValue::Literal(PlanData(x.into()))),
-            bindings::Value::LiteralBool(x) => Ok(PlanValue::Literal(PlanData(x.into()))),
-            bindings::Value::LiteralDatetime(x) => Ok(PlanValue::Literal(x.try_into()?)),
-            bindings::Value::LiteralToml { literal: x } => {
-                Ok(PlanValue::Literal(PlanData::try_from(x)?))
-            }
-            bindings::Value::LiteralBase64 { base64: x } => {
+            bindings::Value::Literal(Literal::String(x)) => {
                 Ok(PlanValue::Literal(PlanData(x.into())))
             }
+            bindings::Value::Literal(Literal::Int(x)) => Ok(PlanValue::Literal(PlanData(x.into()))),
+            bindings::Value::Literal(Literal::Float(x)) => {
+                Ok(PlanValue::Literal(PlanData(x.into())))
+            }
+            bindings::Value::Literal(Literal::Bool(x)) => {
+                Ok(PlanValue::Literal(PlanData(x.into())))
+            }
+            bindings::Value::Literal(Literal::Datetime(x)) => Ok(PlanValue::Literal(x.try_into()?)),
+            bindings::Value::Literal(Literal::Toml { literal }) => {
+                Ok(PlanValue::Literal(PlanData::try_from(literal)?))
+            }
+            bindings::Value::Literal(Literal::Base64 { base64 }) => {
+                Ok(PlanValue::Literal(PlanData(base64.into())))
+            }
+            bindings::Value::Literal(Literal::Enum { .. }) => Err(Error(
+                "enumerations are not supported for this field".to_owned(),
+            )),
             bindings::Value::ExpressionCel { cel, vars } => Ok(PlanValue::Dynamic {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
@@ -2413,7 +3079,7 @@ where
                 // map -> table conversion.
                 .flat_map(|(k, v)| match v {
                     bindings::ValueOrArray::Array(a) => {
-                        a.into_iter().map(|v| (k.clone(), v)).collect::<Vec<_>>()
+                        a.into_iter().map(|v| (k.clone(), v)).collect_vec()
                     }
                     bindings::ValueOrArray::Value(v) => vec![(k, v)],
                 })

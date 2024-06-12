@@ -1,3 +1,4 @@
+mod buffer;
 mod extract;
 pub mod graphql;
 pub mod http;
@@ -7,6 +8,7 @@ pub mod http2frames;
 mod pause;
 mod runner;
 pub mod tcp;
+pub mod tcpsegments;
 mod tee;
 pub mod tls;
 
@@ -305,10 +307,13 @@ impl<'a> Executor<'a> {
                     StepPlanOutput::H2c(req) => inputs.current.h2c = Some(req.clone()),
                     StepPlanOutput::H2(req) => inputs.current.h2 = Some(req.clone()),
                     StepPlanOutput::Http2Frames(req) => {
-                        inputs.current.http2frames = Some(req.clone())
+                        inputs.current.http2_frames = Some(req.clone())
                     }
                     StepPlanOutput::Tls(req) => inputs.current.tls = Some(req.clone()),
                     StepPlanOutput::Tcp(req) => inputs.current.tcp = Some(req.clone()),
+                    StepPlanOutput::TcpSegments(req) => {
+                        inputs.current.tcp_segments = Some(req.clone())
+                    }
                 }
                 Ok(req)
             })
@@ -369,9 +374,10 @@ impl<'a> Executor<'a> {
                 Output::H1(out) => output.h1 = Some(out),
                 Output::H2c(out) => output.h2c = Some(out),
                 Output::H2(out) => output.h2 = Some(out),
-                Output::Http2Frames(out) => output.http2frames = Some(out),
+                Output::Http2Frames(out) => output.http2_frames = Some(out),
                 Output::Tls(out) => output.tls = Some(out),
                 Output::Tcp(out) => output.tcp = Some(out),
+                Output::TcpSegments(out) => output.tcp_segments = Some(out),
             }
             let Some(inner) = inner else {
                 break;

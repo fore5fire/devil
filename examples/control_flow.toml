@@ -1,4 +1,4 @@
-courier.version = 0
+devil.version = 0
 
 [count_example.http]
 url = "https://example.com/test"
