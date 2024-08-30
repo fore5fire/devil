@@ -2,6 +2,7 @@ use std::mem;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use anyhow::{anyhow, bail};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::runner::Runner;
@@ -9,8 +10,8 @@ use super::tcp::TcpRunner;
 use super::tls::TlsRunner;
 use super::{http1::Http1Runner, Context};
 use crate::{
-    Error, HttpOutput, HttpPauseOutput, HttpPlanOutput, HttpRequestOutput, HttpResponse,
-    TcpPlanOutput, TlsPlanOutput,
+    HttpOutput, HttpPauseOutput, HttpPlanOutput, HttpRequestOutput, HttpResponse, TcpPlanOutput,
+    TlsPlanOutput,
 };
 
 #[derive(Debug)]
@@ -87,12 +88,12 @@ impl HttpRunner {
                 host: plan
                     .url
                     .host()
-                    .ok_or_else(|| Error("url is missing host".to_owned()))?
+                    .ok_or_else(|| anyhow!("url is missing host"))?
                     .to_string(),
                 port: plan
                     .url
                     .port_or_known_default()
-                    .ok_or_else(|| Error("url is missing port".to_owned()))?,
+                    .ok_or_else(|| anyhow!("url is missing port"))?,
                 body: Vec::new(),
                 pause: crate::TcpPauseOutput::default(),
             },
@@ -105,12 +106,12 @@ impl HttpRunner {
                     host: plan
                         .url
                         .host()
-                        .ok_or_else(|| Error("url is missing host".to_owned()))?
+                        .ok_or_else(|| anyhow!("url is missing host"))?
                         .to_string(),
                     port: plan
                         .url
                         .port_or_known_default()
-                        .ok_or_else(|| Error("url is missing port".to_owned()))?,
+                        .ok_or_else(|| anyhow!("url is missing port"))?,
                     alpn: vec![b"http/1.1".to_vec() /*, b"h2".to_vec()*/],
                     body: Vec::new(),
                     pause: crate::TlsPauseOutput::default(),
@@ -160,10 +161,10 @@ impl HttpRunner {
         }
     }
 
-    pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn start(&mut self) -> anyhow::Result<()> {
         let state = mem::replace(&mut self.state, State::Running);
         let State::Pending { transports } = state else {
-            panic!("invalid state to call start")
+            bail!("invalid state to call start")
         };
 
         let mut transport = None;

@@ -101,7 +101,7 @@ impl Runner {
         &mut self,
         transport: Option<Runner>,
         concurrent_shares: usize,
-    ) -> BoxFuture<Result<(), Box<dyn std::error::Error + Send + Sync>>> {
+    ) -> BoxFuture<anyhow::Result<()>> {
         match self {
             Self::TcpSegments(r) => {
                 assert!(transport.is_none());

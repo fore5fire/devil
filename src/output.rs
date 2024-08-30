@@ -1286,11 +1286,11 @@ impl From<TcpError> for Value {
 #[derive(Debug, Clone)]
 pub struct TcpSegmentsOutput {
     pub plan: TcpSegmentsPlanOutput,
-    pub remote_host: String,
-    pub remote_port: u16,
+    pub dest_host: String,
+    pub dest_port: u16,
     pub sent: Vec<TcpSegmentOutput>,
-    pub local_host: String,
-    pub local_port: u16,
+    pub src_host: String,
+    pub src_port: u16,
     pub received: Vec<TcpSegmentOutput>,
     pub errors: Vec<TcpSegmentsError>,
     pub duration: Duration,
@@ -1303,10 +1303,10 @@ impl From<TcpSegmentsOutput> for Value {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("plan".into(), value.plan.into()),
-                ("remote_host".into(), value.remote_host.into()),
-                ("remote_port".into(), u64::from(value.remote_port).into()),
-                ("local_host".into(), value.local_host.into()),
-                ("local_port".into(), u64::from(value.local_port).into()),
+                ("dest_host".into(), value.dest_host.into()),
+                ("dest_port".into(), u64::from(value.dest_port).into()),
+                ("src_host".into(), value.src_host.into()),
+                ("src_port".into(), u64::from(value.src_port).into()),
                 ("sent".into(), value.sent.into()),
                 ("received".into(), value.received.into()),
                 ("errors".into(), value.errors.into()),
@@ -1347,12 +1347,12 @@ pub struct TcpSegmentPauseOutput {}
 
 #[derive(Debug, Clone)]
 pub struct TcpSegmentsPlanOutput {
-    pub remote_address: String,
-    pub remote_port: u16,
-    pub local_address: String,
-    pub local_port: u16,
+    pub dest_host: String,
+    pub dest_port: u16,
+    pub src_host: Option<String>,
+    pub src_port: Option<u16>,
     pub isn: u32,
-    pub window: Option<u16>,
+    pub window: u16,
     pub segments: Vec<TcpSegmentOutput>,
     pub pause: TcpSegmentsPauseOutput,
 }
@@ -1361,18 +1361,21 @@ impl From<TcpSegmentsPlanOutput> for Value {
     fn from(value: TcpSegmentsPlanOutput) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
+                ("dest_host".into(), Value::String(Arc::new(value.dest_host))),
+                ("dest_port".into(), u64::from(value.dest_port).into()),
                 (
-                    "remote_address".into(),
-                    Value::String(Arc::new(value.remote_address)),
+                    "src_host".into(),
+                    value
+                        .src_host
+                        .map(|src_host| Value::String(Arc::new(src_host)))
+                        .into(),
                 ),
-                ("remote_port".into(), u64::from(value.remote_port).into()),
                 (
-                    "local_address".into(),
-                    Value::String(Arc::new(value.local_address)),
+                    "src_port".into(),
+                    value.src_port.map(|src_port| u64::from(src_port)).into(),
                 ),
-                ("local_port".into(), u64::from(value.local_port).into()),
                 ("isn".into(), u64::from(value.isn).into()),
-                ("window".into(), value.window.map(u64::from).into()),
+                ("window".into(), u64::from(value.window).into()),
                 (
                     "segments".into(),
                     Value::List(Arc::new(
@@ -1421,11 +1424,11 @@ impl From<TcpSegmentOutput> for Value {
 #[derive(Debug, Clone)]
 pub enum TcpSegmentOptionOutput {
     Nop,
-    Timestamps { tsval: u32, tsecr: u32 },
     Mss(u16),
     Wscale(u8),
     SackPermitted,
     Sack(Vec<u32>),
+    Timestamps { tsval: u32, tsecr: u32 },
     Raw { kind: u8, value: Vec<u8> },
 }
 
@@ -1441,6 +1444,30 @@ impl TcpSegmentOptionOutput {
     pub const WSCALE_KIND: &'static str = "wscale";
     pub const SACK_PERMITTED_KIND: &'static str = "sack_permitted";
     pub const SACK_KIND: &'static str = "sack";
+
+    // the number of bytes required for the option on the wire. See
+    // https://www.iana.org/assignments/tcp-parameters/tcp-parameters.xhtml
+    pub fn size(&self) -> usize {
+        match self {
+            Self::Nop => 1,
+            Self::Mss(_) => 4,
+            Self::Wscale(_) => 3,
+            Self::SackPermitted => 2,
+            Self::Sack(vals) => vals
+                .len()
+                .checked_mul(4)
+                .expect("tcp sack option size calculation should not overflow")
+                .checked_add(2)
+                .expect("tcp sack option size calculation should not overflow"),
+            Self::Timestamps { .. } => 10,
+            // Except for nop and end-of-options-list, options are a kind byte, a length byte, and
+            // the value bytes.
+            Self::Raw { value, .. } => value
+                .len()
+                .checked_add(2)
+                .expect("tcp raw option size calculation should not overflow"),
+        }
+    }
 }
 
 impl From<TcpSegmentOptionOutput> for Value {

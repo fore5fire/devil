@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use anyhow::{anyhow, bail};
 use indexmap::IndexMap;
 use itertools::{Either, Itertools};
 use serde::{Deserialize, Serialize};
@@ -17,7 +18,7 @@ pub struct Plan {
 
 impl Plan {
     pub fn parse(input: &str) -> crate::Result<Plan> {
-        let mut plan: Plan = toml::from_str(input).map_err(|e| crate::Error(e.to_string()))?;
+        let mut plan: Plan = toml::from_str(input)?;
         plan.validate()?;
         Ok(plan)
     }
@@ -26,7 +27,7 @@ impl Plan {
         self.devil.validate()?;
         for (name, step) in &mut self.steps {
             step.validate()
-                .map_err(|e| crate::Error(format!("validate step {}: {}", name, e)))?;
+                .map_err(|e| anyhow!("validate step {}: {}", name, e))?;
         }
         Ok(())
     }
@@ -46,7 +47,7 @@ pub struct Settings {
 impl Settings {
     fn validate(&self) -> crate::Result<()> {
         if !self.unrecognized.is_empty() {
-            return Err(crate::Error(format!(
+            bail!(
                 "unrecognized field devil.{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
@@ -54,7 +55,7 @@ impl Settings {
                     "s"
                 },
                 self.unrecognized.keys().join(", "),
-            )));
+            );
         }
         Ok(())
     }
@@ -462,7 +463,7 @@ impl Step {
             }
         }
         if !self.unrecognized.is_empty() {
-            return Err(crate::Error(format!(
+            bail!(
                 "unrecognized field{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
@@ -470,7 +471,7 @@ impl Step {
                     "s"
                 },
                 self.unrecognized.keys().join(", "),
-            )));
+            );
         }
         Ok(())
     }
@@ -826,15 +827,15 @@ impl GraphQl {
         if let Some(p) = &self.pause {
             p.validate()?;
             if !p.unrecognized.is_empty() {
-                return Err(crate::Error(format!(
+                bail!(
                     "unrecognized field{} {}",
                     if p.unrecognized.len() == 1 { "" } else { "s" },
                     p.unrecognized.keys().join(", "),
-                )));
+                );
             }
         }
         if !self.unrecognized.is_empty() {
-            return Err(crate::Error(format!(
+            bail!(
                 "unrecognized field{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
@@ -842,7 +843,7 @@ impl GraphQl {
                     "s"
                 },
                 self.unrecognized.keys().join(", "),
-            )));
+            );
         }
         Ok(())
     }
@@ -869,7 +870,7 @@ impl Merge for GraphQlPause {
 impl GraphQlPause {
     fn validate(&self) -> crate::Result<()> {
         if !self.unrecognized.is_empty() {
-            return Err(crate::Error(format!(
+            bail!(
                 "unrecognized field{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
@@ -877,7 +878,7 @@ impl GraphQlPause {
                     "s"
                 },
                 self.unrecognized.keys().join(", "),
-            )));
+            );
         }
         Ok(())
     }
@@ -917,7 +918,7 @@ impl Http {
             p.validate()?;
         }
         if !self.unrecognized.is_empty() {
-            return Err(crate::Error(format!(
+            bail!(
                 "unrecognized field{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
@@ -925,7 +926,7 @@ impl Http {
                     "s"
                 },
                 self.unrecognized.keys().join(", "),
-            )));
+            );
         }
         Ok(())
     }
@@ -963,7 +964,7 @@ impl Merge for HttpPause {
 impl HttpPause {
     fn validate(&self) -> crate::Result<()> {
         if !self.unrecognized.is_empty() {
-            return Err(crate::Error(format!(
+            bail!(
                 "unrecognized field{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
@@ -971,7 +972,7 @@ impl HttpPause {
                     "s"
                 },
                 self.unrecognized.keys().join(", "),
-            )));
+            );
         }
         Ok(())
     }
@@ -1042,7 +1043,7 @@ impl Http1Pause {
             open.validate()?;
         }
         if !self.unrecognized.is_empty() {
-            return Err(crate::Error(format!(
+            bail!(
                 "unrecognized field{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
@@ -1050,7 +1051,7 @@ impl Http1Pause {
                     "s"
                 },
                 self.unrecognized.keys().join(", "),
-            )));
+            );
         }
         Ok(())
     }
@@ -1118,7 +1119,7 @@ impl Http2Pause {
             open.validate()?;
         }
         if !self.unrecognized.is_empty() {
-            return Err(crate::Error(format!(
+            bail!(
                 "unrecognized field{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
@@ -1126,7 +1127,7 @@ impl Http2Pause {
                     "s"
                 },
                 self.unrecognized.keys().join(", "),
-            )));
+            );
         }
         Ok(())
     }
@@ -1160,7 +1161,7 @@ impl Http2Frames {
             p.validate()?;
         }
         if !self.unrecognized.is_empty() {
-            return Err(crate::Error(format!(
+            bail!(
                 "unrecognized field{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
@@ -1168,7 +1169,7 @@ impl Http2Frames {
                     "s"
                 },
                 self.unrecognized.keys().join(", "),
-            )));
+            );
         }
         Ok(())
     }
@@ -1201,7 +1202,7 @@ impl Http2FramesPause {
             handshake.validate()?;
         }
         if !self.unrecognized.is_empty() {
-            return Err(crate::Error(format!(
+            bail!(
                 "unrecognized field{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
@@ -1209,7 +1210,7 @@ impl Http2FramesPause {
                     "s"
                 },
                 self.unrecognized.keys().join(", "),
-            )));
+            );
         }
         Ok(())
     }
@@ -1271,7 +1272,7 @@ impl Tls {
             p.validate()?;
         }
         if !self.unrecognized.is_empty() {
-            return Err(crate::Error(format!(
+            bail!(
                 "unrecognized field{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
@@ -1279,7 +1280,7 @@ impl Tls {
                     "s"
                 },
                 self.unrecognized.keys().join(", "),
-            )));
+            );
         }
         Ok(())
     }
@@ -1313,7 +1314,7 @@ impl Merge for TlsPause {
 impl TlsPause {
     fn validate(&self) -> crate::Result<()> {
         if !self.unrecognized.is_empty() {
-            return Err(crate::Error(format!(
+            bail!(
                 "unrecognized field{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
@@ -1321,7 +1322,7 @@ impl TlsPause {
                     "s"
                 },
                 self.unrecognized.keys().join(", "),
-            )));
+            );
         }
         Ok(())
     }
@@ -1357,7 +1358,7 @@ impl Tcp {
             p.validate()?;
         }
         if !self.unrecognized.is_empty() {
-            return Err(crate::Error(format!(
+            bail!(
                 "unrecognized field{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
@@ -1365,7 +1366,7 @@ impl Tcp {
                     "s"
                 },
                 self.unrecognized.keys().join(", "),
-            )));
+            );
         }
         Ok(())
     }
@@ -1399,7 +1400,7 @@ impl Merge for TcpPause {
 impl TcpPause {
     fn validate(&self) -> crate::Result<()> {
         if !self.unrecognized.is_empty() {
-            return Err(crate::Error(format!(
+            bail!(
                 "unrecognized field{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
@@ -1407,7 +1408,7 @@ impl TcpPause {
                     "s"
                 },
                 self.unrecognized.keys().join(", "),
-            )));
+            );
         }
         Ok(())
     }
@@ -1415,11 +1416,12 @@ impl TcpPause {
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct TcpSegments {
-    pub remote_host: Option<Value>,
-    pub remote_port: Option<Value>,
-    pub local_host: Option<Value>,
-    pub local_port: Option<Value>,
+    pub dest_host: Option<Value>,
+    pub dest_port: Option<Value>,
+    pub src_host: Option<Value>,
+    pub src_port: Option<Value>,
     pub isn: Option<Value>,
+    pub window: Option<Value>,
     pub segments: Option<ValueOrArray<TcpSegment>>,
     #[serde(default)]
     pub pause: Option<TcpSegmentsPause>,
@@ -1433,11 +1435,12 @@ impl TcpSegments {
             return self;
         };
         Self {
-            remote_host: Value::merge(self.remote_host, default.remote_host),
-            remote_port: Value::merge(self.remote_port, default.remote_port),
-            local_host: Value::merge(self.local_host, default.local_host),
-            local_port: Value::merge(self.local_port, default.local_port),
+            dest_host: Value::merge(self.dest_host, default.dest_host),
+            dest_port: Value::merge(self.dest_port, default.dest_port),
+            src_host: Value::merge(self.src_host, default.src_host),
+            src_port: Value::merge(self.src_port, default.src_port),
             isn: Value::merge(self.isn, default.isn),
+            window: Value::merge(self.window, default.window),
             segments: ValueOrArray::merge(self.segments, default.segments),
             pause: TcpSegmentsPause::merge(self.pause, default.pause),
             unrecognized: toml::Table::new(),
@@ -1452,7 +1455,7 @@ impl TcpSegments {
             p.validate()?;
         }
         if !self.unrecognized.is_empty() {
-            return Err(crate::Error(format!(
+            bail!(
                 "unrecognized field{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
@@ -1460,7 +1463,7 @@ impl TcpSegments {
                     "s"
                 },
                 self.unrecognized.keys().join(", "),
-            )));
+            );
         }
         Ok(())
     }
@@ -1513,7 +1516,7 @@ impl Merge for TcpSegment {
 impl TcpSegment {
     fn validate(&self) -> crate::Result<()> {
         if !self.unrecognized.is_empty() {
-            return Err(crate::Error(format!(
+            bail!(
                 "unrecognized field{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
@@ -1521,7 +1524,7 @@ impl TcpSegment {
                     "s"
                 },
                 self.unrecognized.keys().join(", "),
-            )));
+            );
         }
         Ok(())
     }
@@ -1551,7 +1554,7 @@ impl Merge for TcpSegmentsPause {
 impl TcpSegmentsPause {
     fn validate(&self) -> crate::Result<()> {
         if !self.unrecognized.is_empty() {
-            return Err(crate::Error(format!(
+            bail!(
                 "unrecognized field{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
@@ -1559,7 +1562,7 @@ impl TcpSegmentsPause {
                     "s"
                 },
                 self.unrecognized.keys().join(", "),
-            )));
+            );
         }
         Ok(())
     }
@@ -1597,7 +1600,7 @@ impl Quic {
             p.validate()?;
         }
         if !self.unrecognized.is_empty() {
-            return Err(crate::Error(format!(
+            bail!(
                 "unrecognized field{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
@@ -1605,7 +1608,7 @@ impl Quic {
                     "s"
                 },
                 self.unrecognized.keys().join(", "),
-            )));
+            );
         }
         Ok(())
     }
@@ -1635,7 +1638,7 @@ impl Merge for QuicPause {
 impl QuicPause {
     fn validate(&self) -> crate::Result<()> {
         if !self.unrecognized.is_empty() {
-            return Err(crate::Error(format!(
+            bail!(
                 "unrecognized field{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
@@ -1643,7 +1646,7 @@ impl QuicPause {
                     "s"
                 },
                 self.unrecognized.keys().join(", "),
-            )));
+            );
         }
         Ok(())
     }
@@ -1681,7 +1684,7 @@ impl Udp {
             p.validate()?;
         }
         if !self.unrecognized.is_empty() {
-            return Err(crate::Error(format!(
+            bail!(
                 "unrecognized field{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
@@ -1689,7 +1692,7 @@ impl Udp {
                     "s"
                 },
                 self.unrecognized.keys().join(", "),
-            )));
+            );
         }
         Ok(())
     }
@@ -1721,7 +1724,7 @@ impl Merge for UdpPause {
 impl UdpPause {
     fn validate(&self) -> crate::Result<()> {
         if !self.unrecognized.is_empty() {
-            return Err(crate::Error(format!(
+            bail!(
                 "unrecognized field{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
@@ -1729,7 +1732,7 @@ impl UdpPause {
                     "s"
                 },
                 self.unrecognized.keys().join(", "),
-            )));
+            );
         }
         Ok(())
     }
@@ -1767,7 +1770,7 @@ impl PausePoints {
             pause.validate()?;
         }
         if !self.unrecognized.is_empty() {
-            return Err(crate::Error(format!(
+            bail!(
                 "unrecognized field{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
@@ -1775,7 +1778,7 @@ impl PausePoints {
                     "s"
                 },
                 self.unrecognized.keys().join(", "),
-            )));
+            );
         }
         Ok(())
     }
@@ -1793,7 +1796,7 @@ pub struct PauseValue {
 impl PauseValue {
     fn validate(&self) -> crate::Result<()> {
         if !self.unrecognized.is_empty() {
-            return Err(crate::Error(format!(
+            bail!(
                 "unrecognized field{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
@@ -1801,7 +1804,7 @@ impl PauseValue {
                     "s"
                 },
                 self.unrecognized.keys().join(", "),
-            )));
+            );
         }
         Ok(())
     }

@@ -2,6 +2,7 @@ use std::task::Poll;
 use std::time::Instant;
 use std::{pin::Pin, sync::Arc};
 
+use anyhow::{anyhow, bail};
 use chrono::Duration;
 use rustls::pki_types::ServerName;
 use rustls::RootCertStore;
@@ -127,10 +128,7 @@ impl TlsRunner {
         None
     }
 
-    pub async fn start(
-        &mut self,
-        transport: Runner,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn start(&mut self, transport: Runner) -> anyhow::Result<()> {
         let state = std::mem::replace(&mut self.state, State::Invalid);
         let State::Pending {
             connector,
@@ -138,9 +136,7 @@ impl TlsRunner {
             pause,
         } = state
         else {
-            return Err(Box::new(Error(
-                "attempt to start TlsRunner from unexpected state".to_owned(),
-            )));
+            bail!("attempt to start TlsRunner from unexpected state");
         };
 
         // FIXME: Why does rustls ClientConnector require a static lifetime for DNS names?
@@ -154,7 +150,7 @@ impl TlsRunner {
                 });
                 self.state = State::StartFailed { transport };
                 self.complete();
-                return Err(Box::new(e));
+                return Err(e.into());
             }
         };
 
@@ -166,9 +162,7 @@ impl TlsRunner {
             .reserve_exact(self.out.plan.pause.handshake.start.len());
         for p in &self.out.plan.pause.handshake.start {
             if p.offset_bytes != 0 {
-                return Err(Box::new(Error(
-                    "pause offset not yet supported for tls handshake".to_string(),
-                )));
+                bail!("pause offset not yet supported for tls handshake");
             }
             println!("pausing before tls handshake for {:?}", p.duration);
             self.out
@@ -187,9 +181,7 @@ impl TlsRunner {
         let handshake_duration = start.elapsed();
         for p in &self.out.plan.pause.handshake.end {
             if p.offset_bytes != 0 {
-                return Err(Box::new(Error(
-                    "pause offset not yet supported for tls handshake".to_string(),
-                )));
+                bail!("pause offset not yet supported for tls handshake");
             }
             println!("pausing after tls handshake for {:?}", p.duration);
             self.out
@@ -200,9 +192,7 @@ impl TlsRunner {
         }
         self.out.handshake_duration = Some(Duration::from_std(handshake_duration).unwrap());
         if !pause.receive_body.end.is_empty() {
-            return Err(Box::new(Error(
-                "tls.pause.receive_body.end is unsupported in this request".to_owned(),
-            )));
+            bail!("tls.pause.receive_body.end is unsupported in this request");
         }
         self.state = State::Open {
             start,
@@ -227,9 +217,7 @@ impl TlsRunner {
                     ]
                 } else {
                     if !pause.send_body.end.is_empty() {
-                        return Err(Box::new(Error(
-                            "tls.pause.send_body.end is unsupported in this request".to_owned(),
-                        )));
+                        bail!("tls.pause.send_body.end is unsupported in this request");
                     }
                     vec![PauseSpec {
                         group_offset: 0,
@@ -367,10 +355,10 @@ impl AsyncRead for TlsRunner {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         let State::Open { transport, .. } = &mut self.state else {
-            return Poll::Ready(Err(std::io::Error::other(Error(format!(
+            return Poll::Ready(Err(std::io::Error::other(anyhow!(
                 "cannot read stream in {:?} state",
                 self.state
-            )))));
+            ))));
         };
         Pin::new(transport).poll_read(cx, buf)
     }
@@ -383,10 +371,10 @@ impl AsyncWrite for TlsRunner {
         buf: &[u8],
     ) -> std::task::Poll<Result<usize, std::io::Error>> {
         let State::Open { transport, .. } = &mut self.state else {
-            return Poll::Ready(Err(std::io::Error::other(Error(format!(
+            return Poll::Ready(Err(std::io::Error::other(anyhow!(
                 "cannot write stream in {:?} state",
                 self.state
-            )))));
+            ))));
         };
         let poll = Pin::new(transport).poll_write(cx, buf);
         if let Poll::Ready(Ok(_)) = &poll {
@@ -400,10 +388,10 @@ impl AsyncWrite for TlsRunner {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
         let State::Open { transport, .. } = &mut self.state else {
-            return Poll::Ready(Err(std::io::Error::other(Error(format!(
+            return Poll::Ready(Err(std::io::Error::other(anyhow!(
                 "cannot flush stream in {:?} state",
                 self.state
-            )))));
+            ))));
         };
         Pin::new(transport).poll_flush(cx)
     }
@@ -413,10 +401,10 @@ impl AsyncWrite for TlsRunner {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
         let State::Open { transport, .. } = &mut self.state else {
-            return Poll::Ready(Err(std::io::Error::other(Error(format!(
+            return Poll::Ready(Err(std::io::Error::other(anyhow!(
                 "cannot shutdown stream in {:?} state",
                 self.state
-            )))));
+            ))));
         };
         let poll = Pin::new(transport).poll_shutdown(cx);
         if let Poll::Ready(Ok(())) = &poll {

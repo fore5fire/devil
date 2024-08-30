@@ -91,6 +91,6 @@ selector = ["dtls"]
     h2c.add_content_length = "auto"
     h2.method = "GET"
     h2.add_content_length = "auto"
-    tcp_segments.remote_host.cel = "current.tcp.plan.host"
-    tcp_segments.remote_port.cel = "current.tcp.plan.port"
+    tcp_segments.dest_host.cel = "current.tcp.plan.host"
+    tcp_segments.dest_port.cel = "current.tcp.plan.port"
 

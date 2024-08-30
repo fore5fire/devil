@@ -59,7 +59,7 @@ impl GraphQlRunner {
             resp_start_time: None,
             end_time: None,
             resp: Vec::new(),
-            http_body: serde_json::to_vec(&body).map_err(|e| crate::Error(e.to_string()))?,
+            http_body: serde_json::to_vec(&body)?,
         })
     }
 }
@@ -73,10 +73,7 @@ impl<'a> GraphQlRunner {
         Some(self.http_body.len())
     }
 
-    pub async fn start(
-        &mut self,
-        transport: Runner,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn start(&mut self, transport: Runner) -> anyhow::Result<()> {
         self.state = State::Running {
             start_time: Instant::now(),
             transport,

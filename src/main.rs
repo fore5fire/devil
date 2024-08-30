@@ -34,16 +34,15 @@ enum Protocol {
     HTTP,
     TLS,
     TCP,
+    TCPSegments,
     UDP,
     QUIC,
     IP,
     NONE,
 }
 
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
-
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let buffer = std::fs::read(&args.file)?;
     let text = String::from_utf8(buffer)?;
@@ -73,6 +72,16 @@ fn print_proto(args: &Args, proto: &StepOutput) {
     // TODO: escape or refuse to print dangerous term characters in output.
     for level in &args.request_level {
         match level {
+            Protocol::TCPSegments => {
+                if let Some(segments) = &proto.tcp_segments {
+                    for req in &segments.sent {
+                        println!(
+                            "> {}",
+                            String::from_utf8_lossy(&req.payload).replace("\n", "\n> ")
+                        );
+                    }
+                }
+            }
             Protocol::TCP => {
                 if let Some(tcp) = &proto.tcp {
                     if let Some(req) = &tcp.request {
@@ -243,6 +252,8 @@ fn print_proto(args: &Args, proto: &StepOutput) {
             &[Protocol::TLS]
         } else if proto.tcp.is_some() {
             &[Protocol::TCP]
+        } else if proto.tcp_segments.is_some() {
+            &[Protocol::TCPSegments]
         } else {
             &[]
         }
@@ -251,6 +262,26 @@ fn print_proto(args: &Args, proto: &StepOutput) {
     for level in out_level {
         // Default output is at the highest level protocol in the request.
         match level {
+            Protocol::TCPSegments => {
+                if let Some(segments) = &proto.tcp_segments {
+                    for segment in &segments.received {
+                        println!(
+                            "< {}",
+                            String::from_utf8_lossy(&segment.payload).replace("\n", "\n< ")
+                        );
+                    }
+                    for e in &segments.errors {
+                        println!("{} error: {}", e.kind, e.message);
+                    }
+                    for p in &segments.pause.handshake.start {
+                        println!("handshake start pause duration: {}", p.duration);
+                    }
+                    for p in &segments.pause.handshake.end {
+                        println!("handshake end pause duration: {}", p.duration);
+                    }
+                    println!("total duration: {}", segments.duration);
+                }
+            }
             Protocol::TCP => {
                 if let Some(tcp) = &proto.tcp {
                     if let Some(resp) = &tcp.response {

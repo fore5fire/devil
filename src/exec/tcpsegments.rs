@@ -1,13 +1,6 @@
-use std::{
-    io, mem,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    pin::Pin,
-    str::FromStr,
-    sync::Arc,
-    task::Poll,
-    time::Instant,
-};
+use std::{io, mem, net::IpAddr, pin::Pin, str::FromStr, sync::Arc, task::Poll, time::Instant};
 
+use anyhow::{anyhow, bail};
 use chrono::Duration;
 use futures::{Future, TryFutureExt};
 use itertools::Itertools;
@@ -32,7 +25,6 @@ use crate::{
 };
 
 use super::Context;
-use crate::Error;
 
 #[derive(Debug)]
 pub(super) struct TcpSegmentsRunner {
@@ -40,6 +32,8 @@ pub(super) struct TcpSegmentsRunner {
     out: TcpSegmentsOutput,
     state: State,
     start_time: Option<Instant>,
+    remote_ip: Option<IpAddr>,
+    local_ip: Option<IpAddr>,
 }
 
 type OwnedBoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
@@ -93,12 +87,15 @@ impl TcpSegmentsRunner {
             state: State::Pending {
                 pause: plan.pause.clone(),
             },
+            start_time: None,
+            remote_ip: None,
+            local_ip: None,
             out: TcpSegmentsOutput {
-                remote_host: plan.remote_host.clone(),
-                remote_port: plan.remote_port,
+                dest_host: String::new(),
+                dest_port: plan.dest_port,
                 sent: Vec::new(),
-                local_host: plan.local_host.clone(),
-                local_port: plan.local_port,
+                src_host: String::new(),
+                src_port: 0,
                 received: Vec::new(),
                 errors: Vec::new(),
                 duration: Duration::zero(),
@@ -106,31 +103,27 @@ impl TcpSegmentsRunner {
                 pause: TcpSegmentsPauseOutput::with_planned_capacity(&plan.pause),
                 plan,
             },
-            start_time: None,
         }
     }
 
-    pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn start(&mut self) -> anyhow::Result<()> {
         let state = std::mem::replace(&mut self.state, State::Invalid);
         let State::Pending { pause } = state else {
-            return Err(Box::new(Error(format!(
-                "attempt to start TcpRunner from unexpected state: {state:?}",
-            ))));
+            bail!("attempt to start TcpRunner from unexpected state: {state:?}");
         };
 
         let (mut write, mut read) = transport::transport_channel(
-            2048,
+            65535,
             TransportChannelType::Layer4(transport::TransportProtocol::Ipv4(
                 IpNextHeaderProtocols::Tcp,
             )),
         )
-        .map_err(|e| {
+        .inspect_err(|e| {
             self.out.errors.push(TcpSegmentsError {
                 kind: e.kind().to_string(),
                 message: e.to_string(),
             });
             self.state = State::Completed;
-            Error(e.to_string())
         })?;
 
         // TODO: Use AsyncFd instead of one thread per request.
@@ -206,20 +199,47 @@ impl TcpSegmentsRunner {
             },
         );
 
-        let Some(remote_addr) =
-            net::lookup_host(format!("{}:{}", self.out.remote_host, self.out.remote_port))
-                .await?
-                .next()
-        else {
+        let Some(remote_addr) = net::lookup_host(format!(
+            "{}:{}",
+            self.out.plan.dest_host, self.out.plan.dest_port
+        ))
+        .await
+        .map_err(|e| {
+            anyhow!(
+                "lookup host '{}:{}': {e}",
+                self.out.plan.dest_host,
+                self.out.plan.dest_port
+            )
+        })?
+        .next() else {
             self.out.errors.push(TcpSegmentsError {
                 kind: "dns lookup".to_owned(),
-                message: format!("dns lookup for {} failed", self.out.remote_host),
+                message: format!(
+                    "no A records found for tcp_segments.dest_host '{}'",
+                    self.out.plan.dest_host
+                ),
             });
-            return Err(Box::new(crate::Error(format!(
-                "dns lookup for {} failed",
-                self.out.remote_host
-            ))));
+            bail!(
+                "no A records found for tcp_segments.dest_host '{}'",
+                self.out.plan.dest_host
+            );
         };
+        let src_host = self
+            .out
+            .plan
+            .src_host
+            .clone()
+            .unwrap_or_else(|| "127.0.0.1".to_owned());
+        let src_port = self.out.plan.src_port.unwrap_or_else(|| 8888);
+        self.remote_ip = Some(remote_addr.ip());
+        self.local_ip = Some(
+            IpAddr::from_str(&src_host)
+                .map_err(|e| anyhow!("parse tcp_segments.src_host '{src_host}': {e}"))?,
+        );
+        // Record the actual resolved destination and source IPs for the output.
+        self.out.dest_host = remote_addr.to_string();
+        self.out.src_host = src_host;
+        self.out.src_port = src_port;
 
         // TODO: Use AsyncFd instead of one thread per request.
         //let write_fd = AsyncFd::new(write.socket.fd)?;
@@ -250,9 +270,7 @@ impl TcpSegmentsRunner {
             .reserve_exact(self.out.plan.pause.handshake.start.len());
         for p in &self.out.plan.pause.handshake.start {
             if p.offset_bytes != 0 {
-                return Err(Box::new(Error(
-                    "pause offset not yet supported for tcp handshake".to_string(),
-                )));
+                bail!("pause offset not yet supported for tcp handshake");
             }
             println!("pausing before tcp handshake for {:?}", p.duration);
             self.out
@@ -262,40 +280,36 @@ impl TcpSegmentsRunner {
                 .push(Pause::new(&self.ctx, p).await?);
         }
 
-        let local_addr =
-            IpAddr::from_str(&self.out.plan.local_address).map_err(|e| Error(e.to_string()))?;
         let write_sequence_number = self.out.plan.isn;
-        let Ok((segment, send_write)) = Self::send(
+        let (segment, send_write) = Self::send(
             TcpSegmentOutput {
-                source: self.out.local_port,
-                destination: self.out.remote_port,
+                source: self.out.src_port,
+                destination: self.out.dest_port,
                 sequence_number: write_sequence_number,
                 flags: TcpFlags::SYN,
                 // TODO: congestion control if no window specified?
-                window: self.out.plan.window.unwrap_or(u16::MAX),
+                window: self.out.plan.window,
                 acknowledgment: 0,
                 checksum: None,
-                data_offset: 0,
+                // Packet with no options or padding is 5 32-bit words.
+                data_offset: Self::data_offset(&Vec::new()),
                 urgent_ptr: 0,
                 reserved: 0,
                 options: Vec::new(),
                 payload: Vec::new(),
             },
-            local_addr,
-            remote_addr.ip(),
+            self.local_ip.unwrap(),
+            self.remote_ip.unwrap(),
             send_write,
         )
         .await
-        else {
+        .inspect_err(|e| {
             self.out.errors.push(TcpSegmentsError {
-                kind: "dns lookup".to_owned(),
-                message: format!("dns lookup for {} failed", self.out.remote_host),
+                kind: "handshake".to_owned(),
+                message: format!("send SYN to '{}' failed: {e}", self.out.dest_host),
             });
-            return Err(Box::new(crate::Error(format!(
-                "dns lookup for {} failed",
-                self.out.remote_host
-            ))));
-        };
+        })
+        .map_err(|e| anyhow!("send SYN to '{}' failed: {e}", self.out.dest_host))?;
         self.out.sent.push(segment.unwrap());
 
         let handshake_duration = start.elapsed();
@@ -306,9 +320,7 @@ impl TcpSegmentsRunner {
             .reserve_exact(self.out.plan.pause.handshake.end.len());
         for p in self.out.plan.pause.handshake.end.iter() {
             if p.offset_bytes != 0 {
-                return Err(Box::new(Error(
-                    "pause offset not yet supported for tcp handshake".to_string(),
-                )));
+                bail!("pause offset not yet supported for tcp handshake");
             }
             println!("pausing after tcp handshake for {:?}", p.duration);
             self.out
@@ -350,10 +362,21 @@ impl TcpSegmentsRunner {
             .unwrap_or_else(|| Duration::zero())
     }
 
+    fn data_offset(options: &Vec<TcpSegmentOptionOutput>) -> u8 {
+        options
+            .iter()
+            .fold(0, |acc, option| acc + option.size())
+            .div_ceil(4)
+            .checked_add(5)
+            .map(|x| x.try_into().ok())
+            .flatten()
+            .expect("tcp data offset calculation should not exceed 255")
+    }
+
     async fn send<'a>(
         segment: TcpSegmentOutput,
-        checksum_source: IpAddr,
-        checksum_destination: IpAddr,
+        src_addr: IpAddr,
+        dest_addr: IpAddr,
         send: mpsc::Sender<Option<TcpPacket<'static>>>,
     ) -> io::Result<(
         Option<TcpSegmentOutput>,
@@ -398,7 +421,7 @@ impl TcpSegmentsRunner {
         if let Some(checksum) = segment.checksum {
             packet.set_checksum(checksum);
         } else {
-            match (checksum_source, checksum_destination) {
+            match (src_addr, dest_addr) {
                 (IpAddr::V4(source), IpAddr::V4(dest)) => {
                     packet.set_checksum(tcp::ipv4_checksum(&packet.to_immutable(), &source, &dest))
                 }
@@ -512,19 +535,21 @@ impl AsyncWrite for TcpSegmentsRunner {
         let pending = match mem::replace(&mut state.write, WriteState::Invalid) {
             WriteState::Ready(sender) => Box::pin(Self::send(
                 TcpSegmentOutput {
-                    source: self.out.local_port,
-                    destination: self.out.remote_port,
+                    source: self.out.src_port,
+                    destination: self.out.dest_port,
                     sequence_number: state.write_sequence_number,
                     flags: 0,
                     window: 0,
                     acknowledgment: 0,
-                    checksum: 0,
+                    checksum: None,
                     data_offset: 0,
                     urgent_ptr: 0,
                     reserved: 0,
                     options: Vec::new(),
                     payload: Vec::from(buf),
                 },
+                self.local_ip.unwrap(),
+                self.remote_ip.unwrap(),
                 sender,
             )),
             WriteState::Pending(pending) => pending,
@@ -596,8 +621,8 @@ impl AsyncWrite for TcpSegmentsRunner {
         let pending = match mem::replace(&mut state.write, WriteState::Invalid) {
             WriteState::Ready(sender) => Box::pin(Self::send(
                 TcpSegmentOutput {
-                    source: self.out.plan.local_port,
-                    destination: self.out.plan.remote_port,
+                    source: self.out.src_port,
+                    destination: self.out.dest_port,
                     //state: State::Pending {
                     //    pause: plan.pause.clone(),
                     //},
@@ -607,11 +632,13 @@ impl AsyncWrite for TcpSegmentsRunner {
                     reserved: 0,
                     flags: TcpFlags::FIN,
                     window: 0,
-                    checksum: 0,
+                    checksum: None,
                     urgent_ptr: 0,
                     options: Vec::new(),
                     payload: Vec::new(),
                 },
+                self.local_ip.unwrap(),
+                self.remote_ip.unwrap(),
                 sender,
             )),
             WriteState::Pending(pending) => pending,

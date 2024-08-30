@@ -4,11 +4,12 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::time::Instant;
 
+use anyhow::{anyhow, bail};
 use chrono::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
 
 use crate::{
-    Error, TcpError, TcpOutput, TcpPauseOutput, TcpPlanOutput, TcpRequestOutput, TcpResponse,
+    TcpError, TcpOutput, TcpPauseOutput, TcpPlanOutput, TcpRequestOutput, TcpResponse,
     WithPlannedCapacity,
 };
 
@@ -84,10 +85,7 @@ impl TcpRunner {
         Some(self.out.plan.body.len())
     }
 
-    pub async fn start(
-        &mut self,
-        transport: TcpSegmentsRunner,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn start(&mut self, transport: TcpSegmentsRunner) -> anyhow::Result<()> {
         let start = Instant::now();
         let State::Pending { pause } = mem::replace(&mut self.state, State::Invalid) else {
             panic!("invalid state to start tcp {:?}", self.state)
@@ -116,9 +114,7 @@ impl TcpRunner {
                     ]
                 } else {
                     if !pause.send_body.end.is_empty() {
-                        return Err(Box::new(Error(
-                            "tcp.pause.send_body.end is unsupported in this request".to_owned(),
-                        )));
+                        bail!("tcp.pause.send_body.end is unsupported in this request");
                     }
                     vec![PauseSpec {
                         group_offset: 0,
@@ -230,10 +226,10 @@ impl AsyncRead for TcpRunner {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         let State::Open { stream, .. } = &mut self.state else {
-            return Poll::Ready(Err(std::io::Error::other(Error(format!(
+            return Poll::Ready(Err(std::io::Error::other(anyhow!(
                 "cannot read from stream in {:?} state",
                 self.state
-            )))));
+            ))));
         };
         // Read some data.
         let result = pin!(stream).poll_read(cx, buf);
@@ -256,10 +252,10 @@ impl AsyncWrite for TcpRunner {
     ) -> std::task::Poll<Result<usize, std::io::Error>> {
         let mut state = std::mem::replace(&mut self.state, State::Invalid);
         let State::Open { stream, .. } = &mut state else {
-            return Poll::Ready(Err(std::io::Error::other(Error(format!(
+            return Poll::Ready(Err(std::io::Error::other(anyhow!(
                 "cannot write to stream in {:?} state",
                 self.state
-            )))));
+            ))));
         };
         if self.first_write.is_none() {
             self.first_write = Some(Instant::now());
@@ -275,10 +271,10 @@ impl AsyncWrite for TcpRunner {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
         let State::Open { stream, .. } = &mut self.state else {
-            return Poll::Ready(Err(std::io::Error::other(Error(format!(
+            return Poll::Ready(Err(std::io::Error::other(anyhow!(
                 "cannot flush stream in {:?} state",
                 self.state
-            )))));
+            ))));
         };
         std::pin::pin!(stream).poll_flush(cx)
     }
@@ -288,10 +284,10 @@ impl AsyncWrite for TcpRunner {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
         let State::Open { stream, .. } = &mut self.state else {
-            return Poll::Ready(Err(std::io::Error::other(Error(format!(
+            return Poll::Ready(Err(std::io::Error::other(anyhow!(
                 "cannot shutdown stream in {:?} state",
                 self.state
-            )))));
+            ))));
         };
         let poll = pin!(stream).poll_shutdown(cx);
         if let Poll::Ready(Ok(())) = &poll {

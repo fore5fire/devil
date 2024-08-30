@@ -5,7 +5,6 @@ pub mod exec;
 mod output;
 mod plan;
 
-pub use error::*;
 pub use output::*;
 pub use plan::*;
 
@@ -23,3 +22,6 @@ pub enum Charset {
     UTF16,
     UTF32,
 }
+
+pub type Error = anyhow::Error;
+pub type Result<T> = anyhow::Result<T>;

@@ -6,6 +6,7 @@ use std::{
     time::Instant,
 };
 
+use anyhow::bail;
 use bytes::Bytes;
 use chrono::Duration;
 use futures::FutureExt;
@@ -187,20 +188,14 @@ impl Http2Runner {
         Some(self.out.plan.body.len())
     }
 
-    pub async fn start(
-        &mut self,
-        mut transport: Http2FramesRunner,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn start(&mut self, mut transport: Http2FramesRunner) -> anyhow::Result<()> {
         let stream = transport.new_stream();
         self.transport = Some(transport);
         self.start_shared(stream.expect("a single stream should be available for non-shared http2"))
             .await
     }
 
-    pub async fn start_shared(
-        &mut self,
-        transport: SendRequest<Bytes>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn start_shared(&mut self, transport: SendRequest<Bytes>) -> anyhow::Result<()> {
         let state = mem::replace(&mut self.write_state, WriteState::Invalid);
         let WriteState::Ready {
             request,
@@ -208,10 +203,10 @@ impl Http2Runner {
         } = state
         else {
             self.write_state = state;
-            return Err(Box::new(crate::Error(format!(
+            bail!(
                 "attempt to start Http2Runner from invalid state {:?}",
                 self.write_state
-            ))));
+            );
         };
 
         let need_send_stream =

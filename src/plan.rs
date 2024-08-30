@@ -4,6 +4,7 @@ use crate::{
     Http2PauseOutput, HttpPauseOutput, Result, State, StepPlanOutput, TcpPauseOutput,
     TcpSegmentOptionOutput, TcpSegmentOutput, TcpSegmentsPauseOutput, TlsPauseOutput,
 };
+use anyhow::{anyhow, bail};
 use base64::Engine;
 use cel_interpreter::{Context, Program};
 use chrono::{Duration, NaiveDateTime, TimeZone};
@@ -91,7 +92,7 @@ impl FromStr for TlsVersion {
             "tls1.1" => Self::TLS1_1,
             "tls1.2" => Self::TLS1_2,
             "tls1.3" => Self::TLS1_3,
-            _ => return Err(Error(format!("invalid tls version string {}", s))),
+            _ => bail!("invalid tls version string {}", s),
         })
     }
 }
@@ -183,11 +184,11 @@ pub struct PauseValue {
 
 impl TryFrom<bindings::PauseValue> for PauseValue {
     type Error = Error;
-    fn try_from(binding: bindings::PauseValue) -> std::result::Result<Self, Self::Error> {
+    fn try_from(binding: bindings::PauseValue) -> Result<Self> {
         Ok(Self {
             duration: binding
                 .duration
-                .ok_or_else(|| Error("pause duration is required".to_owned()))?
+                .ok_or_else(|| anyhow!("pause duration is required"))?
                 .try_into()?,
             offset_bytes: binding
                 .offset_bytes
@@ -231,7 +232,7 @@ impl TryFrom<bindings::Http> for HttpRequest {
             url: binding
                 .url
                 .map(PlanValue::<Url>::try_from)
-                .ok_or_else(|| Error("http.url is required".to_owned()))??,
+                .ok_or_else(|| anyhow!("http.url is required"))??,
             method: binding
                 .method
                 .map(PlanValue::<Vec<u8>>::try_from)
@@ -239,7 +240,7 @@ impl TryFrom<bindings::Http> for HttpRequest {
             add_content_length: binding
                 .add_content_length
                 .map(PlanValue::<AddContentLength>::try_from)
-                .ok_or_else(|| Error("http.add_content_length is required".to_owned()))??,
+                .ok_or_else(|| anyhow!("http.add_content_length is required"))??,
             body: binding
                 .body
                 .map(PlanValue::<Vec<u8>>::try_from)
@@ -325,15 +326,14 @@ impl Evaluate<HttpPauseOutput> for HttpPause {
             response_body: self.response_body.evaluate(state)?,
         };
         if resp.response_headers.end.iter().any(|p| p.offset_bytes < 0) {
-            return Err(Error(
-                "http.pause.response_headers.end with negative offset is not supported".to_owned(),
-            ));
+            bail!(
+                "http.pause.response_headers.end with negative offset is not supported"
+            );
         }
         if resp.response_body.start.iter().any(|p| p.offset_bytes < 0) {
-            return Err(Error(
+            bail!(
                 "http.pause.response_headers.start with negative offset is not supported"
-                    .to_owned(),
-            ));
+            );
         }
         Ok(resp)
     }
@@ -391,7 +391,7 @@ impl TryFrom<bindings::Http1> for Http1Request {
                 .common
                 .url
                 .map(PlanValue::<Url>::try_from)
-                .ok_or_else(|| Error("http1.url is required".to_owned()))??,
+                .ok_or_else(|| anyhow!("http1.url is required"))??,
             version_string: binding
                 .version_string
                 .map(PlanValue::<Vec<u8>>::try_from)
@@ -405,7 +405,7 @@ impl TryFrom<bindings::Http1> for Http1Request {
                 .common
                 .add_content_length
                 .map(PlanValue::<AddContentLength>::try_from)
-                .ok_or_else(|| Error("http.add_content_length is required".to_owned()))??,
+                .ok_or_else(|| anyhow!("http.add_content_length is required"))??,
             headers: PlanValueTable::try_from(binding.common.headers.unwrap_or_default())?,
             body: binding
                 .common
@@ -465,15 +465,14 @@ impl Evaluate<Http1PauseOutput> for Http1Pause {
             response_body: self.response_body.evaluate(state)?,
         };
         if resp.response_headers.end.iter().any(|p| p.offset_bytes < 0) {
-            return Err(Error(
-                "http.pause.response_headers.end with negative offset is not supported".to_owned(),
-            ));
+            bail!(
+                "http.pause.response_headers.end with negative offset is not supported"
+            );
         }
         if resp.response_body.start.iter().any(|p| p.offset_bytes < 0) {
-            return Err(Error(
+            bail!(
                 "http.pause.response_headers.start with negative offset is not supported"
-                    .to_owned(),
-            ));
+            );
         }
         Ok(resp)
     }
@@ -527,7 +526,7 @@ impl TryFrom<bindings::Http2> for Http2Request {
                 .common
                 .url
                 .map(PlanValue::<Url>::try_from)
-                .ok_or_else(|| Error("http2.url is required".to_owned()))??,
+                .ok_or_else(|| anyhow!("http2.url is required"))??,
             method: binding
                 .common
                 .method
@@ -542,7 +541,7 @@ impl TryFrom<bindings::Http2> for Http2Request {
                 .common
                 .add_content_length
                 .map(PlanValue::<AddContentLength>::try_from)
-                .ok_or_else(|| Error("http2.add_content_length is required".to_owned()))??,
+                .ok_or_else(|| anyhow!("http2.add_content_length is required"))??,
             headers: PlanValueTable::try_from(binding.common.headers.unwrap_or_default())?,
             trailers: PlanValueTable::try_from(binding.trailers.unwrap_or_default())?,
             pause: binding.pause.unwrap_or_default().try_into()?,
@@ -598,15 +597,14 @@ impl Evaluate<Http2PauseOutput> for Http2Pause {
             response_body: self.response_body.evaluate(state)?,
         };
         if resp.response_headers.end.iter().any(|p| p.offset_bytes < 0) {
-            return Err(Error(
-                "http.pause.response_headers.end with negative offset is not supported".to_owned(),
-            ));
+            bail!(
+                "http.pause.response_headers.end with negative offset is not supported"
+            );
         }
         if resp.response_body.start.iter().any(|p| p.offset_bytes < 0) {
-            return Err(Error(
+            bail!(
                 "http.pause.response_headers.start with negative offset is not supported"
-                    .to_owned(),
-            ));
+            );
         }
         Ok(resp)
     }
@@ -641,11 +639,11 @@ impl TryFrom<bindings::Http2Frames> for Http2FramesRequest {
             host: binding
                 .host
                 .map(PlanValue::<String>::try_from)
-                .ok_or_else(|| Error("tcp.host is required".to_owned()))??,
+                .ok_or_else(|| anyhow!("tcp.host is required"))??,
             port: binding
                 .port
                 .map(PlanValue::<u16>::try_from)
-                .ok_or_else(|| Error("tcp.port is required".to_owned()))??,
+                .ok_or_else(|| anyhow!("tcp.port is required"))??,
             pause: binding.pause.unwrap_or_default().try_into()?,
         })
     }
@@ -716,11 +714,11 @@ impl TryFrom<bindings::GraphQl> for GraphQlRequest {
             url: binding
                 .url
                 .map(PlanValue::<Url>::try_from)
-                .ok_or_else(|| Error("graphql.url is required".to_owned()))??,
+                .ok_or_else(|| anyhow!("graphql.url is required"))??,
             query: binding
                 .query
                 .map(PlanValue::<String>::try_from)
-                .ok_or_else(|| Error("graphql.query is required".to_owned()))??,
+                .ok_or_else(|| anyhow!("graphql.query is required"))??,
             params: binding.params.map(PlanValueTable::try_from).transpose()?,
             operation: binding
                 .operation
@@ -809,11 +807,11 @@ impl TryFrom<bindings::Tcp> for TcpRequest {
             host: binding
                 .host
                 .map(PlanValue::<String>::try_from)
-                .ok_or_else(|| Error("tcp.host is required".to_owned()))??,
+                .ok_or_else(|| anyhow!("tcp.host is required"))??,
             port: binding
                 .port
                 .map(PlanValue::<u16>::try_from)
-                .ok_or_else(|| Error("tcp.port is required".to_owned()))??,
+                .ok_or_else(|| anyhow!("tcp.port is required"))??,
             body: binding
                 .body
                 .map(PlanValue::<Vec<u8>>::try_from)
@@ -868,12 +866,13 @@ impl Evaluate<TcpPauseOutput> for TcpPause {
 
 #[derive(Debug, Clone)]
 pub struct TcpSegmentsRequest {
-    pub remote_host: PlanValue<String>,
-    pub remote_port: PlanValue<u16>,
-    pub local_host: PlanValue<String>,
+    pub dest_host: PlanValue<String>,
+    pub dest_port: PlanValue<u16>,
+    pub src_host: Option<PlanValue<String>>,
     // 0 asks the implementation to select an unused port.
-    pub local_port: PlanValue<u16>,
+    pub src_port: Option<PlanValue<u16>>,
     pub isn: PlanValue<u32>,
+    pub window: PlanValue<u16>,
     pub segments: Vec<TcpSegment>,
     pub pause: TcpSegmentsPause,
 }
@@ -886,10 +885,10 @@ impl Evaluate<crate::TcpSegmentsPlanOutput> for TcpSegmentsRequest {
         I: IntoIterator<Item = O>,
     {
         Ok(crate::TcpSegmentsPlanOutput {
-            remote_host: self.remote_host.evaluate(state)?,
-            remote_port: self.remote_port.evaluate(state)?,
-            local_host: self.local_host.evaluate(state)?,
-            local_port: self.local_port.evaluate(state)?,
+            dest_host: self.dest_host.evaluate(state)?,
+            dest_port: self.dest_port.evaluate(state)?,
+            src_host: self.src_host.as_ref().map(|src_host| src_host.evaluate(state)).transpose()?,
+            src_port: self.src_port.as_ref().map(|src_port| src_port.evaluate(state)).transpose()?,
             isn: self.isn.evaluate(state)?,
             window: self.window.evaluate(state)?,
             segments: self
@@ -906,30 +905,33 @@ impl TryFrom<bindings::TcpSegments> for TcpSegmentsRequest {
     type Error = Error;
     fn try_from(binding: bindings::TcpSegments) -> Result<Self> {
         Ok(Self {
-            remote_host: binding
-                .remote_host
+            dest_host: binding
+                .dest_host
                 .map(PlanValue::<String>::try_from)
-                .ok_or_else(|| Error("tcp_segments.remote_host is required".to_owned()))??,
-            remote_port: binding
-                .remote_port
+                .ok_or_else(|| anyhow!("tcp_segments.dest_host is required"))??,
+            dest_port: binding
+                .dest_port
                 .map(PlanValue::<u16>::try_from)
-                .ok_or_else(|| Error("tcp_segments.remote_port is required".to_owned()))??,
-            local_host: binding
-                .local_host
+                .ok_or_else(|| anyhow!("tcp_segments.dest_port is required"))??,
+            src_host: binding
+                .src_host
                 .map(PlanValue::<String>::try_from)
-                .transpose()?
-                .unwrap_or_else(|| PlanValue::Literal("localhost".to_owned())),
-            local_port: binding
-                .local_port
+                .transpose()?,
+            src_port: binding
+                .src_port
                 .map(PlanValue::<u16>::try_from)
-                .transpose()?
-                .unwrap_or(PlanValue::Literal(0)),
+                .transpose()?,
             isn: binding
                 .isn
                 .map(PlanValue::<u32>::try_from)
                 .transpose()?
                 // Random sequence number if not specified.
                 .unwrap_or_else(|| PlanValue::Literal(rand::thread_rng().next_u32())),
+            window: binding
+                .window
+                .map(PlanValue::<u16>::try_from)
+                .transpose()?
+                .unwrap_or(PlanValue::Literal(1 << 15)),
             segments: binding
                 .segments
                 .into_iter()
@@ -951,7 +953,7 @@ pub struct TcpSegment {
     pub reserved: PlanValue<u8>,
     pub flags: PlanValue<u8>,
     pub window: PlanValue<u16>,
-    pub checksum: PlanValue<u16>,
+    pub checksum: Option<PlanValue<u16>>,
     pub urgent_ptr: PlanValue<u16>,
     pub options: Vec<PlanValue<TcpSegmentOptionOutput>>,
     pub payload: PlanValue<Vec<u8>>,
@@ -973,7 +975,11 @@ impl Evaluate<TcpSegmentOutput> for TcpSegment {
             reserved: self.reserved.evaluate(state)?,
             flags: self.flags.evaluate(state)?,
             window: self.window.evaluate(state)?,
-            checksum: self.checksum.evaluate(state)?,
+            checksum: self
+                .checksum
+                .as_ref()
+                .map(|checksum| checksum.evaluate(state))
+                .transpose()?,
             urgent_ptr: self.urgent_ptr.evaluate(state)?,
             options: self.options.evaluate(state)?,
             payload: self.payload.evaluate(state)?,
@@ -1025,11 +1031,7 @@ impl TryFrom<bindings::TcpSegment> for TcpSegment {
                 .map(PlanValue::<u16>::try_from)
                 .transpose()?
                 .unwrap_or_default(),
-            checksum: value
-                .checksum
-                .map(PlanValue::<u16>::try_from)
-                .transpose()?
-                .unwrap_or_default(),
+            checksum: value.checksum.map(PlanValue::<u16>::try_from).transpose()?,
             urgent_ptr: value
                 .urgent_ptr
                 .map(PlanValue::<u16>::try_from)
@@ -1122,7 +1124,7 @@ impl TryFrom<PlanData> for String {
         match value.0 {
             cel_interpreter::Value::String(x) => Ok(x.deref().clone()),
             cel_interpreter::Value::Bytes(x) => Ok(String::from_utf8_lossy(&x).to_string()),
-            val => Err(Error(format!("{val:?} has invalid value for string value"))),
+            val => bail!("{val:?} has invalid value for string value"),
         }
     }
 }
@@ -1132,14 +1134,14 @@ impl TryFrom<PlanData> for u8 {
     fn try_from(value: PlanData) -> std::result::Result<Self, Self::Error> {
         match value.0 {
             cel_interpreter::Value::UInt(x) => {
-                Ok(u8::try_from(x).map_err(|e| Error(e.to_string()))?)
+                Ok(u8::try_from(x)?)
             }
             cel_interpreter::Value::Int(x) => {
-                Ok(u8::try_from(x).map_err(|e| Error(e.to_string()))?)
+                Ok(u8::try_from(x)?)
             }
-            val => Err(Error(format!(
+            val => bail!(
                 "{val:?} has invalid value for 8 bit unsigned int value",
-            ))),
+            ),
         }
     }
 }
@@ -1149,14 +1151,14 @@ impl TryFrom<PlanData> for u16 {
     fn try_from(value: PlanData) -> std::result::Result<Self, Self::Error> {
         match value.0 {
             cel_interpreter::Value::UInt(x) => {
-                Ok(u16::try_from(x).map_err(|e| Error(e.to_string()))?)
+                Ok(u16::try_from(x)?)
             }
             cel_interpreter::Value::Int(x) => {
-                Ok(u16::try_from(x).map_err(|e| Error(e.to_string()))?)
+                Ok(u16::try_from(x)?)
             }
-            val => Err(Error(format!(
+            val => bail!(
                 "{val:?} has invalid value for 16 bit unsigned int value",
-            ))),
+            ),
         }
     }
 }
@@ -1166,14 +1168,14 @@ impl TryFrom<PlanData> for u32 {
     fn try_from(value: PlanData) -> std::result::Result<Self, Self::Error> {
         match value.0 {
             cel_interpreter::Value::UInt(x) => {
-                Ok(u32::try_from(x).map_err(|e| Error(e.to_string()))?)
+                Ok(u32::try_from(x)?)
             }
             cel_interpreter::Value::Int(x) => {
-                Ok(u32::try_from(x).map_err(|e| Error(e.to_string()))?)
+                Ok(u32::try_from(x)?)
             }
-            val => Err(Error(format!(
+            val => bail!(
                 "{val:?} has invalid value for 32 bit unsigned int value",
-            ))),
+            ),
         }
     }
 }
@@ -1183,14 +1185,14 @@ impl TryFrom<PlanData> for u64 {
     fn try_from(value: PlanData) -> std::result::Result<Self, Self::Error> {
         match value.0 {
             cel_interpreter::Value::UInt(x) => {
-                Ok(u64::try_from(x).map_err(|e| Error(e.to_string()))?)
+                Ok(u64::try_from(x)?)
             }
             cel_interpreter::Value::Int(x) => {
-                Ok(u64::try_from(x).map_err(|e| Error(e.to_string()))?)
+                Ok(u64::try_from(x)?)
             }
-            val => Err(Error(format!(
+            val => bail!(
                 "{val:?} has invalid type for 64 bit unsigned int value",
-            ))),
+            ),
         }
     }
 }
@@ -1200,12 +1202,12 @@ impl TryFrom<PlanData> for i64 {
     fn try_from(value: PlanData) -> std::result::Result<Self, Self::Error> {
         match value.0 {
             cel_interpreter::Value::UInt(x) => {
-                Ok(i64::try_from(x).map_err(|e| Error(e.to_string()))?)
+                Ok(i64::try_from(x)?)
             }
             cel_interpreter::Value::Int(x) => Ok(x),
-            val => Err(Error(format!(
+            val => bail!(
                 "{val:?} has invalid type for 64 bit signed int value",
-            ))),
+            ),
         }
     }
 }
@@ -1215,7 +1217,7 @@ impl TryFrom<PlanData> for bool {
     fn try_from(value: PlanData) -> std::result::Result<Self, Self::Error> {
         match value.0 {
             cel_interpreter::Value::Bool(x) => Ok(x),
-            val => Err(Error(format!("{val:?} has invalid type for bool value",))),
+            val => bail!("{val:?} has invalid type for bool value"),
         }
     }
 }
@@ -1226,7 +1228,7 @@ impl TryFrom<PlanData> for Vec<u8> {
         match value.0 {
             cel_interpreter::Value::Bytes(x) => Ok(x.deref().clone()),
             cel_interpreter::Value::String(x) => Ok(x.deref().clone().into_bytes()),
-            val => Err(Error(format!("{val:?} has invalid type for bytes value"))),
+            val => bail!("{val:?} has invalid type for bytes value"),
         }
     }
 }
@@ -1238,12 +1240,12 @@ impl TryFrom<PlanData> for Duration {
             cel_interpreter::Value::String(x) => parse_duration(&x)
                 .map(Duration::nanoseconds)
                 .map_err(|e| match e {
-                    go_parse_duration::Error::ParseError(s) => Error(s),
+                    go_parse_duration::Error::ParseError(s) => anyhow!(s),
                 }),
             cel_interpreter::Value::Duration(x) => Ok(x),
-            val => Err(Error(format!(
+            val => bail!(
                 "{val:?} has invalid type for duration value",
-            ))),
+            ),
         }
     }
 }
@@ -1252,7 +1254,7 @@ impl TryFrom<PlanData> for TlsVersion {
     type Error = Error;
     fn try_from(value: PlanData) -> Result<Self> {
         let cel_interpreter::Value::String(x) = value.0 else {
-            return Err(Error("TLS version must be a string".to_owned()));
+            bail!("TLS version must be a string");
         };
         match x.as_str() {
             "ssl1" => Ok(Self::SSL1),
@@ -1262,7 +1264,7 @@ impl TryFrom<PlanData> for TlsVersion {
             "tls1_1" => Ok(Self::TLS1_1),
             "tls1_2" => Ok(Self::TLS1_2),
             "tls1_3" => Ok(Self::TLS1_3),
-            val => Err(Error(format!("invalid TLS version {val:?}"))),
+            val => bail!("invalid TLS version {val:?}"),
         }
     }
 }
@@ -1280,23 +1282,23 @@ impl TryFrom<PlanData> for TcpSegmentOptionOutput {
                         tsval: x
                             .get(&Self::TSVAL_KEY.into())
                             .map(|x| match x {
-                                cel_interpreter::Value::UInt(val) => u32::try_from(*val).map_err(|e| Error(e.to_string())),
-                                cel_interpreter::Value::Int(val) => u32::try_from(*val).map_err(|e| Error(e.to_string())),
-                                _ => Err(Error("tcp segment option timestamps `tsval` must be convertible to 32 bit unsigned int".to_owned())),
+                                cel_interpreter::Value::UInt(val) => Ok(u32::try_from(*val)?),
+                                cel_interpreter::Value::Int(val) => Ok(u32::try_from(*val)?),
+                                _ => bail!("tcp segment option timestamps `tsval` must be convertible to 32 bit unsigned int"),
                             })
-                            .ok_or_else(|| Error(
-                                "tcp segment option timestamps missing `tsval`".to_owned(),
+                            .ok_or_else(|| anyhow!(
+                                "tcp segment option timestamps missing `tsval`",
                             ))??
                             .into(),
                         tsecr: x
                             .get(&Self::TSECR_KEY.into())
                             .map(|x| match x {
-                                cel_interpreter::Value::UInt(val) => u32::try_from(*val).map_err(|e| Error(e.to_string())),
-                                cel_interpreter::Value::Int(val) => u32::try_from(*val).map_err(|e| Error(e.to_string())),
-                                _ => Err(Error("tcp segment option timestamps `tsecr` must be convertible to 32 bit unsigned int".to_owned())),
+                                cel_interpreter::Value::UInt(val) => Ok(u32::try_from(*val)?),
+                                cel_interpreter::Value::Int(val) => Ok(u32::try_from(*val)?),
+                                _ => bail!("tcp segment option timestamps `tsecr` must be convertible to 32 bit unsigned int"),
                             })
-                            .ok_or_else(|| Error(
-                                "tcp segment option timestamps missing `tsecr`".to_owned(),
+                            .ok_or_else(|| anyhow!(
+                                "tcp segment option timestamps missing `tsecr`",
                             ))??
                             .into(),
                     })
@@ -1304,23 +1306,23 @@ impl TryFrom<PlanData> for TcpSegmentOptionOutput {
                 Some(cel_interpreter::Value::String(kind)) if kind.as_str() == Self::MSS_KIND => {
                     Ok(Self::Mss(x.get(&Self::VALUE_KEY.into())
                             .map(|x| match x {
-                                cel_interpreter::Value::UInt(val) => u16::try_from(*val).map_err(|e| Error(e.to_string())),
-                                cel_interpreter::Value::Int(val) => u16::try_from(*val).map_err(|e| Error(e.to_string())),
-                                _ => Err(Error("tcp segment option mss value must be convertible to 16 bit unsigned int".to_owned())),
+                                cel_interpreter::Value::UInt(val) => Ok(u16::try_from(*val)?),
+                                cel_interpreter::Value::Int(val) => Ok(u16::try_from(*val)?),
+                                _ => bail!("tcp segment option mss value must be convertible to 16 bit unsigned int"),
                             })
-                            .ok_or_else(|| Error(
-                                "tcp segment option mss missing value".to_owned(),
+                            .ok_or_else(|| anyhow!(
+                                "tcp segment option mss missing value",
                             ))??))
                 }
                 Some(cel_interpreter::Value::String(kind)) if kind.as_str() == Self::WSCALE_KIND => {
                     Ok(Self::Wscale(x.get(&Self::VALUE_KEY.into())
                             .map(|x| match x {
-                                cel_interpreter::Value::UInt(val) => u8::try_from(*val).map_err(|e| Error(e.to_string())),
-                                cel_interpreter::Value::Int(val) => u8::try_from(*val).map_err(|e| Error(e.to_string())),
-                                _ => Err(Error("tcp segment option wscale value must be convertible to 8 bit unsigned int".to_owned())),
+                                cel_interpreter::Value::UInt(val) => Ok(u8::try_from(*val)?),
+                                cel_interpreter::Value::Int(val) => Ok(u8::try_from(*val)?),
+                                _ => bail!("tcp segment option wscale value must be convertible to 8 bit unsigned int"),
                             })
-                            .ok_or_else(|| Error(
-                                "tcp segment option wscale missing value".to_owned(),
+                            .ok_or_else(|| anyhow!(
+                                "tcp segment option wscale missing value",
                             ))??))
                 }
                 Some(cel_interpreter::Value::String(kind)) if kind.as_str() == Self::SACK_PERMITTED_KIND => {
@@ -1330,52 +1332,52 @@ impl TryFrom<PlanData> for TcpSegmentOptionOutput {
                     Ok(Self::Sack(x.get(&Self::VALUE_KEY.into())
                             .map(|x| match x {
                                 cel_interpreter::Value::List(vals) => vals.iter().map(|x| match x {
-                                    cel_interpreter::Value::Int(val) => u32::try_from(*val).map_err(|e| Error(e.to_string())),
-                                    cel_interpreter::Value::UInt(val) => u32::try_from(*val).map_err(|e| Error(e.to_string())),
-                                    _ => Err(Error("tcp segment option sack must be convertible to list of 32 bit unsigned int".to_owned()))
+                                    cel_interpreter::Value::Int(val) => Ok(u32::try_from(*val)?),
+                                    cel_interpreter::Value::UInt(val) => Ok(u32::try_from(*val)?),
+                                    _ => bail!("tcp segment option sack must be convertible to list of 32 bit unsigned int")
                                 }).try_collect(),
-                                _ => Err(Error("tcp segment option sack value must be convertible to list of 32 bit unsigned int".to_owned())),
+                                _ => bail!("tcp segment option sack value must be convertible to list of 32 bit unsigned int"),
                             })
-                            .ok_or_else(|| Error(
-                                "tcp segment option wscale missing value".to_owned(),
+                            .ok_or_else(|| anyhow!(
+                                "tcp segment option wscale missing value",
                             ))??))
                 }
                 Some(cel_interpreter::Value::UInt(kind)) => {
-                    Ok(Self::Raw{ kind: u8::try_from(*kind).map_err(|e| Error(e.to_string()))?,
+                    Ok(Self::Raw{ kind: u8::try_from(*kind)?,
                         value: x.get(&Self::VALUE_KEY.into())
                             .map(|x| match x {
                                 cel_interpreter::Value::Bytes(data) => Ok(data.as_ref().to_owned()),
                                 cel_interpreter::Value::String(data) => Ok(data.as_bytes().to_vec()),
-                                _ => Err(Error("tcp segment option sack value must be convertible to list of 32 bit unsigned int".to_owned())),
+                                _ => bail!("tcp segment option sack value must be convertible to list of 32 bit unsigned int"),
                             })
-                            .ok_or_else(|| Error(
-                                "tcp segment option raw missing value".to_owned(),
+                            .ok_or_else(|| anyhow!(
+                                "tcp segment option raw missing value",
                             ))??})
                 }
                 Some(cel_interpreter::Value::Int(kind)) => {
-                    Ok(Self::Raw{ kind: u8::try_from(*kind).map_err(|e| Error(e.to_string()))?,
+                    Ok(Self::Raw{ kind: u8::try_from(*kind)?,
                         value: x.get(&Self::VALUE_KEY.into())
                             .map(|x| match x {
                                 cel_interpreter::Value::Bytes(data) => Ok(data.as_ref().to_owned()),
                                 cel_interpreter::Value::String(data) => Ok(data.as_bytes().to_vec()),
-                                _ => Err(Error("tcp segment option sack value must be convertible to list of 32 bit unsigned int".to_owned())),
+                                _ => bail!("tcp segment option sack value must be convertible to list of 32 bit unsigned int"),
                             })
-                            .ok_or_else(|| Error(
-                                "tcp segment option raw missing value".to_owned(),
+                            .ok_or_else(|| anyhow!(
+                                "tcp segment option raw missing value",
                             ))??})
                 }
-                _ => Err(Error(
-                    "tcp segment option expression result requires string value for key `kind`".to_owned(),
-                )),
+                _ => bail!(
+                    "tcp segment option expression result requires string value for key `kind`",
+                ),
             },
             cel_interpreter::Value::String(x) => match x.as_str() {
                 "nop" => Ok(Self::Nop),
                 "sack_permitted" => Ok(Self::SackPermitted),
-                val => Err(Error(format!("invalid TLS version {val:?}"))),
+                val => bail!("invalid TLS version {val:?}"),
             },
-            _ => Err(Error(
-                "TCP segment option must be a string or map".to_owned(),
-            )),
+            _ => bail!(
+                "TCP segment option must be a string or map",
+            ),
         }
     }
 }
@@ -1384,9 +1386,9 @@ impl TryFrom<PlanData> for Url {
     type Error = Error;
     fn try_from(value: PlanData) -> Result<Self> {
         let cel_interpreter::Value::String(x) = value.0 else {
-            return Err(Error("URL must be a string".to_owned()));
+            bail!("URL must be a string");
         };
-        Url::parse(&x).map_err(|e| Error(e.to_string()))
+        Ok(Url::parse(&x)?)
     }
 }
 
@@ -1408,9 +1410,9 @@ impl TryFrom<PlanData> for serde_json::Value {
                     .into_iter()
                     .map(|(k, v)| {
                         let cel_interpreter::objects::Key::String(k) = k else {
-                            return Err(Error(
-                                "only string keys may be used in json output".to_owned(),
-                            ));
+                            bail!(
+                                "only string keys may be used in json output",
+                            );
                         };
                         Ok((
                             Arc::try_unwrap(k).unwrap_or_else(|k| (*k).clone()),
@@ -1423,7 +1425,7 @@ impl TryFrom<PlanData> for serde_json::Value {
             cel_interpreter::Value::UInt(n) => Self::Number(serde_json::Number::from(n)),
             cel_interpreter::Value::Float(n) => {
                 Self::Number(serde_json::Number::from_f64(n).ok_or_else(|| {
-                    Error("json input number fields cannot contain infinity".to_owned())
+                    anyhow!("json input number fields cannot contain infinity".to_owned())
                 })?)
             }
             cel_interpreter::Value::String(s) => {
@@ -1435,7 +1437,7 @@ impl TryFrom<PlanData> for serde_json::Value {
             cel_interpreter::Value::Bool(b) => Self::Bool(b),
             cel_interpreter::Value::Timestamp(ts) => Self::String(ts.to_rfc3339()),
             cel_interpreter::Value::Null => Self::Null,
-            _ => return Err(Error("no mapping to json".to_owned())),
+            _ => bail!("no mapping to json"),
         })
     }
 }
@@ -1472,7 +1474,7 @@ impl TryFrom<toml::value::Datetime> for PlanData {
                     date.month as u32,
                     date.day as u32,
                 )
-                .ok_or_else(|| Error("out of bounds date".to_owned()))
+                .ok_or_else(|| anyhow!("out of bounds date"))
             })
             .transpose()?
             .unwrap_or_default();
@@ -1486,7 +1488,7 @@ impl TryFrom<toml::value::Datetime> for PlanData {
                     time.second as u32,
                     time.nanosecond,
                 )
-                .ok_or_else(|| Error("out of bounds time".to_owned()))
+                .ok_or_else(|| anyhow!("out of bounds time"))
             })
             .transpose()?
             .unwrap_or_default();
@@ -1496,20 +1498,20 @@ impl TryFrom<toml::value::Datetime> for PlanData {
         let offset = match value.offset {
             Some(toml::value::Offset::Custom { minutes }) => {
                 FixedOffset::east_opt(minutes as i32 * 60)
-                    .ok_or_else(|| Error("invalid offset".to_owned()))?
+                    .ok_or_else(|| anyhow!("invalid offset"))?
             }
             Some(toml::value::Offset::Z) => chrono::Utc.fix(),
             None => chrono::Local
                 .offset_from_local_datetime(&datetime)
                 .single()
-                .ok_or_else(|| Error("ambiguous datetime".to_owned()))?,
+                .ok_or_else(|| anyhow!("ambiguous datetime"))?,
         };
 
         Ok(PlanData(
             offset
                 .from_local_datetime(&datetime)
                 .single()
-                .ok_or_else(|| Error("ambiguous datetime".to_owned()))?
+                .ok_or_else(|| anyhow!("ambiguous datetime"))?
                 .into(),
         ))
     }
@@ -1580,11 +1582,11 @@ impl TryFrom<bindings::Tls> for TlsRequest {
             host: binding
                 .host
                 .map(PlanValue::<String>::try_from)
-                .ok_or_else(|| Error("tls.host is required".to_owned()))??,
+                .ok_or_else(|| anyhow!("tls.host is required"))??,
             port: binding
                 .port
                 .map(PlanValue::<u16>::try_from)
-                .ok_or_else(|| Error("tls.port is required".to_owned()))??,
+                .ok_or_else(|| anyhow!("tls.port is required"))??,
             alpn: binding
                 .alpn
                 .into_iter()
@@ -1662,11 +1664,11 @@ impl TryFrom<bindings::Quic> for QuicRequest {
             host: binding
                 .host
                 .map(PlanValue::<String>::try_from)
-                .ok_or_else(|| Error("quic.host is required".to_owned()))??,
+                .ok_or_else(|| anyhow!("quic.host is required"))??,
             port: binding
                 .port
                 .map(PlanValue::<u16>::try_from)
-                .ok_or_else(|| Error("quic.port is required".to_owned()))??,
+                .ok_or_else(|| anyhow!("quic.port is required"))??,
             body: binding
                 .body
                 .map(PlanValue::<Vec<u8>>::try_from)
@@ -1716,11 +1718,11 @@ impl TryFrom<bindings::Udp> for UdpRequest {
             host: binding
                 .host
                 .map(PlanValue::<String>::try_from)
-                .ok_or_else(|| Error("udp.host is required".to_owned()))??,
+                .ok_or_else(|| anyhow!("udp.host is required"))??,
             port: binding
                 .port
                 .map(PlanValue::<u16>::try_from)
-                .ok_or_else(|| Error("udp.port is required".to_owned()))??,
+                .ok_or_else(|| anyhow!("udp.port is required"))??,
             body: binding
                 .body
                 .map(PlanValue::<Vec<u8>>::try_from)
@@ -1972,7 +1974,7 @@ impl FromStr for Parallelism {
             "serial" => Ok(Self::Serial),
             "parallel" => Ok(Self::Parallel(Semaphore::MAX_PERMITS)),
             "pipelined" => Ok(Self::Pipelined),
-            val => Err(Error(format!("unrecognized parallelism string {val}"))),
+            val => bail!("unrecognized parallelism string {val}"),
         }
     }
 }
@@ -1988,21 +1990,21 @@ impl TryFrom<PlanData> for Parallelism {
             cel_interpreter::Value::Bool(_) => Ok(Parallelism::Serial),
             cel_interpreter::Value::Int(i) => {
                 Ok(Parallelism::Parallel(i.try_into().map_err(|_| {
-                    Error(format!(
+                    anyhow!(
                         "parallelism value {i} must fit in platform word size"
-                    ))
+                    )
                 })?))
             }
             cel_interpreter::Value::UInt(i) => {
                 Ok(Parallelism::Parallel(i.try_into().map_err(|_| {
-                    Error(format!(
+                    anyhow!(
                         "parallelism value {i} must fit in platform word size"
-                    ))
+                    )
                 })?))
             }
-            val => Err(Error(format!(
+            val => bail!(
                 "unsupported value {val:?} for field run.parallel"
-            ))),
+            ),
         }
     }
 }
@@ -2021,9 +2023,9 @@ impl FromStr for AddContentLength {
             "never" => Ok(Self::Never),
             "auto" => Ok(Self::Auto),
             "force" => Ok(Self::Force),
-            val => Err(Error(format!(
+            val => bail!(
                 "unrecognized add_content_length string {val}"
-            ))),
+            ),
         }
     }
 }
@@ -2044,9 +2046,9 @@ impl TryFrom<PlanData> for AddContentLength {
     fn try_from(value: PlanData) -> std::result::Result<Self, Self::Error> {
         match value.0 {
             cel_interpreter::Value::String(s) => s.parse(),
-            val => Err(Error(format!(
+            val => bail!(
                 "unsupported value {val:?} for field add_content_length"
-            ))),
+            ),
         }
     }
 }
@@ -2103,11 +2105,11 @@ impl Evaluate<crate::RunOutput> for Run {
         };
         // Only one of while or for may be used.
         if out.run_while.is_some() && out.run_for.is_some() {
-            return Err(Error("run.while and run.for cannot both be set".to_owned()));
+            bail!("run.while and run.for cannot both be set");
         }
         // While cannot be parallel.
         if !matches!(out.parallel, Parallelism::Serial) && out.run_while.is_some() {
-            return Err(Error("run.while cannot be parallel".to_owned()));
+            bail!("run.while cannot be parallel");
         }
 
         Ok(out)
@@ -2455,9 +2457,7 @@ impl Evaluate<StepPlanOutput> for Protocol {
             //Self::Quic(proto) => ProtocolOutput::Quic(proto.evaluate(state)?),
             //Self::Udp(proto) => ProtocolOutput::Udp(proto.evaluate(state)?),
             proto => {
-                return Err(Error(format!(
-                    "support for protocol {proto:?} is incomplete",
-                )))
+                bail!("support for protocol {proto:?} is incomplete")
             }
         })
     }
@@ -2499,7 +2499,7 @@ impl FromStr for ProtocolField {
             "http2_frames" => Ok(Self::Http2Frames),
             "h3" => Ok(Self::H3),
             "graphql" => Ok(Self::GraphQl),
-            _ => return Err(Error(format!("invalid tls version string {}", s))),
+            _ => bail!("invalid tls version string {}", s),
         }
     }
 }
@@ -2509,14 +2509,12 @@ impl TryFrom<PlanData> for ProtocolField {
     fn try_from(value: PlanData) -> std::result::Result<Self, Self::Error> {
         match value.0 {
             cel_interpreter::Value::String(s) => s.parse(),
-            val => Err(Error(format!(
-                "invalid value {val:?} for protocol reference"
-            ))),
+            val => bail!("invalid value {val:?} for protocol reference"),
         }
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum PlanValue<T, E = Error>
 where
     T: TryFrom<PlanData, Error = E> + Clone,
@@ -2528,10 +2526,24 @@ where
     },
 }
 
+impl<T, E> Clone for PlanValue<T, E>
+where
+    T: TryFrom<PlanData, Error = E> + Clone,
+{
+    fn clone(&self) -> Self {
+        match self {
+            Self::Literal(val) => Self::Literal(val.clone()),
+            Self::Dynamic { cel, vars } => Self::Dynamic {
+                cel: cel.clone(),
+                vars: vars.clone(),
+            },
+        }
+    }
+}
+
 impl<T, E> Default for PlanValue<T, E>
 where
     T: TryFrom<PlanData, Error = E> + Clone + Default,
-    E: std::error::Error,
 {
     fn default() -> Self {
         PlanValue::Literal(T::default())
@@ -2558,7 +2570,7 @@ impl From<String> for PlanValue<PlanData, Infallible> {
 impl<T, E> TryFrom<bindings::Value> for Option<PlanValue<T, E>>
 where
     T: TryFrom<PlanData, Error = E> + Clone,
-    E: std::error::Error,
+    E: Into<anyhow::Error>,
     PlanValue<T, E>: TryFrom<bindings::Value, Error = Error>,
 {
     type Error = Error;
@@ -2578,7 +2590,7 @@ impl TryFrom<bindings::Value> for PlanValue<String> {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            _ => Err(Error(format!("invalid value {binding:?} for string field"))),
+            _ => bail!(format!("invalid value {binding:?} for string field")),
         }
     }
 }
@@ -2588,16 +2600,14 @@ impl TryFrom<bindings::Value> for PlanValue<u8> {
         match binding {
             bindings::Value::Literal(Literal::Int(x)) => {
                 Ok(Self::Literal(x.try_into().map_err(|_| {
-                    Error("out-of-bounds unsigned 8 bit integer literal".to_owned())
+                    anyhow!("out-of-bounds unsigned 8 bit integer literal")
                 })?))
             }
             bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            _ => Err(Error(format!(
-                "invalid value {binding:?} for unsigned 8 bit integer field"
-            ))),
+            _ => bail!("invalid value {binding:?} for unsigned 8 bit integer field"),
         }
     }
 }
@@ -2607,16 +2617,14 @@ impl TryFrom<bindings::Value> for PlanValue<u16> {
         match binding {
             bindings::Value::Literal(Literal::Int(x)) => {
                 Ok(Self::Literal(x.try_into().map_err(|_| {
-                    Error("out-of-bounds unsigned 16 bit integer literal".to_owned())
+                    anyhow!("out-of-bounds unsigned 16 bit integer literal")
                 })?))
             }
             bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            _ => Err(Error(format!(
-                "invalid value {binding:?} for unsigned 16 bit integer field"
-            ))),
+            _ => bail!("invalid value {binding:?} for unsigned 16 bit integer field"),
         }
     }
 }
@@ -2626,16 +2634,14 @@ impl TryFrom<bindings::Value> for PlanValue<u32> {
         match binding {
             bindings::Value::Literal(Literal::Int(x)) => {
                 Ok(Self::Literal(x.try_into().map_err(|_| {
-                    Error("out-of-bounds unsigned 32 bit integer literal".to_owned())
+                    anyhow!("out-of-bounds unsigned 32 bit integer literal")
                 })?))
             }
             bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            _ => Err(Error(format!(
-                "invalid value {binding:?} for unsigned 32 bit integer field"
-            ))),
+            _ => bail!("invalid value {binding:?} for unsigned 32 bit integer field"),
         }
     }
 }
@@ -2645,16 +2651,14 @@ impl TryFrom<bindings::Value> for PlanValue<u64> {
         match binding {
             bindings::Value::Literal(Literal::Int(x)) => {
                 Ok(Self::Literal(x.try_into().map_err(|_| {
-                    Error("out-of-bounds unsigned 64 bit integer literal".to_owned())
+                    anyhow!("out-of-bounds unsigned 64 bit integer literal")
                 })?))
             }
             bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            _ => Err(Error(format!(
-                "invalid value {binding:?} for unsigned 64 bit integer field"
-            ))),
+            _ => bail!("invalid value {binding:?} for unsigned 64 bit integer field"),
         }
     }
 }
@@ -2664,16 +2668,14 @@ impl TryFrom<bindings::Value> for PlanValue<i64> {
         match binding {
             bindings::Value::Literal(Literal::Int(x)) => {
                 Ok(Self::Literal(x.try_into().map_err(|_| {
-                    Error("out-of-bounds signed 64 bit integer literal".to_owned())
+                    anyhow!("out-of-bounds signed 64 bit integer literal".to_owned())
                 })?))
             }
             bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            _ => Err(Error(format!(
-                "invalid value {binding:?} for signed 64 bit integer field"
-            ))),
+            _ => bail!("invalid value {binding:?} for signed 64 bit integer field"),
         }
     }
 }
@@ -2686,9 +2688,7 @@ impl TryFrom<bindings::Value> for PlanValue<bool> {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            _ => Err(Error(format!(
-                "invalid value {binding:?} for boolean field"
-            ))),
+            _ => bail!("invalid value {binding:?} for boolean field"),
         }
     }
 }
@@ -2700,13 +2700,13 @@ impl TryFrom<bindings::Value> for PlanValue<Vec<u8>> {
             bindings::Value::Literal(Literal::Base64 { base64: data }) => Ok(Self::Literal(
                 base64::prelude::BASE64_STANDARD_NO_PAD
                     .decode(data)
-                    .map_err(|e| Error(format!("base64 decode: {}", e)))?,
+                    .map_err(|e| anyhow!("base64 decode: {e}"))?,
             )),
             bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            _ => Err(Error(format!("invalid value {binding:?} for bytes field"))),
+            _ => bail!("invalid value {binding:?} for bytes field"),
         }
     }
 }
@@ -2717,15 +2717,13 @@ impl TryFrom<bindings::Value> for PlanValue<Duration> {
             bindings::Value::Literal(Literal::String(x)) => Ok(Self::Literal(
                 parse_duration(x.as_str())
                     .map(Duration::nanoseconds)
-                    .map_err(|_| Error(format!("invalid duration string")))?,
+                    .map_err(|e| anyhow!("invalid duration string: {e:?}"))?,
             )),
             bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            _ => Err(Error(format!(
-                "invalid value {binding:?} for duration field"
-            ))),
+            _ => bail!("invalid value {binding:?} for duration field"),
         }
     }
 }
@@ -2739,9 +2737,7 @@ impl TryFrom<bindings::Value> for PlanValue<TlsVersion> {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            _ => Err(Error(format!(
-                "invalid value {binding:?} for tls version field"
-            ))),
+            _ => bail!("invalid value {binding:?} for tls version field"),
         }
     }
 }
@@ -2760,59 +2756,62 @@ impl TryFrom<bindings::Value> for PlanValue<TcpSegmentOptionOutput> {
                     Ok(PlanValue::Literal(TcpSegmentOptionOutput::Timestamps {
                         tsval: fields
                             .remove(TcpSegmentOptionOutput::TSVAL_KEY)
-                            .map(|val| match val {
-                                ValueOrArray::Value(Literal::Int(i)) => {
-                                    u32::try_from(i).map_err(|e| Error(e.to_string()))
-                                }
-                                _ => Err(Error("invalid type for tsval".to_owned())),
+                            .map(|val| {
+                                let ValueOrArray::Value(Literal::Int(i)) = val else {
+                                    bail!("invalid type for tsval");
+                                };
+                                Ok(u32::try_from(i)?)
                             })
-                            .ok_or_else(|| {
-                                Error(
+                            .ok_or_else(|| 
+                                anyhow!(
                                     "tsval is required for tcp segment option 'timestamps'"
                                         .to_owned(),
                                 )
-                            })??,
+                            )??,
                         tsecr: fields
                             .remove(TcpSegmentOptionOutput::TSECR_KEY)
-                            .map(|val| match val {
-                                ValueOrArray::Value(Literal::Int(i)) => {
-                                    u32::try_from(i).map_err(|e| Error(e.to_string()))
-                                }
-                                _ => Err(Error("invalid type for tsecr".to_owned())),
+                            .map(|val| {
+                                let ValueOrArray::Value(Literal::Int(i)) = val else {
+                                    bail!("invalid type for tsecr");
+                                };
+                                Ok(u32::try_from(i)?)
                             })
-                            .ok_or_else(|| {
-                                Error(
+                            .ok_or_else(|| 
+                                anyhow!(
                                     "tsecr is required for tcp segment option 'timestamps'"
-                                        .to_owned(),
                                 )
-                            })??,
+                            )??,
                     }))
                 }
                 EnumKind::Named(kind) if kind.as_str() == TcpSegmentOptionOutput::MSS_KIND => {
                     Ok(PlanValue::Literal(TcpSegmentOptionOutput::Mss(fields
                         .remove(TcpSegmentOptionOutput::VALUE_KEY)
-                        .map(|val| match val {
-                            ValueOrArray::Value(Literal::Int(i)) => Ok(u16::try_from(i).map_err(|e| Error(e.to_string()))?),
-                            _ => Err(Error("invalid type for mss value (expect 16 bit unsigned integer)".to_owned())),
+                        .map(|val| {
+                            let ValueOrArray::Value(Literal::Int(i)) = val else {
+                                bail!("invalid type for mss value (expect 16 bit unsigned integer)");
+                            };
+                            Ok(u16::try_from(i)?)
                         })
-                        .ok_or_else(|| {
-                            Error(
-                                "value is required for tcp segment option 'mss'".to_owned(),
+                        .ok_or_else(|| 
+                            anyhow!(
+                                "value is required for tcp segment option 'mss'"
                             )
-                        })??)))
+                        )??)))
                 }
                 EnumKind::Named(kind) if kind.as_str() == TcpSegmentOptionOutput::WSCALE_KIND => {
                     Ok(PlanValue::Literal(TcpSegmentOptionOutput::Wscale(fields
                         .remove(TcpSegmentOptionOutput::VALUE_KEY)
-                        .map(|val| match val {
-                            ValueOrArray::Value(Literal::Int(i)) => Ok(u8::try_from(i).map_err(|e| Error(e.to_string()))?),
-                            _ => Err(Error("invalid type for wscale value (expect 8 bit unsigned integer)".to_owned())),
+                        .map(|val| {
+                            let ValueOrArray::Value(Literal::Int(i)) = val else {
+                                bail!("invalid type for wscale value (expect 8 bit unsigned integer)");
+                            };
+                            Ok(u8::try_from(i)?)
                         })
-                        .ok_or_else(|| {
-                            Error(
-                                "value is required for tcp segment option 'wscale'".to_owned(),
+                        .ok_or_else(|| 
+                            anyhow!(
+                                "value is required for tcp segment option 'wscale'"
                             )
-                        })??)))
+                        )??)))
                 }
                 EnumKind::Named(kind)
                     if kind.as_str() == TcpSegmentOptionOutput::SACK_PERMITTED_KIND =>
@@ -2822,21 +2821,25 @@ impl TryFrom<bindings::Value> for PlanValue<TcpSegmentOptionOutput> {
                 EnumKind::Named(kind) if kind.as_str() == TcpSegmentOptionOutput::SACK_KIND => {
                     Ok(PlanValue::Literal(TcpSegmentOptionOutput::Sack(fields
                         .remove(TcpSegmentOptionOutput::VALUE_KEY)
-                        .map(|val| match val {
-                            ValueOrArray::Array(array) => Ok(array.into_iter().map(|literal| match literal {
-                                Literal::Int(i) => u32::try_from(i).map_err(|e| Error(e.to_string())),
-                                _ => Err(Error("invalid type for sack value (expect list of 32 bit unsigned integers)".to_owned())),
-                            }).try_collect()),
-                            _ => Err(Error("invalid type for sack value (expect list of 32 bit unsigned integers)".to_owned())),
+                        .map(|val| {
+                            let ValueOrArray::Array(array) = val else {
+                                bail!("invalid type for sack value (expect list of 32 bit unsigned integers)");
+                            };
+                            Ok(array.into_iter().map(|literal| {
+                                let Literal::Int(i) = literal else {
+                                    bail!("invalid type for sack value (expect list of 32 bit unsigned integers)");
+                                };
+                                Ok(u32::try_from(i)?)
+                            }).try_collect())
                         })
-                        .ok_or_else(|| {
-                            Error(
-                                "value is required for tcp segment option 'sack'".to_owned(),
+                        .ok_or_else(|| 
+                            anyhow!(
+                                "value is required for tcp segment option 'sack'"
                             )
-                        })???)))
+                        )???)))
                 }
                 EnumKind::Numeric(kind) => Ok(PlanValue::Literal(TcpSegmentOptionOutput::Raw {
-                    kind: u8::try_from(kind).map_err(|e| Error(e.to_string()))?,
+                    kind: u8::try_from(kind)?,
                     value: fields
                         .remove(TcpSegmentOptionOutput::VALUE_KEY)
                         .map(|val| match val {
@@ -2844,28 +2847,28 @@ impl TryFrom<bindings::Value> for PlanValue<TcpSegmentOptionOutput> {
                             ValueOrArray::Value(Literal::Base64 { base64 }) => {
                                 Ok(base64::prelude::BASE64_STANDARD_NO_PAD
                                     .decode(base64)
-                                    .map_err(|e| Error(format!("base64 decode: {}", e)))?)
+                                    .map_err(|e| anyhow!("base64 decode: {}", e))?)
                             }
-                            _ => Err(Error("invalid type for raw value (expect either a string literal or '{ base64: \"...\" }')".to_owned())),
+                            _ => bail!("invalid type for raw value (expect either a string literal or '{{ base64: \"...\" }}')"),
                         })
                         .ok_or_else(|| {
-                            Error(
-                                "value is required for raw tcp segment option".to_owned(),
+                            anyhow!(
+                                "value is required for raw tcp segment option"
                             )
                         })??,
                 })),
-                _ => Err(Error(format!(
+                _ => bail!(
                     "invalid kind '{:?}' for tcp segment option",
                     kind
-                ))),
+                ),
             },
             bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            _ => Err(Error(format!(
+            _ => bail!(
                 "invalid value {binding:?} for tls version field"
-            ))),
+            ),
         }
     }
 }
@@ -2879,9 +2882,9 @@ impl TryFrom<bindings::Value> for PlanValue<ProtocolField> {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            _ => Err(Error(format!(
+            _ => bail!(
                 "invalid value {binding:?} for tls version field"
-            ))),
+            ),
         }
     }
 }
@@ -2901,14 +2904,14 @@ impl TryFrom<bindings::Value> for PlanValue<Parallelism> {
             bindings::Value::Literal(Literal::Bool(_)) => Ok(Self::Literal(Parallelism::Serial)),
             bindings::Value::Literal(Literal::Int(i)) => Ok(Self::Literal(Parallelism::Parallel(
                 i.try_into().map_err(|_| {
-                    Error(format!(
+                    anyhow!(
                         "parallelism value {i} must fit in platform word size"
-                    ))
+                    )
                 })?,
             ))),
-            val => Err(Error(format!(
+            val => bail!(
                 "invalid value {val:?} for field run.parallel"
-            ))),
+            ),
         }
     }
 }
@@ -2922,9 +2925,9 @@ impl TryFrom<bindings::Value> for PlanValue<AddContentLength> {
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
             bindings::Value::Literal(Literal::String(x)) => Ok(Self::Literal(x.parse()?)),
-            val => Err(Error(format!(
+            val => bail!(
                 "invalid value {val:?} for field add_content_length"
-            ))),
+            ),
         }
     }
 }
@@ -2934,13 +2937,13 @@ impl TryFrom<bindings::Value> for PlanValue<Url> {
     fn try_from(binding: bindings::Value) -> Result<Self> {
         match binding {
             bindings::Value::Literal(Literal::String(x)) => Ok(Self::Literal(
-                Url::parse(&x).map_err(|e| Error(e.to_string()))?,
+                Url::parse(&x)?,
             )),
             bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            _ => Err(Error(format!("invalid value {binding:?} for url field"))),
+            _ => bail!("invalid value {binding:?} for url field"),
         }
     }
 }
@@ -2954,19 +2957,19 @@ impl TryFrom<bindings::Value> for PlanValue<serde_json::Value> {
             bindings::Value::Literal(Literal::Float(x)) => Ok(Self::Literal(x.into())),
             bindings::Value::Literal(Literal::Bool(x)) => Ok(Self::Literal(x.into())),
             bindings::Value::Literal(Literal::Toml { literal: x }) => Ok(Self::Literal(
-                serde_json::to_value(x).map_err(|e| Error(e.to_string()))?,
+                serde_json::to_value(x)?,
             )),
             bindings::Value::Literal(Literal::Base64 { base64 }) => Ok(Self::Literal(
                 base64::prelude::BASE64_STANDARD_NO_PAD
                     .decode(base64)
-                    .map_err(|e| Error(format!("base64 decode: {}", e)))?
+                    .map_err(|e| anyhow!("base64 decode: {}", e))?
                     .into(),
             )),
             bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            _ => Err(Error(format!("invalid value {binding:?} for json field"))),
+            _ => bail!("invalid value {binding:?} for json field"),
         }
     }
 }
@@ -2992,15 +2995,15 @@ impl TryFrom<bindings::Value> for PlanValue<PlanData, Infallible> {
             bindings::Value::Literal(Literal::Base64 { base64 }) => {
                 Ok(PlanValue::Literal(PlanData(base64.into())))
             }
-            bindings::Value::Literal(Literal::Enum { .. }) => Err(Error(
+            bindings::Value::Literal(Literal::Enum { .. }) => bail!(
                 "enumerations are not supported for this field".to_owned(),
-            )),
+            ),
             bindings::Value::ExpressionCel { cel, vars } => Ok(PlanValue::Dynamic {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
             bindings::Value::ExpressionVars { .. } | bindings::Value::Unset { .. } => {
-                Err(Error(format!("incomplete value")))
+                bail!("incomplete value")
             }
         }
     }
@@ -3009,7 +3012,7 @@ impl TryFrom<bindings::Value> for PlanValue<PlanData, Infallible> {
 impl<T, E> Evaluate<T> for PlanValue<T, E>
 where
     T: TryFrom<PlanData, Error = E> + Clone + std::fmt::Debug,
-    E: std::error::Error,
+    E: Into<anyhow::Error>,
 {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<T>
     where
@@ -3021,52 +3024,62 @@ where
             PlanValue::Literal(val) => Ok(val.clone()),
             Self::Dynamic { cel, vars } => exec_cel(cel, vars, state)?
                 .try_into()
-                .map_err(|e: E| Error(e.to_string())),
+                .map_err(|e: E| anyhow!(e)),
         }
     }
 }
 
-impl<T, E> PlanValue<T, E>
+impl<T> PlanValue<T, Error>
 where
-    T: TryFrom<PlanData, Error = E> + Clone + std::fmt::Debug,
-    E: std::error::Error,
+    T: TryFrom<PlanData, Error = Error> + Clone + std::fmt::Debug,
 {
     fn vars_from_toml(value: toml::Value) -> Result<Vec<(String, String)>> {
         if let toml::Value::Table(vars) = value {
             Ok(vars
                 .into_iter()
                 .map(|(name, value)| {
-                    let plan_value = match value {
-                        toml::Value::String(s) => s,
-                        _ => return Err(Error(format!("invalid _vars.{}", name))),
+                    let toml::Value::String(plan_value) = value else {
+                        bail!("invalid _vars.{name}");
                     };
                     Ok((name, plan_value))
                 })
                 .try_collect()?)
         } else {
-            Err(Error("invalid _vars".to_owned()))
+            bail!("invalid _vars")
         }
     }
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub struct PlanValueTable<K, KE, V, VE>(pub Vec<(PlanValue<K, KE>, PlanValue<V, VE>)>)
 where
     K: TryFrom<PlanData, Error = KE> + Clone,
-    KE: std::error::Error,
+    KE: Into<anyhow::Error>,
     V: TryFrom<PlanData, Error = VE> + Clone,
-    VE: std::error::Error;
+    VE: Into<anyhow::Error>;
+
+impl<K, KE, V, VE> Clone for PlanValueTable<K, KE, V, VE>
+where
+    K: TryFrom<PlanData, Error = KE> + Clone,
+    KE: Into<anyhow::Error>,
+    V: TryFrom<PlanData, Error = VE> + Clone,
+    VE: Into<anyhow::Error>,
+{
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
 
 impl<K, KE, VE2, V, VE, KE2> TryFrom<bindings::Table> for PlanValueTable<K, KE, V, VE>
 where
     K: TryFrom<PlanData, Error = KE> + Clone,
-    KE: std::error::Error,
+    KE: Into<anyhow::Error>,
     PlanValue<K, KE>: TryFrom<bindings::Value, Error = KE2> + From<String>,
-    VE2: std::error::Error,
+    VE2: Into<anyhow::Error>,
     V: TryFrom<PlanData, Error = VE> + Clone,
-    VE: std::error::Error,
+    VE: Into<anyhow::Error>,
     PlanValue<V, VE>: TryFrom<bindings::Value, Error = VE2>,
-    KE2: std::error::Error,
+    KE2: Into<anyhow::Error>,
 {
     type Error = Error;
     fn try_from(binding: bindings::Table) -> Result<Self> {
@@ -3090,7 +3103,7 @@ where
                     }
                     Ok(Some((
                         k.into(),
-                        PlanValue::try_from(v).map_err(|e: VE2| Error(e.to_string()))?,
+                        PlanValue::try_from(v).map_err(VE2::into)?,
                     )))
                 })
                 .filter_map(Result::transpose)
@@ -3103,8 +3116,8 @@ where
                         return Ok(None);
                     }
                     Ok(Some((
-                        PlanValue::try_from(entry.key).map_err(|e: KE2| Error(e.to_string()))?,
-                        PlanValue::try_from(entry.value).map_err(|e: VE2| Error(e.to_string()))?,
+                        PlanValue::try_from(entry.key).map_err(KE2::into)?,
+                        PlanValue::try_from(entry.value).map_err(VE2::into)?,
                     )))
                 })
                 .filter_map(Result::transpose)
@@ -3137,7 +3150,7 @@ impl TryFrom<bindings::Iterable> for IterablePlanValue {
                     .enumerate()
                     .map(|(i, v)| {
                         Ok((
-                            IterableKey::Uint(u64::try_from(i).map_err(|e| Error(e.to_string()))?),
+                            IterableKey::Uint(u64::try_from(i)?),
                             PlanData::try_from(v)?,
                         ))
                     })
@@ -3175,7 +3188,7 @@ impl Evaluate<Vec<(IterableKey, PlanData)>> for IterablePlanValue {
                     .enumerate()
                     .map(|(i, x)| {
                         Ok((
-                            IterableKey::Uint(u64::try_from(i).map_err(|e| Error(e.to_string()))?),
+                            IterableKey::Uint(u64::try_from(i)?),
                             PlanData(x),
                         ))
                     })
@@ -3185,7 +3198,7 @@ impl Evaluate<Vec<(IterableKey, PlanData)>> for IterablePlanValue {
                     .into_iter()
                     .map(|(k, v)| Ok((k.into(), PlanData(v))))
                     .try_collect(),
-                _ => Err(Error("type not iterable".to_owned())),
+                _ => bail!("type not iterable"),
             },
         }
     }
@@ -3246,9 +3259,9 @@ impl From<IterableKey> for cel_interpreter::Value {
 impl<K, KE, V, VE> Evaluate<Vec<(K, V)>> for PlanValueTable<K, KE, V, VE>
 where
     K: TryFrom<PlanData, Error = KE> + Clone + std::fmt::Debug,
-    KE: std::error::Error,
+    KE: Into<anyhow::Error>,
     V: TryFrom<PlanData, Error = VE> + Clone + std::fmt::Debug,
-    VE: std::error::Error,
+    VE: Into<anyhow::Error>,
 {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Vec<(K, V)>>
     where
@@ -3266,9 +3279,9 @@ where
 impl<K, KE, V, VE> PlanValueTable<K, KE, V, VE>
 where
     K: TryFrom<PlanData, Error = KE> + Clone + std::fmt::Debug,
-    KE: std::error::Error,
+    KE: Into<anyhow::Error>,
     V: TryFrom<PlanData, Error = VE> + Clone + std::fmt::Debug,
-    VE: std::error::Error,
+    VE: Into<anyhow::Error>,
 {
     fn leaf_to_key_value(key: String, value: &mut toml::Value) -> Result<PlanValue<String>> {
         match value {
@@ -3287,9 +3300,9 @@ where
                         .unwrap_or_default(),
                 }),
                 Some(toml::Value::Boolean(_)) | None => Ok(PlanValue::Literal(key)),
-                _ => return Err(Error(format!("{}.key_is_template invalid", key))),
+                _ => bail!("{key}.key_is_template invalid"),
             },
-            _ => return Err(Error(format!("{} has invalid type", key))),
+            _ => bail!("{key} has invalid type"),
         }
     }
 }
@@ -3362,7 +3375,7 @@ where
     I: IntoIterator<Item = O>,
 {
     let program =
-        Program::compile(cel).map_err(|e| Error(format!("compile cel {}: {}", cel, e)))?;
+        Program::compile(cel).map_err(|e| anyhow!("compile cel {cel}: {e}"))?;
     let mut context = Context::default();
     context.add_variable_from_value(
         "vars",
@@ -3372,7 +3385,7 @@ where
     );
     add_state_to_context(state, &mut context);
     Ok(PlanData(program.execute(&context).map_err(|e| {
-        Error(format!("execute cel {}: {}", cel, e))
+        anyhow!("execute cel {cel}: {e}")
     })?))
 }
 

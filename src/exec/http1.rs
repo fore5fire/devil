@@ -4,6 +4,8 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::time::Instant;
 
+use anyhow::anyhow;
+use anyhow::bail;
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
@@ -21,7 +23,7 @@ use crate::Http1Error;
 use crate::Http1PlanOutput;
 use crate::Http1RequestOutput;
 use crate::WithPlannedCapacity;
-use crate::{Error, Http1Output, Http1Response};
+use crate::{Http1Output, Http1Response};
 
 #[derive(Debug)]
 pub(super) struct Http1Runner {
@@ -362,7 +364,7 @@ impl Http1Runner {
             Err(e) => {
                 return Poll::Ready(Err(std::io::Error::new(
                     std::io::ErrorKind::Other,
-                    Error(e.to_string()),
+                    anyhow!(e),
                 )))
             }
         }
@@ -405,15 +407,10 @@ impl Http1Runner {
         size_hint.map(|hint| header_len + hint)
     }
 
-    pub async fn start(
-        &mut self,
-        transport: Runner,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn start(&mut self, transport: Runner) -> anyhow::Result<()> {
         let state = std::mem::replace(&mut self.state, State::Invalid);
         let State::Ready { mut header, ctx } = state else {
-            return Err(Box::new(Error(
-                "attempt to start Http1Runner from invalid state".to_owned(),
-            )));
+            bail!("attempt to start Http1Runner from invalid state");
         };
 
         let header_len = i64::try_from(header.len()).unwrap();
@@ -454,9 +451,9 @@ impl Http1Runner {
                 .iter()
                 .any(|p| p.offset_bytes < 0)
             {
-                return Err(Box::new(Error(
-                    "http1.pause.request_body.end with negative offset is unsupported in this request".to_owned(),
-                )));
+                bail!(
+                    "http1.pause.request_body.end with negative offset is unsupported in this request"
+                );
             }
         }
 

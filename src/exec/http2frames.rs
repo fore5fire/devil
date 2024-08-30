@@ -2,6 +2,7 @@ use std::iter;
 use std::time::Instant;
 use std::{mem, sync::Arc};
 
+use anyhow::bail;
 use bytes::Bytes;
 use chrono::Duration;
 use h2::client::{handshake, SendRequest};
@@ -65,42 +66,31 @@ impl Http2FramesRunner {
         None
     }
 
-    pub(super) async fn start(
-        &mut self,
-        transport: Runner,
-        streams: usize,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub(super) async fn start(&mut self, transport: Runner, streams: usize) -> anyhow::Result<()> {
         self.start_time = Some(Instant::now());
         let state = mem::replace(&mut self.state, State::Invalid);
         let State::Pending = state else {
-            return Err(Box::new(crate::Error(format!(
-                "state {state:?} not valid for open"
-            ))));
+            bail!("state {state:?} not valid for open");
         };
 
         let (extractor, transport) = extract::new(transport);
 
-        match handshake(transport).await {
-            Ok((stream, connection)) => {
-                self.state = State::Open {
-                    connection: tokio::spawn(async {
-                        connection.await?;
-                        Ok::<_, Box<dyn std::error::Error + Send + Sync>>(extractor.await?)
-                    }),
-                    streams: iter::repeat(stream).take(streams).collect(),
-                };
+        let (stream, connection) = handshake(transport).await.inspect_err(|e| {
+            self.out.errors.push(crate::Http2FramesError {
+                kind: "handshake".to_owned(),
+                message: e.to_string(),
+            });
+            self.state = State::StartFailed;
+        })?;
+        self.state = State::Open {
+            connection: tokio::spawn(async {
+                connection.await?;
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(extractor.await?)
+            }),
+            streams: iter::repeat(stream).take(streams).collect(),
+        };
 
-                Ok(())
-            }
-            Err(e) => {
-                self.out.errors.push(crate::Http2FramesError {
-                    kind: "handshake".to_owned(),
-                    message: e.to_string(),
-                });
-                self.state = State::StartFailed;
-                Err(Box::new(e))
-            }
-        }
+        Ok(())
     }
 
     pub(super) async fn finish(mut self) -> (Http2FramesOutput, Option<Runner>) {

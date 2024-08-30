@@ -17,6 +17,7 @@ use std::fmt::Display;
 use std::num::TryFromIntError;
 use std::sync::Arc;
 
+use anyhow::bail;
 use futures::future::try_join_all;
 use indexmap::IndexMap;
 use itertools::{Either, Itertools};
@@ -63,11 +64,9 @@ impl<'a> Executor<'a> {
         })
     }
 
-    pub async fn next(
-        &mut self,
-    ) -> Result<IndexMap<IterableKey, StepOutput>, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn next(&mut self) -> anyhow::Result<IndexMap<IterableKey, StepOutput>> {
         let Some((name, step)) = self.steps.pop_front() else {
-            return Err(Box::new(Error::Done));
+            bail!(Error::Done);
         };
         let mut inputs = State {
             data: &self.outputs,
@@ -86,9 +85,7 @@ impl<'a> Executor<'a> {
         let parallel = step.run.parallel.evaluate(&inputs)?;
         // Don't allow parallel execution with while (for now at least).
         if step.run.run_while.is_some() && !matches!(parallel, crate::Parallelism::Serial) {
-            return Err(Box::new(crate::Error(
-                "run.while cannot be used with run.parallel".to_owned(),
-            )));
+            bail!("run.while cannot be used with run.parallel");
         }
 
         let for_pairs = step.run.run_for.map(|f| f.evaluate(&inputs)).transpose()?;
@@ -132,9 +129,7 @@ impl<'a> Executor<'a> {
             .next()
             .is_some()
         {
-            return Err(Box::new(crate::Error(
-                "join not allowed with shared steps".to_owned(),
-            )));
+            bail!("join not allowed with shared steps");
         }
 
         // Create the runners for the shared stack in advance.
@@ -187,10 +182,10 @@ impl<'a> Executor<'a> {
                         }))
                     }
                     Some(r) => {
-                        return Err(Box::new(crate::Error(format!(
+                        bail!(
                             "concurrent sharing of protocol {:?} is not supported",
                             r.field(),
-                        ))))
+                        )
                     }
                     None => Either::Right((0..count_usize).map(|_| None)),
                 };
@@ -203,7 +198,7 @@ impl<'a> Executor<'a> {
                 {
                     let op = task_pool
                         .spawn(async move {
-                            Ok::<_, Box<dyn std::error::Error + Send + Sync>>((
+                            anyhow::Ok((
                                 key,
                                 Executor::iteration(
                                     Executor::start_runners(shared_transport, runners, 1)
@@ -223,16 +218,14 @@ impl<'a> Executor<'a> {
                     try_join_all(ops)
                         .await?
                         .into_iter()
-                        .collect::<Result<Result<Vec<_>, _>, _>>()??
+                        .collect::<Result<anyhow::Result<Vec<_>>, _>>()??
                         .into_iter()
                         .map(|(key, (out, _))| (key.to_owned(), out)),
                 );
             }
             Parallelism::Serial => {
                 if stack.iter().flat_map(Protocol::joins).next().is_some() {
-                    return Err(Box::new(crate::Error(
-                        "join only allowed with parallel steps".to_owned(),
-                    )));
+                    bail!("join only allowed with parallel steps");
                 }
                 let ctx = Arc::new(Context::default());
 
@@ -278,9 +271,7 @@ impl<'a> Executor<'a> {
                 }
             }
             Parallelism::Pipelined => {
-                return Err(Box::new(crate::Error(
-                    "pipelining support is not yet implemented".to_owned(),
-                )))
+                bail!("pipelining support is not yet implemented")
             }
         }
 
@@ -340,7 +331,7 @@ impl<'a> Executor<'a> {
         shared_transport: Option<Runner>,
         runners: Vec<Runner>,
         concurrent_shares: usize,
-    ) -> Result<Option<Runner>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> anyhow::Result<Option<Runner>> {
         // Start the runners.
         // The runner stack was built top to bottom, so iterate backwards.
         let mut transport = shared_transport;
@@ -357,7 +348,7 @@ impl<'a> Executor<'a> {
     async fn iteration(
         mut runner: Runner,
         shared: Option<ProtocolField>,
-    ) -> Result<(StepOutput, Option<Runner>), Box<dyn std::error::Error + Send + Sync>> {
+    ) -> anyhow::Result<(StepOutput, Option<Runner>)> {
         runner.execute().await;
         let mut output = StepOutput::default();
         loop {

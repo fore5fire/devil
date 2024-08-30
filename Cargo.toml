@@ -38,3 +38,4 @@ h2 = "0.4.2"
 http = "1.0.0"
 tokio-task-pool = "0.1.5"
 pnet = "0.34.0"
+anyhow = { version = "1.0.86", features = ["backtrace"] }
