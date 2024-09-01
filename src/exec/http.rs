@@ -10,8 +10,8 @@ use super::tcp::TcpRunner;
 use super::tls::TlsRunner;
 use super::{http1::Http1Runner, Context};
 use crate::{
-    HttpOutput, HttpPauseOutput, HttpPlanOutput, HttpRequestOutput, HttpResponse, TcpPlanOutput,
-    TlsPlanOutput,
+    HttpOutput, HttpPauseOutput, HttpPlanOutput, HttpRequestOutput, HttpResponse, TcpCloseOutput,
+    TcpPlanOutput, TlsPlanOutput,
 };
 
 #[derive(Debug)]
@@ -85,16 +85,17 @@ impl HttpRunner {
         transports.push(Runner::Tcp(Box::new(TcpRunner::new(
             ctx.clone(),
             TcpPlanOutput {
-                host: plan
+                dest_host: plan
                     .url
                     .host()
                     .ok_or_else(|| anyhow!("url is missing host"))?
                     .to_string(),
-                port: plan
+                dest_port: plan
                     .url
                     .port_or_known_default()
                     .ok_or_else(|| anyhow!("url is missing port"))?,
                 body: Vec::new(),
+                close: TcpCloseOutput::default(),
                 pause: crate::TcpPauseOutput::default(),
             },
         ))));

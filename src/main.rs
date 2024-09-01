@@ -43,6 +43,8 @@ enum Protocol {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    env_logger::init();
+
     let args = Args::parse();
     let buffer = std::fs::read(&args.file)?;
     let text = String::from_utf8(buffer)?;
@@ -73,24 +75,37 @@ fn print_proto(args: &Args, proto: &StepOutput) {
     for level in &args.request_level {
         match level {
             Protocol::TCPSegments => {
-                if let Some(segments) = &proto.tcp_segments {
-                    for req in &segments.sent {
+                if let Some(segments) = &proto.raw_tcp {
+                    for seg in &segments.sent {
                         println!(
                             "> {}",
-                            String::from_utf8_lossy(&req.payload).replace("\n", "\n> ")
+                            String::from_utf8_lossy(&seg.payload).replace("\n", "\n> ")
                         );
+                    }
+                }
+                if let Some(tcp) = &proto.tcp {
+                    if let Some(sent) = &tcp.sent {
+                        for seg in &sent.segments {
+                            println!(
+                                "> {}",
+                                String::from_utf8_lossy(&seg.payload).replace("\n", "\n> ")
+                            );
+                        }
+                        if let Some(ttfb) = &sent.time_to_first_byte {
+                            println!("sent time to first byte: {}", ttfb);
+                        }
                     }
                 }
             }
             Protocol::TCP => {
                 if let Some(tcp) = &proto.tcp {
-                    if let Some(req) = &tcp.request {
+                    if let Some(req) = &tcp.sent {
                         println!(
                             "> {}",
                             String::from_utf8_lossy(&req.body).replace("\n", "\n> ")
                         );
                         if let Some(ttfb) = &req.time_to_first_byte {
-                            println!("request time to first byte: {}", ttfb);
+                            println!("sent time to first byte: {}", ttfb);
                         }
                     }
                 }
@@ -252,7 +267,7 @@ fn print_proto(args: &Args, proto: &StepOutput) {
             &[Protocol::TLS]
         } else if proto.tcp.is_some() {
             &[Protocol::TCP]
-        } else if proto.tcp_segments.is_some() {
+        } else if proto.raw_tcp.is_some() {
             &[Protocol::TCPSegments]
         } else {
             &[]
@@ -263,28 +278,54 @@ fn print_proto(args: &Args, proto: &StepOutput) {
         // Default output is at the highest level protocol in the request.
         match level {
             Protocol::TCPSegments => {
-                if let Some(segments) = &proto.tcp_segments {
-                    for segment in &segments.received {
-                        println!(
-                            "< {}",
-                            String::from_utf8_lossy(&segment.payload).replace("\n", "\n< ")
-                        );
+                if let Some(raw) = &proto.raw_tcp {
+                    for segment in &raw.received {
+                        println!("< {segment:?}");
                     }
-                    for e in &segments.errors {
+                    for e in &raw.errors {
                         println!("{} error: {}", e.kind, e.message);
                     }
-                    for p in &segments.pause.handshake.start {
+                    for p in &raw.pause.handshake.start {
                         println!("handshake start pause duration: {}", p.duration);
                     }
-                    for p in &segments.pause.handshake.end {
+                    for p in &raw.pause.handshake.end {
                         println!("handshake end pause duration: {}", p.duration);
                     }
-                    println!("total duration: {}", segments.duration);
+                    println!("total duration: {}", raw.duration);
+                }
+                if let Some(tcp) = &proto.tcp {
+                    if let Some(received) = &tcp.received {
+                        for segment in &received.segments {
+                            println!("< {segment:?}");
+                        }
+                    }
+                    for e in &tcp.errors {
+                        println!("{} error: {}", e.kind, e.message);
+                    }
+                    for p in &tcp.pause.handshake.start {
+                        println!("handshake start pause duration: {}", p.duration);
+                    }
+                    for p in &tcp.pause.handshake.end {
+                        println!("handshake end pause duration: {}", p.duration);
+                    }
+                    for p in &tcp.pause.send_body.start {
+                        println!("send body start pause duration: {}", p.duration);
+                    }
+                    for p in &tcp.pause.send_body.end {
+                        println!("send body end pause duration: {}", p.duration);
+                    }
+                    for p in &tcp.pause.receive_body.start {
+                        println!("receive body start pause duration: {}", p.duration);
+                    }
+                    for p in &tcp.pause.receive_body.end {
+                        println!("receive body end pause duration: {}", p.duration);
+                    }
+                    println!("total duration: {}", tcp.duration);
                 }
             }
             Protocol::TCP => {
                 if let Some(tcp) = &proto.tcp {
-                    if let Some(resp) = &tcp.response {
+                    if let Some(resp) = &tcp.received {
                         println!(
                             "< {}",
                             String::from_utf8_lossy(&resp.body).replace("\n", "\n< ")

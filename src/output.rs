@@ -5,7 +5,7 @@ use cel_interpreter::{
     objects::{Key, Map},
     Value,
 };
-use chrono::Duration;
+use chrono::{Duration, TimeDelta};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use url::Url;
@@ -35,7 +35,7 @@ pub enum Output {
     //Http3(Http3Output),
     Tls(TlsOutput),
     Tcp(TcpOutput),
-    TcpSegments(TcpSegmentsOutput),
+    RawTcp(RawTcpOutput),
 }
 
 #[derive(Debug, Clone)]
@@ -50,7 +50,7 @@ pub enum StepPlanOutput {
     //Http3(Http3PlanOutput),
     Tls(TlsPlanOutput),
     Tcp(TcpPlanOutput),
-    TcpSegments(TcpSegmentsPlanOutput),
+    RawTcp(RawTcpPlanOutput),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -65,7 +65,7 @@ pub struct StepPlanOutputs {
     //pub http3: Option<Http3PlanOutput>,
     pub tls: Option<TlsPlanOutput>,
     pub tcp: Option<TcpPlanOutput>,
-    pub tcp_segments: Option<TcpSegmentsPlanOutput>,
+    pub raw_tcp: Option<RawTcpPlanOutput>,
 }
 
 impl From<StepPlanOutputs> for Value {
@@ -109,8 +109,8 @@ impl From<StepPlanOutputs> for Value {
                     HashMap::from([("plan", Value::from(value.tcp))]).into(),
                 ),
                 (
-                    "tcp_segments".into(),
-                    HashMap::from([("plan", Value::from(value.tcp_segments))]).into(),
+                    "raw_tcp".into(),
+                    HashMap::from([("plan", Value::from(value.raw_tcp))]).into(),
                 ),
             ])),
         })
@@ -129,7 +129,7 @@ pub struct StepOutput {
     //pub http3: Option<Http3Output>,
     pub tls: Option<TlsOutput>,
     pub tcp: Option<TcpOutput>,
-    pub tcp_segments: Option<TcpSegmentsOutput>,
+    pub raw_tcp: Option<RawTcpOutput>,
 }
 
 impl StepOutput {
@@ -155,7 +155,7 @@ impl From<StepOutput> for Value {
                 //("http3".into(), value.http3.into()),
                 ("tls".into(), value.tls.into()),
                 ("tcp".into(), value.tcp.into()),
-                ("tcp_segments".into(), value.tcp_segments.into()),
+                ("raw_tcp".into(), value.raw_tcp.into()),
             ])),
         })
     }
@@ -1154,8 +1154,8 @@ impl From<TlsError> for Value {
 #[derive(Debug, Clone)]
 pub struct TcpOutput {
     pub plan: TcpPlanOutput,
-    pub request: Option<TcpRequestOutput>,
-    pub response: Option<TcpResponse>,
+    pub sent: Option<TcpSentOutput>,
+    pub received: Option<TcpReceivedOutput>,
     pub errors: Vec<TcpError>,
     pub duration: Duration,
     pub handshake_duration: Option<Duration>,
@@ -1167,8 +1167,8 @@ impl From<TcpOutput> for Value {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("plan".into(), value.plan.into()),
-                ("request".into(), value.request.into()),
-                ("response".into(), value.response.into()),
+                ("sent".into(), value.sent.into()),
+                ("received".into(), value.received.into()),
                 ("errors".into(), value.errors.into()),
                 ("duration".into(), value.duration.into()),
                 ("handshake_duration".into(), value.handshake_duration.into()),
@@ -1209,9 +1209,10 @@ impl WithPlannedCapacity for TcpPauseOutput {
 
 #[derive(Debug, Clone)]
 pub struct TcpPlanOutput {
-    pub host: String,
-    pub port: u16,
+    pub dest_host: String,
+    pub dest_port: u16,
     pub body: Vec<u8>,
+    pub close: TcpCloseOutput,
     pub pause: TcpPauseOutput,
 }
 
@@ -1219,8 +1220,8 @@ impl From<TcpPlanOutput> for Value {
     fn from(value: TcpPlanOutput) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
-                ("host".into(), Value::String(Arc::new(value.host))),
-                ("port".into(), u64::from(value.port).into()),
+                ("dest_host".into(), Value::String(Arc::new(value.dest_host))),
+                ("dest_port".into(), u64::from(value.dest_port).into()),
                 ("body".into(), Value::Bytes(Arc::new(value.body))),
                 ("pause".into(), value.pause.into()),
             ])),
@@ -1228,21 +1229,44 @@ impl From<TcpPlanOutput> for Value {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct TcpCloseOutput {
+    pub timeout: Option<Duration>,
+    pub pattern: Option<Regex>,
+    pub pattern_window: Option<u64>,
+    pub bytes: Option<u64>,
+}
+
+impl From<TcpCloseOutput> for Value {
+    fn from(value: TcpCloseOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("timeout".into(), value.timeout.into()),
+                ("pattern".into(), value.pattern.into()),
+                ("pattern_window".into(), value.pattern_window.into()),
+                ("bytes".into(), value.bytes.into()),
+            ])),
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
-pub struct TcpRequestOutput {
-    pub host: String,
-    pub port: u16,
+pub struct TcpSentOutput {
+    pub dest_ip: String,
+    pub dest_port: u16,
     pub body: Vec<u8>,
+    pub segments: Vec<TcpSegmentOutput>,
     pub time_to_first_byte: Option<Duration>,
     pub time_to_last_byte: Option<Duration>,
 }
-impl From<TcpRequestOutput> for Value {
-    fn from(value: TcpRequestOutput) -> Self {
+impl From<TcpSentOutput> for Value {
+    fn from(value: TcpSentOutput) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
-                ("host".into(), Value::String(Arc::new(value.host))),
-                ("port".into(), u64::from(value.port).into()),
+                ("dest_ip".into(), Value::String(Arc::new(value.dest_ip))),
+                ("dest_port".into(), u64::from(value.dest_port).into()),
                 ("body".into(), Value::Bytes(Arc::new(value.body))),
+                ("segments".into(), value.segments.into()),
                 ("time_to_first_byte".into(), value.time_to_first_byte.into()),
                 ("time_to_last_byte".into(), value.time_to_last_byte.into()),
             ])),
@@ -1251,17 +1275,19 @@ impl From<TcpRequestOutput> for Value {
 }
 
 #[derive(Debug, Clone)]
-pub struct TcpResponse {
+pub struct TcpReceivedOutput {
     pub body: Vec<u8>,
+    pub segments: Vec<TcpSegmentOutput>,
     pub time_to_first_byte: Option<Duration>,
     pub time_to_last_byte: Option<Duration>,
 }
 
-impl From<TcpResponse> for Value {
-    fn from(value: TcpResponse) -> Self {
+impl From<TcpReceivedOutput> for Value {
+    fn from(value: TcpReceivedOutput) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("body".into(), Value::Bytes(Arc::new(value.body.clone()))),
+                ("segments".into(), value.segments.into()),
                 ("time_to_first_byte".into(), value.time_to_first_byte.into()),
                 ("time_to_last_byte".into(), value.time_to_last_byte.into()),
             ])),
@@ -1284,26 +1310,26 @@ impl From<TcpError> for Value {
 }
 
 #[derive(Debug, Clone)]
-pub struct TcpSegmentsOutput {
-    pub plan: TcpSegmentsPlanOutput,
-    pub dest_host: String,
+pub struct RawTcpOutput {
+    pub plan: RawTcpPlanOutput,
+    pub dest_ip: String,
     pub dest_port: u16,
     pub sent: Vec<TcpSegmentOutput>,
     pub src_host: String,
     pub src_port: u16,
     pub received: Vec<TcpSegmentOutput>,
-    pub errors: Vec<TcpSegmentsError>,
+    pub errors: Vec<RawTcpError>,
     pub duration: Duration,
     pub handshake_duration: Option<Duration>,
-    pub pause: TcpSegmentsPauseOutput,
+    pub pause: RawTcpPauseOutput,
 }
 
-impl From<TcpSegmentsOutput> for Value {
-    fn from(value: TcpSegmentsOutput) -> Self {
+impl From<RawTcpOutput> for Value {
+    fn from(value: RawTcpOutput) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("plan".into(), value.plan.into()),
-                ("dest_host".into(), value.dest_host.into()),
+                ("dest_ip".into(), value.dest_ip.into()),
                 ("dest_port".into(), u64::from(value.dest_port).into()),
                 ("src_host".into(), value.src_host.into()),
                 ("src_port".into(), u64::from(value.src_port).into()),
@@ -1319,12 +1345,12 @@ impl From<TcpSegmentsOutput> for Value {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct TcpSegmentsPauseOutput {
+pub struct RawTcpPauseOutput {
     pub handshake: PausePointsOutput,
 }
 
-impl From<TcpSegmentsPauseOutput> for Value {
-    fn from(value: TcpSegmentsPauseOutput) -> Self {
+impl From<RawTcpPauseOutput> for Value {
+    fn from(value: RawTcpPauseOutput) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([(
                 "handshake".into(),
@@ -1334,7 +1360,7 @@ impl From<TcpSegmentsPauseOutput> for Value {
     }
 }
 
-impl WithPlannedCapacity for TcpSegmentsPauseOutput {
+impl WithPlannedCapacity for RawTcpPauseOutput {
     fn with_planned_capacity(planned: &Self) -> Self {
         Self {
             handshake: PausePointsOutput::with_planned_capacity(&planned.handshake),
@@ -1346,7 +1372,7 @@ impl WithPlannedCapacity for TcpSegmentsPauseOutput {
 pub struct TcpSegmentPauseOutput {}
 
 #[derive(Debug, Clone)]
-pub struct TcpSegmentsPlanOutput {
+pub struct RawTcpPlanOutput {
     pub dest_host: String,
     pub dest_port: u16,
     pub src_host: Option<String>,
@@ -1354,11 +1380,11 @@ pub struct TcpSegmentsPlanOutput {
     pub isn: u32,
     pub window: u16,
     pub segments: Vec<TcpSegmentOutput>,
-    pub pause: TcpSegmentsPauseOutput,
+    pub pause: RawTcpPauseOutput,
 }
 
-impl From<TcpSegmentsPlanOutput> for Value {
-    fn from(value: TcpSegmentsPlanOutput) -> Self {
+impl From<RawTcpPlanOutput> for Value {
+    fn from(value: RawTcpPlanOutput) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("dest_host".into(), Value::String(Arc::new(value.dest_host))),
@@ -1402,6 +1428,8 @@ pub struct TcpSegmentOutput {
     pub urgent_ptr: u16,
     pub options: Vec<TcpSegmentOptionOutput>,
     pub payload: Vec<u8>,
+    pub received: Option<TimeDelta>,
+    pub sent: Option<TimeDelta>,
 }
 
 impl From<TcpSegmentOutput> for Value {
@@ -1529,19 +1557,41 @@ impl From<TcpSegmentOptionOutput> for Value {
 }
 
 #[derive(Debug, Clone)]
-pub struct TcpSegmentsError {
+pub struct RawTcpError {
     pub kind: String,
     pub message: String,
 }
 
-impl From<TcpSegmentsError> for Value {
-    fn from(value: TcpSegmentsError) -> Self {
+impl From<RawTcpError> for Value {
+    fn from(value: RawTcpError) -> Self {
         Value::Map(Map {
             map: Rc::new(HashMap::from([
                 ("kind".into(), value.kind.into()),
                 ("message".into(), value.message.into()),
             ])),
         })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Regex {
+    pub parsed: regex::bytes::Regex,
+    raw: Arc<String>,
+}
+
+impl Regex {
+    pub fn new<S: Into<Arc<String>>>(s: S) -> crate::Result<Self> {
+        let s = s.into();
+        Ok(Regex {
+            parsed: regex::bytes::Regex::new(&s)?,
+            raw: s.into(),
+        })
+    }
+}
+
+impl From<Regex> for Value {
+    fn from(value: Regex) -> Self {
+        Self::String(value.raw)
     }
 }
 

@@ -4,7 +4,7 @@ use futures::future::BoxFuture;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::http2frames::Http2FramesRunner;
-use super::{http2::Http2Runner, tcpsegments::TcpSegmentsRunner};
+use super::{http2::Http2Runner, raw_tcp::RawTcpRunner};
 use crate::{Output, ProtocolField, StepPlanOutput};
 
 use super::{
@@ -22,7 +22,7 @@ pub(super) enum Runner {
     Http2Frames(Box<Http2FramesRunner>),
     Tls(Box<TlsRunner>),
     Tcp(Box<TcpRunner>),
-    TcpSegments(Box<TcpSegmentsRunner>),
+    RawTcp(Box<RawTcpRunner>),
     MuxHttp2Frames(h2::client::SendRequest<bytes::Bytes>),
     //PipelinedHttp(PipelineRunner<HttpRunner>),
     //PipelinedH1c(PipelineRunner<Http1Runner>),
@@ -34,8 +34,8 @@ pub(super) enum Runner {
 impl Runner {
     pub(super) fn new(ctx: Arc<super::Context>, step: StepPlanOutput) -> crate::Result<Self> {
         Ok(match step {
-            StepPlanOutput::TcpSegments(output) => {
-                Self::TcpSegments(Box::new(TcpSegmentsRunner::new(ctx, output)))
+            StepPlanOutput::RawTcp(output) => {
+                Self::RawTcp(Box::new(RawTcpRunner::new(ctx, output)))
             }
             StepPlanOutput::Tcp(output) => Self::Tcp(Box::new(TcpRunner::new(ctx, output))),
             StepPlanOutput::Tls(output) => Self::Tls(Box::new(TlsRunner::new(ctx, output))),
@@ -55,7 +55,7 @@ impl Runner {
 
     pub(super) fn field(&self) -> ProtocolField {
         match self {
-            Self::TcpSegments(_) => ProtocolField::TcpSegments,
+            Self::RawTcp(_) => ProtocolField::RawTcp,
             Self::Tcp(_) => ProtocolField::Tcp,
             Self::Tls(_) => ProtocolField::Tls,
             Self::H1c(_) => ProtocolField::H1c,
@@ -71,7 +71,7 @@ impl Runner {
 
     pub fn size_hint(&mut self, hint: Option<usize>) -> Option<usize> {
         match self {
-            Self::TcpSegments(r) => None,
+            Self::RawTcp(r) => None,
             Self::Tcp(r) => r.size_hint(hint),
             Self::Tls(r) => r.size_hint(hint),
             Self::H1c(r) | Self::H1(r) => r.size_hint(hint),
@@ -85,7 +85,7 @@ impl Runner {
 
     pub fn executor_size_hint(&self) -> Option<usize> {
         match self {
-            Self::TcpSegments(r) => None,
+            Self::RawTcp(r) => None,
             Self::Tcp(r) => r.executor_size_hint(),
             Self::Tls(r) => r.executor_size_hint(),
             Self::H1c(r) | Self::H1(r) => r.executor_size_hint(),
@@ -103,15 +103,14 @@ impl Runner {
         concurrent_shares: usize,
     ) -> BoxFuture<anyhow::Result<()>> {
         match self {
-            Self::TcpSegments(r) => {
+            Self::RawTcp(r) => {
                 assert!(transport.is_none());
                 Box::pin(r.start())
             }
-            Self::Tcp(r) => Box::pin(match transport {
-                Some(Runner::TcpSegments(transport)) => Box::pin(r.start(*transport)),
-                Some(_) => panic!("tcp requires tcp_segments transport"),
-                None => panic!("no plan should have tcp as a base protocol"),
-            }),
+            Self::Tcp(r) => {
+                assert!(transport.is_none());
+                Box::pin(r.start())
+            }
             Self::Tls(r) => {
                 Box::pin(r.start(transport.expect("no plan should have tls as a base protocol")))
             }
@@ -141,7 +140,7 @@ impl Runner {
 
     pub async fn execute(&mut self) {
         match self {
-            Self::TcpSegments(r) => r.execute().await,
+            Self::RawTcp(r) => r.execute().await,
             Self::Tcp(r) => r.execute().await,
             Self::Tls(r) => r.execute().await,
             Self::H1c(r) | Self::H1(r) => r.execute().await,
@@ -155,13 +154,13 @@ impl Runner {
 
     pub async fn finish(self: Self) -> (Output, Option<Runner>) {
         match self {
-            Self::TcpSegments(r) => {
+            Self::RawTcp(r) => {
                 let out = r.finish();
-                (Output::TcpSegments(out), None)
+                (Output::RawTcp(out), None)
             }
             Self::Tcp(r) => {
-                let (out, inner) = r.finish();
-                (Output::Tcp(out), Some(Runner::TcpSegments(Box::new(inner))))
+                let out = r.finish().await;
+                (Output::Tcp(out), None)
             }
             Self::Tls(r) => {
                 let (out, inner) = r.finish();
@@ -213,7 +212,7 @@ impl AsyncRead for Runner {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         match *self {
-            Self::TcpSegments(ref mut r) => pin!(r).poll_read(cx, buf),
+            Self::RawTcp(ref mut r) => pin!(r).poll_read(cx, buf),
             Self::Tcp(ref mut r) => pin!(r).poll_read(cx, buf),
             Self::Tls(ref mut r) => pin!(r).poll_read(cx, buf),
             Self::H1c(ref mut r) | Self::H1(ref mut r) => pin!(r).poll_read(cx, buf),
@@ -234,7 +233,7 @@ impl AsyncWrite for Runner {
         buf: &[u8],
     ) -> std::task::Poll<Result<usize, std::io::Error>> {
         match *self {
-            Self::TcpSegments(ref mut r) => pin!(r).poll_write(cx, buf),
+            Self::RawTcp(ref mut r) => pin!(r).poll_write(cx, buf),
             Self::Tcp(ref mut r) => pin!(r).poll_write(cx, buf),
             Self::Tls(ref mut r) => pin!(r).poll_write(cx, buf),
             Self::H1c(ref mut r) | Self::H1(ref mut r) => pin!(r).poll_write(cx, buf),
@@ -251,7 +250,7 @@ impl AsyncWrite for Runner {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
         match *self {
-            Self::TcpSegments(ref mut r) => pin!(r).poll_flush(cx),
+            Self::RawTcp(ref mut r) => pin!(r).poll_flush(cx),
             Self::Tcp(ref mut r) => pin!(r).poll_flush(cx),
             Self::Tls(ref mut r) => pin!(r).poll_flush(cx),
             Self::H1c(ref mut r) | Self::H1(ref mut r) => pin!(r).poll_flush(cx),
@@ -268,7 +267,7 @@ impl AsyncWrite for Runner {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
         match *self {
-            Self::TcpSegments(ref mut r) => pin!(r).poll_shutdown(cx),
+            Self::RawTcp(ref mut r) => pin!(r).poll_shutdown(cx),
             Self::Tcp(ref mut r) => pin!(r).poll_shutdown(cx),
             Self::Tls(ref mut r) => pin!(r).poll_shutdown(cx),
             Self::H1c(ref mut r) | Self::H1(ref mut r) => pin!(r).poll_shutdown(cx),

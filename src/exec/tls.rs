@@ -14,11 +14,12 @@ use tokio_rustls::TlsConnector;
 use super::pause::{self, PauseStream};
 use super::runner::Runner;
 use super::tee::Tee;
+use super::timing::Timing;
 use super::Context;
 use crate::exec::pause::{Pause, PauseSpec};
 use crate::{
-    Error, TlsError, TlsOutput, TlsPauseOutput, TlsPlanOutput, TlsRequestOutput, TlsResponse,
-    TlsVersion, WithPlannedCapacity,
+    TlsError, TlsOutput, TlsPauseOutput, TlsPlanOutput, TlsRequestOutput, TlsResponse, TlsVersion,
+    WithPlannedCapacity,
 };
 
 #[derive(Debug)]
@@ -26,10 +27,6 @@ pub(super) struct TlsRunner {
     ctx: Arc<Context>,
     out: TlsOutput,
     state: State,
-    first_read: Option<Instant>,
-    last_read: Option<Instant>,
-    first_write: Option<Instant>,
-    last_write: Option<Instant>,
     size_hint: Option<usize>,
 }
 
@@ -41,7 +38,7 @@ enum State {
     },
     Open {
         start: Instant,
-        transport: PauseStream<Tee<TlsStream<Runner>>>,
+        transport: PauseStream<Tee<Timing<TlsStream<Runner>>>>,
     },
     Completed {
         transport: Option<Runner>,
@@ -113,10 +110,6 @@ impl TlsRunner {
                 handshake_duration: None,
                 pause,
             },
-            first_read: None,
-            last_read: None,
-            first_write: None,
-            last_write: None,
             size_hint: None,
         }
     }
@@ -198,7 +191,7 @@ impl TlsRunner {
             start,
             transport: pause::new_stream(
                 self.ctx.clone(),
-                Tee::new(connection),
+                Tee::new(Timing::new(connection, None)),
                 // TODO: Implement read size hints.
                 vec![PauseSpec {
                     group_offset: 0,
@@ -296,12 +289,7 @@ impl TlsRunner {
         };
         let end_time = Instant::now();
         let (tee, send_pause, receive_pause) = transport.finish_stream();
-        let (stream, writes, reads) = tee.into_parts();
-        let (inner, conn) = stream.into_inner();
-
-        self.state = State::Completed {
-            transport: Some(inner),
-        };
+        let (stream, writes, reads, truncated_reads) = tee.into_parts();
 
         let mut receive_pause = receive_pause.into_iter();
         self.out.pause.receive_body.start = receive_pause.next().unwrap_or_default();
@@ -311,26 +299,33 @@ impl TlsRunner {
         self.out.pause.send_body.end = send_pause.next().unwrap_or_default();
 
         if let Some(req) = &mut self.out.request {
-            req.time_to_first_byte = self
-                .first_write
+            req.time_to_first_byte = stream
+                .first_write()
                 .map(|first_write| Duration::from_std(first_write - start).unwrap());
-            req.time_to_last_byte = self
-                .last_write
+            req.time_to_last_byte = stream
+                .last_write()
                 .map(|last_write| Duration::from_std(last_write - start).unwrap());
             req.body = writes;
         }
         if !reads.is_empty() {
             self.out.response = Some(TlsResponse {
                 body: reads,
-                time_to_first_byte: self
-                    .first_read
+                time_to_first_byte: stream
+                    .first_read()
                     .map(|first_read| Duration::from_std(first_read - start).unwrap()),
-                time_to_last_byte: self
-                    .last_read
+                time_to_last_byte: stream
+                    .last_read()
                     .map(|last_read| Duration::from_std(last_read - start).unwrap()),
             });
         }
         self.out.duration = Duration::from_std(end_time - start).unwrap();
+
+        let (inner, conn) = stream.into_inner().into_inner();
+
+        self.state = State::Completed {
+            transport: Some(inner),
+        };
+
         self.out.version = match conn.protocol_version() {
             Some(rustls::ProtocolVersion::SSLv2) => Some(TlsVersion::SSL2),
             Some(rustls::ProtocolVersion::SSLv3) => Some(TlsVersion::SSL3),
@@ -376,11 +371,7 @@ impl AsyncWrite for TlsRunner {
                 self.state
             ))));
         };
-        let poll = Pin::new(transport).poll_write(cx, buf);
-        if let Poll::Ready(Ok(_)) = &poll {
-            if self.first_write.is_none() {}
-        }
-        poll
+        Pin::new(transport).poll_write(cx, buf)
     }
 
     fn poll_flush(

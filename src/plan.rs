@@ -1,8 +1,8 @@
 use crate::bindings::{EnumKind, Literal, ValueOrArray};
 use crate::{
     bindings, cel_functions, Error, GraphQlPauseOutput, Http1PauseOutput, Http2FramesPauseOutput,
-    Http2PauseOutput, HttpPauseOutput, Result, State, StepPlanOutput, TcpPauseOutput,
-    TcpSegmentOptionOutput, TcpSegmentOutput, TcpSegmentsPauseOutput, TlsPauseOutput,
+    Http2PauseOutput, HttpPauseOutput, RawTcpPauseOutput, Result, State, StepPlanOutput,
+    TcpCloseOutput, TcpPauseOutput, TcpSegmentOptionOutput, TcpSegmentOutput, TlsPauseOutput, Regex
 };
 use anyhow::{anyhow, bail};
 use base64::Engine;
@@ -778,9 +778,10 @@ impl Evaluate<GraphQlPauseOutput> for GraphQlPause {
 
 #[derive(Debug, Clone)]
 pub struct TcpRequest {
-    pub body: PlanValue<Vec<u8>>,
     pub host: PlanValue<String>,
     pub port: PlanValue<u16>,
+    pub body: PlanValue<Vec<u8>>,
+    pub close: TcpClose,
     pub pause: TcpPause,
 }
 
@@ -792,9 +793,10 @@ impl Evaluate<crate::TcpPlanOutput> for TcpRequest {
         I: IntoIterator<Item = O>,
     {
         Ok(crate::TcpPlanOutput {
-            host: self.host.evaluate(state)?,
-            port: self.port.evaluate(state)?,
+            dest_host: self.host.evaluate(state)?,
+            dest_port: self.port.evaluate(state)?,
             body: self.body.evaluate(state)?.into(),
+            close: self.close.evaluate(state)?.into(),
             pause: self.pause.evaluate(state)?,
         })
     }
@@ -817,7 +819,44 @@ impl TryFrom<bindings::Tcp> for TcpRequest {
                 .map(PlanValue::<Vec<u8>>::try_from)
                 .transpose()?
                 .unwrap_or_else(|| PlanValue::Literal(Vec::new())),
+            close: binding.close.unwrap_or_default().try_into()?,
             pause: binding.pause.unwrap_or_default().try_into()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TcpClose {
+    timeout: Option<PlanValue<Duration>>,
+    pattern: Option<PlanValue<Regex>>,
+    pattern_window: Option<PlanValue<u64>>,
+    bytes: Option<PlanValue<u64>>,
+}
+
+impl TryFrom<bindings::TcpClose> for TcpClose {
+    type Error = Error;
+    fn try_from(value: bindings::TcpClose) -> std::result::Result<Self, Self::Error> {
+        Ok(Self {
+            timeout: value.timeout.map(PlanValue::try_from).transpose()?,
+            pattern: value.pattern.map(PlanValue::try_from).transpose()?,
+            pattern_window: value.pattern_window.map(PlanValue::try_from).transpose()?,
+            bytes: value.bytes.map(PlanValue::try_from).transpose()?,
+        })
+    }
+}
+
+impl Evaluate<TcpCloseOutput> for TcpClose {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<TcpCloseOutput>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O>,
+    {
+        Ok(TcpCloseOutput {
+            timeout: self.timeout.as_ref().map(|timeout| timeout.evaluate(state)).transpose()?,
+            pattern: self.pattern.as_ref().map(|pattern| pattern.evaluate(state)).transpose()?,
+            pattern_window: self.pattern_window.as_ref().map(|window| window.evaluate(state)).transpose()?,
+            bytes: self.bytes.as_ref().map(|bytes| bytes.evaluate(state)).transpose()?,
         })
     }
 }
@@ -865,7 +904,7 @@ impl Evaluate<TcpPauseOutput> for TcpPause {
 }
 
 #[derive(Debug, Clone)]
-pub struct TcpSegmentsRequest {
+pub struct RawTcpRequest {
     pub dest_host: PlanValue<String>,
     pub dest_port: PlanValue<u16>,
     pub src_host: Option<PlanValue<String>>,
@@ -874,17 +913,17 @@ pub struct TcpSegmentsRequest {
     pub isn: PlanValue<u32>,
     pub window: PlanValue<u16>,
     pub segments: Vec<TcpSegment>,
-    pub pause: TcpSegmentsPause,
+    pub pause: RawTcpPause,
 }
 
-impl Evaluate<crate::TcpSegmentsPlanOutput> for TcpSegmentsRequest {
-    fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::TcpSegmentsPlanOutput>
+impl Evaluate<crate::RawTcpPlanOutput> for RawTcpRequest {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::RawTcpPlanOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
-        Ok(crate::TcpSegmentsPlanOutput {
+        Ok(crate::RawTcpPlanOutput {
             dest_host: self.dest_host.evaluate(state)?,
             dest_port: self.dest_port.evaluate(state)?,
             src_host: self.src_host.as_ref().map(|src_host| src_host.evaluate(state)).transpose()?,
@@ -901,18 +940,18 @@ impl Evaluate<crate::TcpSegmentsPlanOutput> for TcpSegmentsRequest {
     }
 }
 
-impl TryFrom<bindings::TcpSegments> for TcpSegmentsRequest {
+impl TryFrom<bindings::RawTcp> for RawTcpRequest {
     type Error = Error;
-    fn try_from(binding: bindings::TcpSegments) -> Result<Self> {
+    fn try_from(binding: bindings::RawTcp) -> Result<Self> {
         Ok(Self {
             dest_host: binding
                 .dest_host
                 .map(PlanValue::<String>::try_from)
-                .ok_or_else(|| anyhow!("tcp_segments.dest_host is required"))??,
+                .ok_or_else(|| anyhow!("raw_tcp.dest_host is required"))??,
             dest_port: binding
                 .dest_port
                 .map(PlanValue::<u16>::try_from)
-                .ok_or_else(|| anyhow!("tcp_segments.dest_port is required"))??,
+                .ok_or_else(|| anyhow!("raw_tcp.dest_port is required"))??,
             src_host: binding
                 .src_host
                 .map(PlanValue::<String>::try_from)
@@ -983,6 +1022,8 @@ impl Evaluate<TcpSegmentOutput> for TcpSegment {
             urgent_ptr: self.urgent_ptr.evaluate(state)?,
             options: self.options.evaluate(state)?,
             payload: self.payload.evaluate(state)?,
+            received: None,
+            sent: None,
         })
     }
 }
@@ -1083,33 +1124,33 @@ impl TryFrom<bindings::TcpSegment> for TcpSegment {
 //}
 
 #[derive(Debug, Clone, Default)]
-pub struct TcpSegmentsPause {
+pub struct RawTcpPause {
     pub handshake: PausePoints,
 }
 
-impl PauseJoins for TcpSegmentsPause {
+impl PauseJoins for RawTcpPause {
     fn joins(&self) -> impl Iterator<Item = String> {
         self.handshake.joins()
     }
 }
 
-impl TryFrom<bindings::TcpSegmentsPause> for TcpSegmentsPause {
+impl TryFrom<bindings::RawTcpPause> for RawTcpPause {
     type Error = Error;
-    fn try_from(value: bindings::TcpSegmentsPause) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: bindings::RawTcpPause) -> std::result::Result<Self, Self::Error> {
         Ok(Self {
             handshake: PausePoints::try_from(value.handshake.unwrap_or_default())?,
         })
     }
 }
 
-impl Evaluate<TcpSegmentsPauseOutput> for TcpSegmentsPause {
-    fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<TcpSegmentsPauseOutput>
+impl Evaluate<RawTcpPauseOutput> for RawTcpPause {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<RawTcpPauseOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
-        Ok(TcpSegmentsPauseOutput {
+        Ok(RawTcpPauseOutput {
             handshake: self.handshake.evaluate(state)?,
         })
     }
@@ -1243,6 +1284,18 @@ impl TryFrom<PlanData> for Duration {
                     go_parse_duration::Error::ParseError(s) => anyhow!(s),
                 }),
             cel_interpreter::Value::Duration(x) => Ok(x),
+            val => bail!(
+                "{val:?} has invalid type for duration value",
+            ),
+        }
+    }
+}
+
+impl TryFrom<PlanData> for Regex {
+    type Error = Error;
+    fn try_from(value: PlanData) -> Result<Self> {
+        match value.0 {
+            cel_interpreter::Value::String(x) => Ok(Regex::new(x)?),
             val => bail!(
                 "{val:?} has invalid type for duration value",
             ),
@@ -1774,38 +1827,32 @@ impl Step {
                 graphql,
                 h1c,
                 tcp,
-                tcp_segments,
             } => StepProtocols::GraphQlH1c {
                 graphql: graphql.try_into()?,
                 h1c: h1c.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
-                tcp_segments: tcp_segments.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::GraphQlH1 {
                 graphql,
                 h1,
                 tls,
                 tcp,
-                tcp_segments,
             } => StepProtocols::GraphQlH1 {
                 graphql: graphql.try_into()?,
                 h1: h1.unwrap_or_default().try_into()?,
                 tls: tls.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
-                tcp_segments: tcp_segments.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::GraphQlH2c {
                 graphql,
                 h2c,
                 http2_frames,
                 tcp,
-                tcp_segments,
             } => StepProtocols::GraphQlH2c {
                 graphql: graphql.try_into()?,
                 h2c: h2c.unwrap_or_default().try_into()?,
                 http2_frames: http2_frames.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
-                tcp_segments: tcp_segments.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::GraphQlH2 {
                 graphql,
@@ -1813,14 +1860,12 @@ impl Step {
                 http2_frames,
                 tls,
                 tcp,
-                tcp_segments,
             } => StepProtocols::GraphQlH2 {
                 graphql: graphql.try_into()?,
                 h2: h2.unwrap_or_default().try_into()?,
                 http2_frames: http2_frames.unwrap_or_default().try_into()?,
                 tls: tls.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
-                tcp_segments: tcp_segments.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::GraphQlH3 {
                 graphql,
@@ -1839,46 +1884,38 @@ impl Step {
             bindings::StepProtocols::H1c {
                 h1c,
                 tcp,
-                tcp_segments,
             } => StepProtocols::H1c {
                 h1c: h1c.try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
-                tcp_segments: tcp_segments.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::H1 {
                 h1,
                 tls,
                 tcp,
-                tcp_segments,
             } => StepProtocols::H1 {
                 h1: h1.try_into()?,
                 tls: tls.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
-                tcp_segments: tcp_segments.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::H2c {
                 h2c,
                 http2_frames,
                 tcp,
-                tcp_segments,
             } => StepProtocols::H2c {
                 h2c: h2c.try_into()?,
                 http2_frames: http2_frames.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
-                tcp_segments: tcp_segments.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::H2 {
                 h2,
                 http2_frames,
                 tls,
                 tcp,
-                tcp_segments,
             } => StepProtocols::H2 {
                 h2: h2.try_into()?,
                 http2_frames: http2_frames.unwrap_or_default().try_into()?,
                 tls: tls.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
-                tcp_segments: tcp_segments.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::H3 { h3, quic, udp } => StepProtocols::H3 {
                 h3: h3.try_into()?,
@@ -1888,22 +1925,19 @@ impl Step {
             bindings::StepProtocols::Tls {
                 tls,
                 tcp,
-                tcp_segments,
             } => StepProtocols::Tls {
                 tls: tls.try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
-                tcp_segments: tcp_segments.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::Dtls { dtls, udp } => StepProtocols::Dtls {
                 dtls: dtls.try_into()?,
                 udp: udp.unwrap_or_default().try_into()?,
             },
-            bindings::StepProtocols::Tcp { tcp, tcp_segments } => StepProtocols::Tcp {
+            bindings::StepProtocols::Tcp { tcp } => StepProtocols::Tcp {
                 tcp: tcp.try_into()?,
-                tcp_segments: tcp_segments.unwrap_or_default().try_into()?,
             },
-            bindings::StepProtocols::TcpSegments { tcp_segments } => StepProtocols::TcpSegments {
-                tcp_segments: tcp_segments.try_into()?,
+            bindings::StepProtocols::RawTcp { raw_tcp } => StepProtocols::RawTcp {
+                raw_tcp: raw_tcp.try_into()?,
             },
             bindings::StepProtocols::Quic { quic, udp } => StepProtocols::Quic {
                 quic: quic.try_into()?,
@@ -2126,21 +2160,18 @@ pub enum StepProtocols {
         graphql: GraphQlRequest,
         h1c: Http1Request,
         tcp: TcpRequest,
-        tcp_segments: TcpSegmentsRequest,
     },
     GraphQlH1 {
         graphql: GraphQlRequest,
         h1: Http1Request,
         tls: TlsRequest,
         tcp: TcpRequest,
-        tcp_segments: TcpSegmentsRequest,
     },
     GraphQlH2c {
         graphql: GraphQlRequest,
         h2c: Http2Request,
         http2_frames: Http2FramesRequest,
         tcp: TcpRequest,
-        tcp_segments: TcpSegmentsRequest,
     },
     GraphQlH2 {
         graphql: GraphQlRequest,
@@ -2148,7 +2179,6 @@ pub enum StepProtocols {
         http2_frames: Http2FramesRequest,
         tls: TlsRequest,
         tcp: TcpRequest,
-        tcp_segments: TcpSegmentsRequest,
     },
     GraphQlH3 {
         graphql: GraphQlRequest,
@@ -2162,26 +2192,22 @@ pub enum StepProtocols {
     H1c {
         h1c: Http1Request,
         tcp: TcpRequest,
-        tcp_segments: TcpSegmentsRequest,
     },
     H1 {
         h1: Http1Request,
         tls: TlsRequest,
         tcp: TcpRequest,
-        tcp_segments: TcpSegmentsRequest,
     },
     H2c {
         h2c: Http2Request,
         http2_frames: Http2FramesRequest,
         tcp: TcpRequest,
-        tcp_segments: TcpSegmentsRequest,
     },
     H2 {
         h2: Http2Request,
         http2_frames: Http2FramesRequest,
         tls: TlsRequest,
         tcp: TcpRequest,
-        tcp_segments: TcpSegmentsRequest,
     },
     H3 {
         h3: Http3Request,
@@ -2191,7 +2217,6 @@ pub enum StepProtocols {
     Tls {
         tls: TlsRequest,
         tcp: TcpRequest,
-        tcp_segments: TcpSegmentsRequest,
     },
     Dtls {
         dtls: TlsRequest,
@@ -2199,10 +2224,9 @@ pub enum StepProtocols {
     },
     Tcp {
         tcp: TcpRequest,
-        tcp_segments: TcpSegmentsRequest,
     },
-    TcpSegments {
-        tcp_segments: TcpSegmentsRequest,
+    RawTcp {
+        raw_tcp: RawTcpRequest,
     },
     Quic {
         quic: QuicRequest,
@@ -2223,13 +2247,11 @@ impl StepProtocols {
                 graphql,
                 h1c,
                 tcp,
-                tcp_segments,
             } => {
                 vec![
                     Protocol::GraphQl(graphql),
                     Protocol::H1c(h1c),
                     Protocol::Tcp(tcp),
-                    Protocol::TcpSegments(tcp_segments),
                 ]
             }
             Self::GraphQlH1 {
@@ -2237,14 +2259,12 @@ impl StepProtocols {
                 h1,
                 tls,
                 tcp,
-                tcp_segments,
             } => {
                 vec![
                     Protocol::GraphQl(graphql),
                     Protocol::H1(h1),
                     Protocol::Tls(tls),
                     Protocol::Tcp(tcp),
-                    Protocol::TcpSegments(tcp_segments),
                 ]
             }
             Self::GraphQlH2c {
@@ -2252,14 +2272,12 @@ impl StepProtocols {
                 h2c,
                 http2_frames,
                 tcp,
-                tcp_segments,
             } => {
                 vec![
                     Protocol::GraphQl(graphql),
                     Protocol::H2c(h2c),
                     Protocol::Http2Frames(http2_frames),
                     Protocol::Tcp(tcp),
-                    Protocol::TcpSegments(tcp_segments),
                 ]
             }
             Self::GraphQlH2 {
@@ -2268,7 +2286,6 @@ impl StepProtocols {
                 http2_frames,
                 tls,
                 tcp,
-                tcp_segments,
             } => {
                 vec![
                     Protocol::GraphQl(graphql),
@@ -2276,7 +2293,6 @@ impl StepProtocols {
                     Protocol::Http2Frames(http2_frames),
                     Protocol::Tls(tls),
                     Protocol::Tcp(tcp),
-                    Protocol::TcpSegments(tcp_segments),
                 ]
             }
             Self::GraphQlH3 {
@@ -2298,38 +2314,32 @@ impl StepProtocols {
             Self::H1c {
                 h1c,
                 tcp,
-                tcp_segments,
             } => {
                 vec![
                     Protocol::H1c(h1c),
                     Protocol::Tcp(tcp),
-                    Protocol::TcpSegments(tcp_segments),
                 ]
             }
             Self::H1 {
                 h1,
                 tls,
                 tcp,
-                tcp_segments,
             } => {
                 vec![
                     Protocol::H1(h1),
                     Protocol::Tls(tls),
                     Protocol::Tcp(tcp),
-                    Protocol::TcpSegments(tcp_segments),
                 ]
             }
             Self::H2c {
                 h2c,
                 http2_frames,
                 tcp,
-                tcp_segments,
             } => {
                 vec![
                     Protocol::H2c(h2c),
                     Protocol::Http2Frames(http2_frames),
                     Protocol::Tcp(tcp),
-                    Protocol::TcpSegments(tcp_segments),
                 ]
             }
             Self::H2 {
@@ -2337,14 +2347,12 @@ impl StepProtocols {
                 http2_frames,
                 tls,
                 tcp,
-                tcp_segments,
             } => {
                 vec![
                     Protocol::H2(h2),
                     Protocol::Http2Frames(http2_frames),
                     Protocol::Tls(tls),
                     Protocol::Tcp(tcp),
-                    Protocol::TcpSegments(tcp_segments),
                 ]
             }
             Self::H3 { h3, quic, udp } => {
@@ -2353,22 +2361,20 @@ impl StepProtocols {
             Self::Tls {
                 tls,
                 tcp,
-                tcp_segments,
             } => {
                 vec![
                     Protocol::Tls(tls),
                     Protocol::Tcp(tcp),
-                    Protocol::TcpSegments(tcp_segments),
                 ]
             }
             Self::Dtls { dtls, udp } => {
                 vec![Protocol::Tls(dtls), Protocol::Udp(udp)]
             }
-            Self::Tcp { tcp, tcp_segments } => {
-                vec![Protocol::Tcp(tcp), Protocol::TcpSegments(tcp_segments)]
+            Self::Tcp { tcp } => {
+                vec![Protocol::Tcp(tcp)]
             }
-            Self::TcpSegments { tcp_segments } => {
-                vec![Protocol::TcpSegments(tcp_segments)]
+            Self::RawTcp { raw_tcp } => {
+                vec![Protocol::RawTcp(raw_tcp)]
             }
             Self::Quic { quic, udp } => {
                 vec![Protocol::Udp(udp), Protocol::Quic(quic)]
@@ -2392,7 +2398,7 @@ pub enum Protocol {
     H3(Http3Request),
     Tls(TlsRequest),
     Tcp(TcpRequest),
-    TcpSegments(TcpSegmentsRequest),
+    RawTcp(RawTcpRequest),
     Quic(QuicRequest),
     Udp(UdpRequest),
 }
@@ -2410,7 +2416,7 @@ impl Protocol {
             Self::H3(proto) => Vec::new(),
             Self::Tls(proto) => proto.pause.joins().collect(),
             Self::Tcp(proto) => proto.pause.joins().collect(),
-            Self::TcpSegments(proto) => proto.pause.joins().collect(),
+            Self::RawTcp(proto) => proto.pause.joins().collect(),
             Self::Quic(proto) => proto.pause.joins().collect(),
             Self::Udp(proto) => proto.pause.joins().collect(),
         }
@@ -2428,7 +2434,7 @@ impl Protocol {
             Self::H3(_) => ProtocolField::H3,
             Self::Tls(_) => ProtocolField::Tls,
             Self::Tcp(_) => ProtocolField::Tcp,
-            Self::TcpSegments(_) => ProtocolField::TcpSegments,
+            Self::RawTcp(_) => ProtocolField::RawTcp,
             Self::Quic(_) => ProtocolField::Quic,
             Self::Udp(_) => ProtocolField::Udp,
         }
@@ -2453,7 +2459,7 @@ impl Evaluate<StepPlanOutput> for Protocol {
             //Self::Http3(proto) => ProtocolOutput::Http3(proto.evaluate(state)?),
             Self::Tls(proto) => StepPlanOutput::Tls(proto.evaluate(state)?),
             Self::Tcp(proto) => StepPlanOutput::Tcp(proto.evaluate(state)?),
-            Self::TcpSegments(proto) => StepPlanOutput::TcpSegments(proto.evaluate(state)?),
+            Self::RawTcp(proto) => StepPlanOutput::RawTcp(proto.evaluate(state)?),
             //Self::Quic(proto) => ProtocolOutput::Quic(proto.evaluate(state)?),
             //Self::Udp(proto) => ProtocolOutput::Udp(proto.evaluate(state)?),
             proto => {
@@ -2475,7 +2481,7 @@ pub enum ProtocolField {
     H3,
     Tls,
     Tcp,
-    TcpSegments,
+    RawTcp,
     Dtls,
     Quic,
     Udp,
@@ -2488,7 +2494,7 @@ impl FromStr for ProtocolField {
             "udp" => Ok(Self::Udp),
             "quic" => Ok(Self::Quic),
             "dtls" => Ok(Self::Dtls),
-            "tcp_segments" => Ok(Self::TcpSegments),
+            "raw_tcp" => Ok(Self::RawTcp),
             "tcp" => Ok(Self::Tcp),
             "tls" => Ok(Self::Tls),
             "http" => Ok(Self::Http),
@@ -2590,7 +2596,7 @@ impl TryFrom<bindings::Value> for PlanValue<String> {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            _ => bail!(format!("invalid value {binding:?} for string field")),
+            _ => bail!(format!("invalid type {binding:?} for string field")),
         }
     }
 }
@@ -2607,7 +2613,7 @@ impl TryFrom<bindings::Value> for PlanValue<u8> {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            _ => bail!("invalid value {binding:?} for unsigned 8 bit integer field"),
+            _ => bail!("invalid type {binding:?} for unsigned 8 bit integer field"),
         }
     }
 }
@@ -2624,7 +2630,7 @@ impl TryFrom<bindings::Value> for PlanValue<u16> {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            _ => bail!("invalid value {binding:?} for unsigned 16 bit integer field"),
+            _ => bail!("invalid type {binding:?} for unsigned 16 bit integer field"),
         }
     }
 }
@@ -2641,7 +2647,7 @@ impl TryFrom<bindings::Value> for PlanValue<u32> {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            _ => bail!("invalid value {binding:?} for unsigned 32 bit integer field"),
+            _ => bail!("invalid type {binding:?} for unsigned 32 bit integer field"),
         }
     }
 }
@@ -2658,7 +2664,7 @@ impl TryFrom<bindings::Value> for PlanValue<u64> {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            _ => bail!("invalid value {binding:?} for unsigned 64 bit integer field"),
+            _ => bail!("invalid type {binding:?} for unsigned 64 bit integer field"),
         }
     }
 }
@@ -2675,7 +2681,7 @@ impl TryFrom<bindings::Value> for PlanValue<i64> {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            _ => bail!("invalid value {binding:?} for signed 64 bit integer field"),
+            _ => bail!("invalid type {binding:?} for signed 64 bit integer field"),
         }
     }
 }
@@ -2688,7 +2694,7 @@ impl TryFrom<bindings::Value> for PlanValue<bool> {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            _ => bail!("invalid value {binding:?} for boolean field"),
+            _ => bail!("invalid type {binding:?} for boolean field"),
         }
     }
 }
@@ -2706,7 +2712,7 @@ impl TryFrom<bindings::Value> for PlanValue<Vec<u8>> {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            _ => bail!("invalid value {binding:?} for bytes field"),
+            _ => bail!("invalid type {binding:?} for bytes field"),
         }
     }
 }
@@ -2723,7 +2729,23 @@ impl TryFrom<bindings::Value> for PlanValue<Duration> {
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
-            _ => bail!("invalid value {binding:?} for duration field"),
+            _ => bail!("invalid type {binding:?} for duration field"),
+        }
+    }
+}
+
+impl TryFrom<bindings::Value> for PlanValue<Regex> {
+    type Error = Error;
+    fn try_from(binding: bindings::Value) -> Result<Self> {
+        match binding {
+            bindings::Value::Literal(Literal::String(x)) => Ok(Self::Literal(
+                Regex::new(x)?,
+            )),
+            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
+                cel,
+                vars: vars.unwrap_or_default().into_iter().collect(),
+            }),
+            _ => bail!("invalid type {binding:?} for regex"),
         }
     }
 }

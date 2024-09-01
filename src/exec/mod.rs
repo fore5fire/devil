@@ -6,10 +6,12 @@ pub mod http1;
 pub mod http2;
 pub mod http2frames;
 mod pause;
+pub mod raw_tcp;
 mod runner;
 pub mod tcp;
-pub mod tcpsegments;
+mod tcp_common;
 mod tee;
+mod timing;
 pub mod tls;
 
 use std::collections::{HashMap, VecDeque};
@@ -302,9 +304,7 @@ impl<'a> Executor<'a> {
                     }
                     StepPlanOutput::Tls(req) => inputs.current.tls = Some(req.clone()),
                     StepPlanOutput::Tcp(req) => inputs.current.tcp = Some(req.clone()),
-                    StepPlanOutput::TcpSegments(req) => {
-                        inputs.current.tcp_segments = Some(req.clone())
-                    }
+                    StepPlanOutput::RawTcp(req) => inputs.current.raw_tcp = Some(req.clone()),
                 }
                 Ok(req)
             })
@@ -368,7 +368,7 @@ impl<'a> Executor<'a> {
                 Output::Http2Frames(out) => output.http2_frames = Some(out),
                 Output::Tls(out) => output.tls = Some(out),
                 Output::Tcp(out) => output.tcp = Some(out),
-                Output::TcpSegments(out) => output.tcp_segments = Some(out),
+                Output::RawTcp(out) => output.raw_tcp = Some(out),
             }
             let Some(inner) = inner else {
                 break;
