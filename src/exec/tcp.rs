@@ -1,31 +1,25 @@
-use std::mem;
-use std::pin::pin;
 use std::sync::Arc;
-use std::task::Poll;
-use std::time::{Duration, Instant};
+use std::task::{ready, Poll};
+use std::time::Instant;
+use std::{mem, pin::pin};
 
 use anyhow::{anyhow, bail};
 use chrono::TimeDelta;
-use futures::FutureExt;
-use log::{debug, info, warn};
-use pnet::packet::ip::IpNextHeaderProtocols;
-use pnet::transport::{self, TransportChannelType};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
-use tokio::net::{self, TcpStream};
-use tokio::select;
-use tokio::sync::{mpsc, oneshot};
-use tokio::task::JoinHandle;
-use tokio::time::sleep;
+use tokio::io::{ReadHalf, WriteHalf};
+use tokio::net::{TcpSocket, TcpStream};
+use tokio::spawn;
 
 use crate::{
-    TcpError, TcpOutput, TcpPauseOutput, TcpPlanOutput, TcpReceivedOutput, TcpSegmentOutput,
-    TcpSentOutput, WithPlannedCapacity,
+    TcpError, TcpOutput, TcpPauseOutput, TcpPlanOutput, TcpReceivedOutput, TcpSentOutput,
+    WithPlannedCapacity,
 };
 
-use super::pause::{self, PauseSpec, PauseStream};
-use super::tee::Tee;
-use super::timing::Timing;
-use super::{tcp_common, Context};
+use super::pause::{PauseReader, PauseSpec, PauseWriter};
+use super::raw_tcp::RawTcpRunner;
+use super::tee::{self, TeeReader, TeeWriter};
+use super::timing::{TimingReader, TimingWriter};
+use super::{Context, Error};
 
 #[derive(Debug)]
 pub(super) struct TcpRunner {
@@ -33,6 +27,7 @@ pub(super) struct TcpRunner {
     out: TcpOutput,
     state: State,
     size_hint: Option<usize>,
+    reader: Option<TcpRunnerReader>,
 }
 
 #[derive(Debug)]
@@ -42,18 +37,11 @@ pub enum State {
     },
     Open {
         start: Instant,
-        stream: PauseStream<BufWriter<Tee<Timing<TcpStream>>>>,
-        raw_reads: JoinHandle<Vec<TcpSegmentOutput>>,
-        raw_writes: JoinHandle<Vec<TcpSegmentOutput>>,
+        writer: PauseWriter<BufWriter<TeeWriter<TimingWriter<WriteHalf<TcpStream>>>>>,
         size_hint: Option<usize>,
-        send_done: oneshot::Sender<usize>,
-        recv_done: oneshot::Sender<usize>,
+        raw: RawTcpRunner,
     },
-    Completed {
-        raw_reads: JoinHandle<Vec<TcpSegmentOutput>>,
-        raw_writes: JoinHandle<Vec<TcpSegmentOutput>>,
-    },
-    CompletedEmpty,
+    Completed,
     Invalid,
 }
 
@@ -63,11 +51,13 @@ impl TcpRunner {
             state: State::Pending {
                 pause: plan.pause.clone(),
             },
+            reader: None,
             out: TcpOutput {
                 sent: None,
                 pause: TcpPauseOutput::with_planned_capacity(&plan.pause),
                 plan,
                 received: None,
+                //close: TcpCloseOutput::default(),
                 errors: Vec::new(),
                 duration: TimeDelta::zero(),
                 handshake_duration: None,
@@ -86,52 +76,13 @@ impl TcpRunner {
         Some(self.out.plan.body.len())
     }
 
-    pub async fn start(&mut self) -> anyhow::Result<()> {
+    pub async fn start(&mut self, raw: RawTcpRunner) -> anyhow::Result<()> {
         let State::Pending { pause } = mem::replace(&mut self.state, State::Invalid) else {
             panic!("invalid state to start tcp {:?}", self.state)
         };
 
-        let Some(remote_addr) = net::lookup_host(format!(
-            "{}:{}",
-            self.out.plan.dest_host, self.out.plan.dest_port
-        ))
-        .await
-        .map_err(|e| {
-            anyhow!(
-                "lookup host '{}:{}': {e}",
-                self.out.plan.dest_host,
-                self.out.plan.dest_port
-            )
-        })?
-        .next() else {
-            self.out.errors.push(TcpError {
-                kind: "dns lookup".to_owned(),
-                message: format!(
-                    "no A records found for tcp_segments.dest_host '{}'",
-                    self.out.plan.dest_host
-                ),
-            });
-            self.state = State::CompletedEmpty;
-            bail!(
-                "no A records found for tcp_segments.dest_host '{}'",
-                self.out.plan.dest_host
-            );
-        };
+        let (local_addr, remote_addr) = raw.resolved_addrs();
         let remote_addr_string = remote_addr.ip().to_string();
-
-        let (_, read) = transport::transport_channel(
-            65535,
-            TransportChannelType::Layer4(transport::TransportProtocol::Ipv4(
-                IpNextHeaderProtocols::Tcp,
-            )),
-        )
-        .inspect_err(|e| {
-            self.out.errors.push(TcpError {
-                kind: e.kind().to_string(),
-                message: e.to_string(),
-            });
-            self.state = State::CompletedEmpty;
-        })?;
 
         self.out.sent = Some(TcpSentOutput {
             dest_ip: remote_addr_string,
@@ -143,58 +94,50 @@ impl TcpRunner {
         });
 
         let start = Instant::now();
-        let raw_reads = tcp_common::reader(read, remote_addr, start);
-        let (recv_done, is_done) = oneshot::channel();
-        let raw_reads = tokio::spawn(segment_handler(raw_reads, is_done));
-
-        // TODO: support recording of raw writes.
-        let (_, raw_writes) = mpsc::unbounded_channel::<TcpSegmentOutput>();
-        let (send_done, is_done) = oneshot::channel();
-        let raw_writes = tokio::spawn(segment_handler(raw_writes, is_done));
-
-        let transport = match TcpStream::connect(remote_addr).await {
+        let socket = TcpSocket::new_v4().inspect_err(|e| {
+            self.out.errors.push(TcpError {
+                kind: e.kind().to_string(),
+                message: e.to_string(),
+            });
+            self.state = State::Completed;
+        })?;
+        socket.bind(local_addr);
+        let transport = match socket.connect(remote_addr).await {
             Ok(t) => t,
             Err(e) => {
                 self.out.errors.push(TcpError {
                     kind: e.kind().to_string(),
                     message: e.to_string(),
                 });
-                self.state = State::Completed {
-                    raw_reads,
-                    raw_writes,
-                };
+                self.state = State::Completed;
                 bail!("connect to {remote_addr}: {e}");
             }
         };
+        let (reader, writer) = tokio::io::split(transport);
 
-        let mut tee = Tee::new(Timing::new(transport, self.out.plan.close.timeout));
-        if let Some(limit) = self.out.plan.close.bytes {
-            tee.set_read_limit(limit.try_into()?);
-        }
-        if let Some(pattern) = &self.out.plan.close.pattern {
-            tee.set_pattern(
-                Some(pattern.parsed.clone()),
-                self.out
-                    .plan
-                    .close
-                    .pattern_window
-                    .map(|window| window.try_into())
-                    .transpose()?,
-            );
-        }
+        let tee_reader = TeeReader::new(TimingReader::new(reader));
+        //if let Some(limit) = self.out.plan.close.bytes {
+        //    tee_reader.set_read_limit(limit.try_into()?);
+        //}
+        //if let Some(pattern) = &self.out.plan.close.pattern {
+        //    tee_reader.set_pattern(
+        //        Some(pattern.parsed.clone()),
+        //        self.out
+        //            .plan
+        //            .close
+        //            .pattern_window
+        //            .map(|window| window.try_into())
+        //            .transpose()?,
+        //    );
+        //}
 
         self.state = State::Open {
+            raw,
             start,
-            send_done,
-            recv_done,
-            stream: pause::new_stream(
+            size_hint: self.size_hint,
+            writer: PauseWriter::new(
                 self.ctx.clone(),
-                BufWriter::new(tee),
-                // TODO: implement read size hints.
-                vec![PauseSpec {
-                    group_offset: 0,
-                    plan: pause.receive_body.start,
-                }],
+                BufWriter::new(TeeWriter::new(TimingWriter::new(writer))),
                 if let Some(size) = self.size_hint {
                     vec![
                         PauseSpec {
@@ -216,23 +159,61 @@ impl TcpRunner {
                     }]
                 },
             ),
-            raw_reads,
-            raw_writes,
-            size_hint: self.size_hint,
         };
+        self.reader = Some(TcpRunnerReader::new(PauseReader::new(
+            self.ctx.clone(),
+            tee_reader,
+            // TODO: implement read size hints.
+            vec![PauseSpec {
+                group_offset: 0,
+                plan: pause.receive_body.start,
+            }],
+        )));
+
         Ok(())
     }
 
     pub async fn execute(&mut self) {
+        let mut reader =
+            mem::take(&mut self.reader).expect("reader should be set for call to take_reader");
+
+        // Setup signal to close the write half of the connection.
+        //let done = CancellationToken::new();
+        //let is_done = done.clone();
+        //if self.out.plan.close.pattern.is_none()
+        //    && self.out.plan.close.timeout.is_none()
+        //    && self.out.plan.close.bytes.is_none()
+        //{
+        //    done.cancel();
+        //}
+        let handle = spawn(async move {
+            //defer! {
+            //    done.cancel();
+            //}
+            let mut buf = [0; 512];
+            loop {
+                // Read and ignore the data since its already recorded by TeeReader.
+                match reader.read(&mut buf).await {
+                    Ok(size) if size == 0 => {
+                        return (reader, Ok(()));
+                    }
+                    //Err(e) => match e.downcast::<Error>() {
+                    //    Ok(Error::Done) => done.cancel(),
+                    Err(e) => {
+                        return (reader, Err(e));
+                    }
+                    //},
+                    _ => {}
+                }
+            }
+        });
+
         let body = std::mem::take(&mut self.out.plan.body);
         if let Err(e) = self.write_all(&body).await {
             self.out.errors.push(TcpError {
                 kind: e.kind().to_string(),
                 message: e.to_string(),
             });
-            self.out.plan.body = body;
-            self.complete();
-            return;
         };
         self.out.plan.body = body;
         if let Err(e) = self.flush().await {
@@ -240,82 +221,48 @@ impl TcpRunner {
                 kind: e.kind().to_string(),
                 message: e.to_string(),
             });
-            self.complete();
-            return;
         }
-        let mut response = Vec::new();
-        if let Err(e) = self.read_to_end(&mut response).await {
+        //is_done.cancelled().await;
+        if let Err(e) = &self.shutdown().await {
             self.out.errors.push(TcpError {
                 kind: e.kind().to_string(),
                 message: e.to_string(),
             });
-            self.complete();
-            return;
         }
+        let (reader, read_result) = handle.await.expect("tcp reader should not panic");
+        if let Err(e) = read_result {
+            self.out.errors.push(TcpError {
+                kind: e.kind().to_string(),
+                message: e.to_string(),
+            });
+        }
+        self.reader = Some(reader);
     }
 
     pub async fn finish(mut self) -> TcpOutput {
+        let end_time = Instant::now();
         self.complete();
-        match self.state {
-            State::CompletedEmpty => {}
-            State::Completed {
-                raw_reads,
-                raw_writes,
-            } => {
-                if let Ok(raw_writes) = raw_writes.await {
-                    if let Some(ref mut sent) = &mut self.out.sent {
-                        sent.segments = raw_writes;
-                    }
-                }
-                if let Ok(raw_reads) = raw_reads.await {
-                    if let Some(ref mut received) = &mut self.out.received {
-                        received.segments = raw_reads;
-                    } else {
-                        self.out.received = Some(TcpReceivedOutput {
-                            body: Vec::new(),
-                            segments: raw_reads,
-                            time_to_first_byte: None,
-                            time_to_last_byte: None,
-                        });
-                    }
-                }
-            }
-            _ => {
-                panic!("invalid completion state {:?}", self.state)
-            }
-        }
-        self.out
-    }
 
-    fn complete(&mut self) {
         let state = std::mem::replace(&mut self.state, State::Invalid);
-        let State::Open {
-            start,
-            stream,
-            raw_reads,
-            raw_writes,
-            send_done,
-            recv_done,
-            ..
-        } = state
-        else {
-            self.state = state;
-            return;
+        let State::Open { start, writer, .. } = state else {
+            return self.out;
+        };
+        let Some(reader) = mem::take(&mut self.reader) else {
+            panic!("reader unset in Open state");
         };
 
-        let end_time = Instant::now();
-
         // TODO: how to sort out which pause outputs came from first or last?
-        let (stream, send_pause, receive_pause) = stream.finish_stream();
-        let stream = stream.into_inner();
-        let (stream, writes, reads, truncated_reads) = stream.into_parts();
+        let (writer, send_pause) = writer.finish();
+        let writer = writer.into_inner();
+        let (writer, writes) = writer.into_parts();
 
-        if let Err(e) = send_done.send(writes.len()) {
-            warn!("send expected length of writes to raw socket collector: {e}");
-        }
-        if let Err(e) = recv_done.send(reads.len()) {
-            warn!("send expected length of reads to raw socket collector: {e}");
-        }
+        //let recv_max_reached = reader.recv_max_reached;
+        //let read_timed_out = reader.timed_out;
+
+        let (reader, receive_pause) = reader.inner.finish();
+        let (reader, reads, truncated_reads, pattern_match) = reader.into_parts();
+
+        let end_time = writer.shutdown_end().unwrap_or(end_time);
 
         let mut receive_pause = receive_pause.into_iter();
         self.out.pause.receive_body.start = receive_pause.next().unwrap_or_default();
@@ -324,11 +271,17 @@ impl TcpRunner {
         self.out.pause.send_body.start = send_pause.next().unwrap_or_default();
         self.out.pause.send_body.end = send_pause.next().unwrap_or_default();
 
+        //self.out.close = TcpCloseOutput {
+        //    timed_out: read_timed_out,
+        //    recv_max_reached,
+        //    pattern_match: pattern_match.map(|range| reads[range].to_owned()),
+        //};
+
         if let Some(sent) = &mut self.out.sent {
-            if let Some(first_write) = stream.first_write() {
+            if let Some(first_write) = writer.first_write() {
                 sent.time_to_first_byte = Some(TimeDelta::from_std(first_write - start).unwrap());
             }
-            if let Some(last_write) = stream.first_write() {
+            if let Some(last_write) = writer.last_write() {
                 sent.time_to_last_byte = Some(TimeDelta::from_std(last_write - start).unwrap());
             }
             sent.body = writes;
@@ -337,13 +290,13 @@ impl TcpRunner {
             self.out.received = Some(TcpReceivedOutput {
                 body: reads,
                 segments: Vec::new(),
-                time_to_first_byte: stream
+                time_to_first_byte: reader
                     .first_read()
                     .map(|first_read| first_read - start)
                     .map(TimeDelta::from_std)
                     .transpose()
                     .unwrap(),
-                time_to_last_byte: stream
+                time_to_last_byte: reader
                     .last_read()
                     .map(|last_read| last_read - start)
                     .map(TimeDelta::from_std)
@@ -352,10 +305,21 @@ impl TcpRunner {
             });
         }
         self.out.duration = TimeDelta::from_std(end_time - start).unwrap();
-        self.state = State::Completed {
-            raw_reads,
-            raw_writes,
+        self.state = State::Completed;
+        self.out
+    }
+
+    fn complete(&mut self) {
+        let State::Open { writer, raw, .. } = &mut self.state else {
+            return;
         };
+        raw.shutdown(
+            self.reader
+                .as_ref()
+                .map(|r| r.inner.inner_ref().reads.len())
+                .unwrap_or_default(),
+            writer.inner_ref().get_ref().writes.len(),
+        );
     }
 }
 
@@ -365,17 +329,13 @@ impl AsyncRead for TcpRunner {
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
-        let State::Open { stream, .. } = &mut self.state else {
+        let Some(reader) = &mut self.reader else {
             return Poll::Ready(Err(std::io::Error::other(anyhow!(
                 "cannot read from stream in {:?} state",
                 self.state
             ))));
         };
-
-        // Read some data.
-        let result = pin!(stream).poll_read(cx, buf);
-
-        result
+        pin!(reader).poll_read(cx, buf)
     }
 }
 
@@ -385,91 +345,83 @@ impl AsyncWrite for TcpRunner {
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<Result<usize, std::io::Error>> {
-        let State::Open { stream, .. } = &mut self.state else {
+        let State::Open { writer, .. } = &mut self.state else {
             return Poll::Ready(Err(std::io::Error::other(anyhow!(
                 "cannot write to stream in {:?} state",
                 self.state
             ))));
         };
-        pin!(stream).poll_write(cx, buf)
+        pin!(writer).poll_write(cx, buf)
     }
 
     fn poll_flush(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
-        let State::Open { stream, .. } = &mut self.state else {
+        let State::Open { writer, .. } = &mut self.state else {
             return Poll::Ready(Err(std::io::Error::other(anyhow!(
                 "cannot flush stream in {:?} state",
                 self.state
             ))));
         };
-        std::pin::pin!(stream).poll_flush(cx)
+        std::pin::pin!(writer).poll_flush(cx)
     }
 
     fn poll_shutdown(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
-        let State::Open { stream, .. } = &mut self.state else {
+        let State::Open { writer, .. } = &mut self.state else {
             return Poll::Ready(Err(std::io::Error::other(anyhow!(
                 "cannot shutdown stream in {:?} state",
                 self.state
             ))));
         };
+        ready!(pin!(writer).poll_shutdown(cx))?;
+        self.complete();
+        Poll::Ready(Ok(()))
+    }
+}
 
-        let poll = pin!(stream).poll_shutdown(cx);
-        if let Poll::Ready(Ok(())) = &poll {
-            self.complete();
+#[derive(Debug)]
+struct TcpRunnerReader {
+    inner: PauseReader<TeeReader<TimingReader<ReadHalf<TcpStream>>>>,
+    recv_max_reached: bool,
+    timed_out: bool,
+}
+
+impl TcpRunnerReader {
+    fn new(inner: PauseReader<TeeReader<TimingReader<ReadHalf<TcpStream>>>>) -> Self {
+        Self {
+            inner,
+            recv_max_reached: false,
+            timed_out: false,
         }
-        poll
+    }
+}
+
+impl AsyncRead for TcpRunnerReader {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        // Read some data.
+        let reader = &mut self.inner;
+        let Err(e) = ready!(pin!(reader).poll_read(cx, buf)) else {
+            return Poll::Ready(Ok(()));
+        };
+        // Handle errors which signal clean shutdown.
+        match e.downcast::<tee::Error>() {
+            Ok(e) => {
+                if matches!(e, tee::Error::LimitReached) {
+                    self.recv_max_reached = true;
+                }
+                return Poll::Ready(Err(std::io::Error::other(Error::Done)));
+            }
+            Err(e) => Poll::Ready(Err(e)),
+        }
     }
 }
 
 impl Unpin for TcpRunner {}
-
-async fn segment_handler(
-    mut chan: mpsc::UnboundedReceiver<TcpSegmentOutput>,
-    is_done: oneshot::Receiver<usize>,
-) -> Vec<TcpSegmentOutput> {
-    let mut is_done = is_done.fuse();
-    let mut segments = Vec::new();
-    let mut total_size = 0;
-    let expect_size = loop {
-        select! {
-            Some(segment) = chan.recv() => {
-                debug!("raw socket got segment {segment:?}");
-                total_size += segment.payload.len();
-                segments.push(segment);
-            }
-            done = &mut is_done => {
-                match done {
-                    Ok(size) => break size,
-                    Err(e) => {
-                        info!("raw socket done signal: {e}");
-                        return segments;
-                    }
-                }
-            },
-            else => return segments,
-        }
-    };
-    debug!("raw socket got signal to expect {expect_size} bytes");
-    loop {
-        select! {
-            Some(segment) = chan.recv() => {
-                debug!("raw socket got segment {segment:?}");
-                total_size += segment.payload.len();
-                segments.push(segment);
-                if total_size >= expect_size {
-                    info!("raw socket post-completion reached threshold {total_size} of {expect_size} bytes");
-                    return segments;
-                }
-            }
-            _ = sleep(Duration::new(0, 50000000)) => {
-                info!("raw socket post-completion timed out with {total_size} of {expect_size} bytes");
-                return segments;
-            }
-        }
-    }
-}

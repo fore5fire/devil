@@ -10,8 +10,8 @@ use super::tcp::TcpRunner;
 use super::tls::TlsRunner;
 use super::{http1::Http1Runner, Context};
 use crate::{
-    HttpOutput, HttpPauseOutput, HttpPlanOutput, HttpRequestOutput, HttpResponse, TcpCloseOutput,
-    TcpPlanOutput, TlsPlanOutput,
+    HttpOutput, HttpPauseOutput, HttpPlanOutput, HttpRequestOutput, HttpResponse, TcpPlanOutput,
+    TlsPlanOutput,
 };
 
 #[derive(Debug)]
@@ -95,7 +95,7 @@ impl HttpRunner {
                     .port_or_known_default()
                     .ok_or_else(|| anyhow!("url is missing port"))?,
                 body: Vec::new(),
-                close: TcpCloseOutput::default(),
+                //close: TcpPlanCloseOutput::default(),
                 pause: crate::TcpPauseOutput::default(),
             },
         ))));

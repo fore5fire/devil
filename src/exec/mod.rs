@@ -9,13 +9,11 @@ mod pause;
 pub mod raw_tcp;
 mod runner;
 pub mod tcp;
-mod tcp_common;
 mod tee;
 mod timing;
 pub mod tls;
 
 use std::collections::{HashMap, VecDeque};
-use std::fmt::Display;
 use std::num::TryFromIntError;
 use std::sync::Arc;
 
@@ -426,18 +424,11 @@ impl<'a> Iterator for StateIterator<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("execution done")]
     Done,
 }
-
-impl Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("execution done")
-    }
-}
-
-impl std::error::Error for Error {}
 
 #[derive(Debug, Default)]
 pub(super) struct Context {

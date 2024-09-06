@@ -1,29 +1,36 @@
-use std::{io, mem, net::IpAddr, pin::Pin, str::FromStr, sync::Arc, task::Poll, time::Instant};
+use std::mem;
+use std::net::SocketAddr;
+use std::{io, net::IpAddr, pin::Pin, str::FromStr, sync::Arc, time::Instant};
 
 use anyhow::{anyhow, bail};
-use chrono::Duration;
-use futures::{Future, TryFutureExt};
+use chrono::TimeDelta;
+use futures::Future;
 use itertools::Itertools;
+use log::{debug, info};
+use pnet::packet::tcp::{self, MutableTcpPacket, TcpOption};
 use pnet::{
-    packet::{
-        ip::IpNextHeaderProtocols,
-        tcp::{self, MutableTcpPacket, TcpFlags, TcpOption, TcpPacket},
-    },
+    packet::{ip::IpNextHeaderProtocols, tcp::TcpPacket},
     transport::{self, TransportChannelType},
 };
+use pnet::{
+    packet::{tcp::TcpOptionNumbers, Packet},
+    transport::TransportReceiver,
+};
+use tokio::join;
+use tokio::net::TcpSocket;
+use tokio::sync::oneshot::error::TryRecvError;
 use tokio::{
-    io::{AsyncRead, AsyncWrite},
     net,
-    sync::mpsc,
+    sync::{mpsc, oneshot},
     task::JoinHandle,
 };
 
 use crate::{
-    exec::pause::Pause, RawTcpError, RawTcpOutput, RawTcpPauseOutput, RawTcpPlanOutput,
-    TcpSegmentOptionOutput, TcpSegmentOutput, WithPlannedCapacity,
+    RawTcpError, RawTcpOutput, RawTcpPauseOutput, RawTcpPlanOutput, TcpSegmentOptionOutput,
+    TcpSegmentOutput, WithPlannedCapacity,
 };
 
-use super::{tcp_common, Context};
+use super::Context;
 
 #[derive(Debug)]
 pub(super) struct RawTcpRunner {
@@ -39,43 +46,37 @@ type OwnedBoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
 #[derive(Debug)]
 enum State {
-    Pending { pause: RawTcpPauseOutput },
+    Pending {
+        pause: RawTcpPauseOutput,
+    },
     Open(OpenState),
-    Completed,
+    Passive {
+        writes: JoinHandle<(Vec<TcpSegmentOutput>, Option<io::Error>)>,
+        writes_done: oneshot::Sender<usize>,
+        reads: JoinHandle<(Vec<TcpSegmentOutput>, Option<io::Error>)>,
+        reads_done: oneshot::Sender<usize>,
+        remote_addr: SocketAddr,
+        local_addr: SocketAddr,
+    },
+    Completed {
+        reads: JoinHandle<(Vec<TcpSegmentOutput>, Option<io::Error>)>,
+    },
+    CompletedPassive {
+        reads: JoinHandle<(Vec<TcpSegmentOutput>, Option<io::Error>)>,
+        writes: JoinHandle<(Vec<TcpSegmentOutput>, Option<io::Error>)>,
+    },
+    CompletedEmpty,
     Invalid,
 }
 
 #[derive(Debug)]
 struct OpenState {
-    write: WriteState,
+    send_write: mpsc::UnboundedSender<Option<TcpPacket<'static>>>,
     write_done: JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>>,
-    read: mpsc::UnboundedReceiver<TcpSegmentOutput>,
-    pending: Vec<u8>,
-    pending_at: usize,
-    write_sequence_number: u32,
-}
-
-enum WriteState {
-    Ready(mpsc::Sender<Option<TcpPacket<'static>>>),
-    Pending(
-        OwnedBoxFuture<
-            io::Result<(
-                Option<TcpSegmentOutput>,
-                mpsc::Sender<Option<TcpPacket<'static>>>,
-            )>,
-        >,
-    ),
-    Invalid,
-}
-
-impl std::fmt::Debug for WriteState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Ready(sender) => f.debug_tuple("WriteState::Ready").field(sender).finish(),
-            Self::Pending(_) => f.debug_tuple("WriteState::Pending").field(&"?").finish(),
-            Self::Invalid => f.debug_tuple("WriteState::Invalid").finish(),
-        }
-    }
+    reads: JoinHandle<(Vec<TcpSegmentOutput>, Option<io::Error>)>,
+    reads_done: oneshot::Sender<usize>,
+    remote_addr: SocketAddr,
+    local_addr: SocketAddr,
 }
 
 impl RawTcpRunner {
@@ -96,7 +97,7 @@ impl RawTcpRunner {
                 src_port: 0,
                 received: Vec::new(),
                 errors: Vec::new(),
-                duration: Duration::zero(),
+                duration: TimeDelta::zero(),
                 handshake_duration: None,
                 pause: RawTcpPauseOutput::with_planned_capacity(&plan.pause),
                 plan,
@@ -110,9 +111,12 @@ impl RawTcpRunner {
             bail!("attempt to start TcpRunner from unexpected state: {state:?}");
         };
 
-        let Some(remote_addr) = net::lookup_host(format!(
-            "{}:{}",
-            self.out.plan.dest_host, self.out.plan.dest_port
+        // DNS lookup for remote address.
+        let Some(remote_addr) = net::lookup_host(SocketAddr::new(
+            IpAddr::from_str(&self.out.plan.dest_host).map_err(|e| {
+                anyhow!("parse raw_tcp.src_host '{}': {e}", self.out.plan.dest_host)
+            })?,
+            self.out.plan.dest_port,
         ))
         .await
         .map_err(|e| {
@@ -126,15 +130,78 @@ impl RawTcpRunner {
             self.out.errors.push(RawTcpError {
                 kind: "dns lookup".to_owned(),
                 message: format!(
-                    "no A records found for tcp_segments.dest_host '{}'",
+                    "no A records found for raw_tcp.dest_host '{}'",
                     self.out.plan.dest_host
                 ),
             });
             bail!(
-                "no A records found for tcp_segments.dest_host '{}'",
+                "no A records found for raw_tcp.dest_host '{}'",
                 self.out.plan.dest_host
             );
         };
+
+        // DNS lookup for local address.
+        let src_host = self
+            .out
+            .plan
+            .src_host
+            .clone()
+            .unwrap_or_else(|| "localhost".to_owned());
+        let src_port = self.out.plan.src_port.unwrap_or(0);
+        let Some(local_addr) = net::lookup_host(SocketAddr::new(
+            IpAddr::from_str(&src_host)
+                .map_err(|e| anyhow!("parse raw_tcp.src_host '{src_host}': {e}"))?,
+            src_port,
+        ))
+        .await
+        .map_err(|e| {
+            anyhow!(
+                "lookup host '{}:{}': {e}",
+                self.out.plan.dest_host,
+                self.out.plan.dest_port
+            )
+        })?
+        .next() else {
+            self.out.errors.push(RawTcpError {
+                kind: "dns lookup".to_owned(),
+                message: format!(
+                    "no A records found for raw_tcp.src_host '{}'",
+                    self.out.plan.dest_host
+                ),
+            });
+            bail!(
+                "no A records found for raw_tcp.src_host '{}'",
+                self.out.plan.dest_host
+            );
+        };
+
+        // Bind a temporary tcp socket to let the OS resolve our final local device and port.
+        let tmp_socket = if local_addr.is_ipv4() {
+            TcpSocket::new_v4()
+        } else {
+            TcpSocket::new_v6()
+        }
+        .inspect_err(|e| {
+            self.out.errors.push(RawTcpError {
+                kind: e.kind().to_string(),
+                message: e.to_string(),
+            });
+            self.state = State::CompletedEmpty;
+        })?;
+        let local_addr = tmp_socket
+            .bind(local_addr)
+            .and_then(|()| tmp_socket.local_addr())
+            .inspect_err(|e| {
+                self.out.errors.push(RawTcpError {
+                    kind: e.kind().to_string(),
+                    message: e.to_string(),
+                });
+                self.state = State::CompletedEmpty;
+            })?;
+        // Record the actual resolved destination and source IPs for the output.
+        self.out.dest_ip = remote_addr.to_string();
+        self.out.src_host = local_addr.ip().to_string();
+        self.out.src_port = local_addr.port();
 
         let (mut write, read) = transport::transport_channel(
             65535,
@@ -147,148 +214,155 @@ impl RawTcpRunner {
                 kind: e.kind().to_string(),
                 message: e.to_string(),
             });
-            self.state = State::Completed;
+            self.state = State::CompletedEmpty;
         })?;
 
-        let src_host = self
-            .out
-            .plan
-            .src_host
-            .clone()
-            .unwrap_or_else(|| "127.0.0.1".to_owned());
-        let src_port = self.out.plan.src_port.unwrap_or_else(|| 8888);
-        self.remote_ip = Some(remote_addr.ip());
-        self.local_ip = Some(
-            IpAddr::from_str(&src_host)
-                .map_err(|e| anyhow!("parse tcp_segments.src_host '{src_host}': {e}"))?,
-        );
-        // Record the actual resolved destination and source IPs for the output.
-        self.out.dest_ip = remote_addr.to_string();
-        self.out.src_host = src_host;
-        self.out.src_port = src_port;
-
         let start = Instant::now();
-        let receive_read = tcp_common::reader(read, remote_addr, start);
+        let (reads_done, recv_reads_done) = oneshot::channel();
+        let reads = reader(read, remote_addr, start, recv_reads_done);
 
-        // TODO: Use AsyncFd instead of one thread per request.
-        //let write_fd = AsyncFd::new(write.socket.fd)?;
-        //let readable = read_fd.readable().await?;
-        let (send_write, mut receive_write) = mpsc::channel::<Option<TcpPacket<'static>>>(1);
-        let write_done = tokio::task::spawn_blocking(
-            move || -> Result<_, Box<dyn std::error::Error + Send + Sync>> {
+        let write_sequence_number = self.out.plan.isn;
+
+        if self.out.plan.segments.is_empty() {
+            let (_, read) = transport::transport_channel(
+                65535,
+                TransportChannelType::Layer4(transport::TransportProtocol::Ipv4(
+                    IpNextHeaderProtocols::Tcp,
+                )),
+            )
+            .inspect_err(|e| {
+                self.out.errors.push(RawTcpError {
+                    kind: e.kind().to_string(),
+                    message: e.to_string(),
+                });
+                self.state = State::CompletedEmpty;
+            })?;
+            let (writes_done, recv_writes_done) = oneshot::channel();
+            self.state = State::Passive {
+                writes: reader(read, local_addr, start, recv_writes_done),
+                writes_done,
+                reads,
+                reads_done,
+                remote_addr,
+                local_addr,
+            }
+        } else {
+            // TODO: Use AsyncFd instead of one thread per request.
+            //let write_fd = AsyncFd::new(write.socket.fd)?;
+            //let readable = read_fd.readable().await?;
+            let (send_write, mut receive_write) =
+                mpsc::unbounded_channel::<Option<TcpPacket<'static>>>();
+            let write_done = tokio::task::spawn_blocking(move || {
                 while let Some(packet) = receive_write.blocking_recv() {
                     // Do nothing if this is just a sync message.
                     let Some(packet) = packet else {
                         continue;
                     };
 
-                    match write.send_to(packet, remote_addr.ip()) {
-                        Ok(_) => {}
-                        Err(e) => return Err(Box::new(e)),
-                    }
+                    write.send_to(packet, remote_addr.ip())?;
                 }
                 Ok(())
-            },
-        );
-
-        self.out
-            .pause
-            .handshake
-            .start
-            .reserve_exact(self.out.plan.pause.handshake.start.len());
-        for p in &self.out.plan.pause.handshake.start {
-            if p.offset_bytes != 0 {
-                bail!("pause offset not yet supported for tcp handshake");
-            }
-            println!("pausing before tcp handshake for {:?}", p.duration);
-            self.out
-                .pause
-                .handshake
-                .start
-                .push(Pause::new(&self.ctx, p).await?);
-        }
-
-        let write_sequence_number = self.out.plan.isn;
-        let (segment, send_write) = Self::send(
-            TcpSegmentOutput {
-                source: self.out.src_port,
-                destination: self.out.dest_port,
-                sequence_number: write_sequence_number,
-                flags: TcpFlags::SYN,
-                // TODO: congestion control if no window specified?
-                window: self.out.plan.window,
-                acknowledgment: 0,
-                checksum: None,
-                // Packet with no options or padding is 5 32-bit words.
-                data_offset: Self::data_offset(&Vec::new()),
-                urgent_ptr: 0,
-                reserved: 0,
-                options: Vec::new(),
-                payload: Vec::new(),
-                received: None,
-                sent: None,
-            },
-            self.local_ip.unwrap(),
-            self.remote_ip.unwrap(),
-            send_write,
-        )
-        .await
-        .inspect_err(|e| {
-            self.out.errors.push(RawTcpError {
-                kind: "handshake".to_owned(),
-                message: format!("send SYN to '{}' failed: {e}", self.out.dest_ip),
             });
-        })
-        .map_err(|e| anyhow!("send SYN to '{}' failed: {e}", self.out.dest_ip))?;
-        self.out.sent.push(segment.unwrap());
-
-        let handshake_duration = start.elapsed();
-        self.out
-            .pause
-            .handshake
-            .end
-            .reserve_exact(self.out.plan.pause.handshake.end.len());
-        for p in self.out.plan.pause.handshake.end.iter() {
-            if p.offset_bytes != 0 {
-                bail!("pause offset not yet supported for tcp handshake");
-            }
-            println!("pausing after tcp handshake for {:?}", p.duration);
-            self.out
-                .pause
-                .handshake
-                .end
-                .push(Pause::new(&self.ctx, p).await?);
+            self.state = State::Open(OpenState {
+                send_write,
+                write_done,
+                reads,
+                reads_done,
+                local_addr,
+                remote_addr,
+            });
         }
-
-        self.out.handshake_duration = Some(chrono::Duration::from_std(handshake_duration).unwrap());
-        self.state = State::Open(OpenState {
-            write: WriteState::Ready(send_write),
-            write_done,
-            write_sequence_number,
-            read: receive_read,
-            pending: Vec::new(),
-            pending_at: 0,
-        });
         Ok(())
+    }
+
+    pub fn resolved_addrs(&self) -> (SocketAddr, SocketAddr) {
+        match &self.state {
+            State::Open(OpenState {
+                remote_addr,
+                local_addr,
+                ..
+            })
+            | State::Passive {
+                remote_addr,
+                local_addr,
+                ..
+            } => (*local_addr, *remote_addr),
+            s => panic!("invalid state to get resolved ips: {s:?}"),
+        }
     }
 
     pub async fn execute(&mut self) {}
 
-    pub fn finish(mut self) -> RawTcpOutput {
-        self.complete();
+    pub async fn finish(mut self) -> RawTcpOutput {
+        self.shutdown(0, 0);
+        match self.state {
+            State::CompletedPassive { reads, writes } => {
+                let (reads, writes) = join!(reads, writes);
+                let (reads, read_err) = reads.expect("raw_tcp read handler should not panic");
+                self.out.received = reads;
+                if let Some(e) = read_err {
+                    self.out.errors.push(RawTcpError {
+                        kind: e.kind().to_string(),
+                        message: e.to_string(),
+                    });
+                }
+
+                let (writes, write_err) = writes.expect("raw_tcp write handler should not panic");
+                self.out.sent = writes;
+                if let Some(e) = write_err {
+                    self.out.errors.push(RawTcpError {
+                        kind: e.kind().to_string(),
+                        message: e.to_string(),
+                    });
+                }
+            }
+            State::Completed { reads } => {
+                let (reads, read_err) = reads.await.expect("raw_tcp read handler should not panic");
+                self.out.received = reads;
+                if let Some(e) = read_err {
+                    self.out.errors.push(RawTcpError {
+                        kind: e.kind().to_string(),
+                        message: e.to_string(),
+                    });
+                }
+            }
+            State::CompletedEmpty => {}
+            _ => panic!("invalid state to finish raw_tcp"),
+        };
         self.out
     }
 
-    fn complete(&mut self) {
+    pub fn shutdown(&mut self, expect_read_len: usize, expect_write_len: usize) {
         let end = Instant::now();
-        let state = mem::replace(&mut self.state, State::Completed);
+
+        match mem::replace(&mut self.state, State::Invalid) {
+            State::Open(OpenState {
+                reads_done, reads, ..
+            }) => {
+                reads_done.send(expect_read_len);
+                self.state = State::Completed { reads }
+            }
+            State::Passive {
+                writes_done,
+                writes,
+                reads_done,
+                reads,
+                ..
+            } => {
+                reads_done.send(expect_read_len);
+                writes_done.send(expect_write_len);
+                self.state = State::CompletedPassive { reads, writes }
+            }
+            _ => return,
+        }
+
         self.out.duration = self
             .start_time
             .map(|start| end - start)
-            .map(Duration::from_std)
+            .map(TimeDelta::from_std)
             .transpose()
             .expect("durations should fit in chrono")
-            .unwrap_or_else(|| Duration::zero())
+            .unwrap_or_else(|| TimeDelta::zero());
     }
 
     fn data_offset(options: &Vec<TcpSegmentOptionOutput>) -> u8 {
@@ -302,15 +376,16 @@ impl RawTcpRunner {
             .expect("tcp data offset calculation should not exceed 255")
     }
 
-    async fn send<'a>(
-        segment: TcpSegmentOutput,
-        src_addr: IpAddr,
-        dest_addr: IpAddr,
-        send: mpsc::Sender<Option<TcpPacket<'static>>>,
-    ) -> io::Result<(
-        Option<TcpSegmentOutput>,
-        mpsc::Sender<Option<TcpPacket<'static>>>,
-    )> {
+    pub fn send(&mut self, mut segment: TcpSegmentOutput) -> io::Result<()> {
+        let State::Open(OpenState {
+            send_write,
+            local_addr,
+            remote_addr,
+            ..
+        }) = &mut self.state
+        else {
+            panic!("invalid state to send: {:?}", self.state);
+        };
         let mut packet = MutableTcpPacket::owned(vec![
             0;
             TcpPacket::minimum_packet_size()
@@ -350,7 +425,7 @@ impl RawTcpRunner {
         if let Some(checksum) = segment.checksum {
             packet.set_checksum(checksum);
         } else {
-            match (src_addr, dest_addr) {
+            match (local_addr.ip(), remote_addr.ip()) {
                 (IpAddr::V4(source), IpAddr::V4(dest)) => {
                     packet.set_checksum(tcp::ipv4_checksum(&packet.to_immutable(), &source, &dest))
                 }
@@ -363,220 +438,134 @@ impl RawTcpRunner {
                     ))
                 }
             }
+            segment.checksum = Some(packet.get_checksum());
         }
 
-        send.send(Some(packet.consume_to_immutable()))
-            .await
-            .map_err(|_| io::Error::from(io::ErrorKind::ConnectionReset))?;
-        Ok((Some(segment), send))
-    }
-
-    fn pending_write(
-        &mut self,
-        cx: &mut std::task::Context<'_>,
-        mut pending: OwnedBoxFuture<
-            io::Result<(
-                Option<TcpSegmentOutput>,
-                mpsc::Sender<Option<TcpPacket<'static>>>,
-            )>,
-        >,
-        mut state: OpenState,
-    ) -> Poll<io::Result<()>> {
-        match (&mut pending).try_poll_unpin(cx) {
-            Poll::Ready(Ok((output, sender))) => {
-                state.write = WriteState::Ready(sender);
-                self.state = State::Open(state);
-                if let Some(output) = output {
-                    self.out.sent.push(output);
-                }
-                Poll::Ready(Ok(()))
-            }
-            Poll::Ready(Err(e)) => {
-                self.state = State::Completed;
+        send_write
+            .send(Some(packet.consume_to_immutable()))
+            .map_err(|e| {
                 self.out.errors.push(RawTcpError {
-                    kind: e.kind().to_string(),
-                    message: e.to_string(),
+                    kind: "".to_owned(),
+                    message: format!("send SYN to '{}' failed: {e}", self.out.dest_ip),
                 });
-                Poll::Ready(Err(io::Error::from(io::ErrorKind::ConnectionReset)))
-            }
-            Poll::Pending => {
-                state.write = WriteState::Pending(pending);
-                self.state = State::Open(state);
-                Poll::Pending
-            }
-        }
-    }
-}
-
-impl AsyncRead for RawTcpRunner {
-    fn poll_read(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        let state = mem::replace(&mut self.state, State::Invalid);
-        let State::Open(mut state) = state else {
-            self.state = state;
-            panic!("invalid state to poll_read: {:?}", self.state)
-        };
-
-        // Get some data if we don't have any waiting.
-        while state.pending_at >= state.pending.len() {
-            match state.read.poll_recv(cx) {
-                Poll::Ready(Some(segment)) => {
-                    state.pending_at = 0;
-                    state.pending.truncate(0);
-                    state.pending.extend(&segment.payload);
-                    self.out.received.push(segment);
-                }
-                // Channel has closed so return without writing to buf to indicate we're done.
-                Poll::Ready(None) => {
-                    self.state = State::Open(state);
-                    return Poll::Ready(Ok(()));
-                }
-                Poll::Pending => {
-                    self.state = State::Open(state);
-                    return Poll::Pending;
-                }
-            };
-        }
-
-        // Send data.
-        let write_count = buf.remaining().min(state.pending.len() - state.pending_at);
-        buf.put_slice(&state.pending[state.pending_at..write_count]);
-        state.pending_at += write_count;
-        self.state = State::Open(state);
-        Poll::Ready(Ok(()))
-    }
-}
-
-impl AsyncWrite for RawTcpRunner {
-    fn poll_write(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> std::task::Poll<Result<usize, std::io::Error>> {
-        let state = mem::replace(&mut self.state, State::Invalid);
-        let State::Open(mut state) = state else {
-            self.state = state;
-            panic!("invalid state to poll_read: {:?}", self.state)
-        };
-        let pending = match mem::replace(&mut state.write, WriteState::Invalid) {
-            WriteState::Ready(sender) => Box::pin(Self::send(
-                TcpSegmentOutput {
-                    source: self.out.src_port,
-                    destination: self.out.dest_port,
-                    sequence_number: state.write_sequence_number,
-                    flags: 0,
-                    window: 0,
-                    acknowledgment: 0,
-                    checksum: None,
-                    data_offset: 0,
-                    urgent_ptr: 0,
-                    reserved: 0,
-                    options: Vec::new(),
-                    payload: Vec::from(buf),
-                    received: None,
-                    sent: None,
-                },
-                self.local_ip.unwrap(),
-                self.remote_ip.unwrap(),
-                sender,
-            )),
-            WriteState::Pending(pending) => pending,
-            WriteState::Invalid => panic!("invalid write state"),
-        };
-        self.pending_write(cx, pending, state)
-            .map_ok(|()| {
-                if let State::Open(OpenState {
-                    write_sequence_number,
-                    ..
-                }) = &mut self.state
-                {
-                    *write_sequence_number = write_sequence_number.wrapping_add(buf.len() as u32);
-                } else {
-                    println!(
-                        "not incrementing sequence number since state is {:?} not open",
-                        self.state
-                    )
-                }
-                buf.len()
-            })
-            .map_err(|_| {
-                self.state = State::Completed;
                 io::Error::from(io::ErrorKind::ConnectionReset)
-            })
+            })?;
+        self.out.sent.push(segment);
+        Ok(())
     }
+}
 
-    fn poll_flush(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), std::io::Error>> {
-        let state = mem::replace(&mut self.state, State::Invalid);
-        let State::Open(mut state) = state else {
-            self.state = state;
-            panic!("invalid state to poll_read: {:?}", self.state)
-        };
-        let pending = match mem::replace(&mut state.write, WriteState::Invalid) {
-            WriteState::Ready(sender) => {
-                let future = Box::pin(async move {
-                    // Send None twice - once to fill the buffer and another to ensure the first was
-                    // read from the buffer.
-                    sender
-                        .send(None)
-                        .await
-                        .map_err(|_| io::Error::from(io::ErrorKind::ConnectionReset))?;
-                    sender
-                        .send(None)
-                        .await
-                        .map_err(|_| io::Error::from(io::ErrorKind::ConnectionReset))?;
-                    Result::Ok((Option::<TcpSegmentOutput>::None, sender))
-                });
-                future
+pub fn reader(
+    mut read: TransportReceiver,
+    target_addr: SocketAddr,
+    start: Instant,
+    mut done: oneshot::Receiver<usize>,
+) -> JoinHandle<(Vec<TcpSegmentOutput>, Option<io::Error>)> {
+    // TODO: Use AsyncFd instead of one thread per request.
+    //let read_fd = AsyncFd::new(read.socket.fd)?;
+    //let readable = read_fd.readable().await?;
+    tokio::task::spawn_blocking(move || {
+        let mut total_size = 0;
+        let mut seen_fin = false;
+        let mut out = Vec::new();
+        let mut iter = transport::tcp_packet_iter(&mut read);
+        let expect_size = loop {
+            match done.try_recv() {
+                Ok(expect) => break expect,
+                Err(TryRecvError::Closed) => return (out, None),
+                Err(TryRecvError::Empty) => {}
             }
-            WriteState::Pending(pending) => pending,
-            WriteState::Invalid => panic!("invalid write state for flush"),
+            match iter.next_with_timeout(std::time::Duration::from_millis(50)) {
+                // Timed out, loop to check that we're still running.
+                Ok(None) => {}
+                // Value Received, process it.
+                Ok(Some((packet, src_ip))) => {
+                    if src_ip != target_addr.ip() || packet.get_source() != target_addr.port() {
+                        debug!("filtered packet from {src_ip}:{}", packet.get_source());
+                        continue;
+                    }
+                    debug!("recording packet from {src_ip}:{}", packet.get_source());
+                    total_size += packet.payload().len();
+                    if packet.get_flags() & pnet::packet::tcp::TcpFlags::FIN != 0 {
+                        info!("got fin packet from {src_ip}:{}", packet.get_source());
+                        seen_fin = true;
+                    }
+                    out.push(packet_to_output(packet, start));
+                }
+                // Network failure, bail.
+                Err(e) => return (out, Some(e)),
+            }
         };
-        self.pending_write(cx, pending, state)
-    }
+        while !seen_fin || total_size < expect_size {
+            match iter.next_with_timeout(std::time::Duration::from_millis(50)) {
+                // Timed out, give up on finding any remaining packets.
+                Ok(None) => {
+                    info!("raw socket post-completion timed out with {total_size} of {expect_size} bytes");
+                    break;
+                }
+                // Value Received, process it.
+                Ok(Some((packet, src_ip))) => {
+                    if src_ip != target_addr.ip() || packet.get_source() != target_addr.port() {
+                        debug!("filtered packet from {src_ip}:{}", packet.get_source());
+                        continue;
+                    }
+                    debug!("recording packet from {src_ip}:{}", packet.get_source());
+                    total_size += packet.payload().len();
+                    if packet.get_flags() & pnet::packet::tcp::TcpFlags::FIN != 0 {
+                        info!("got fin packet from {src_ip}:{}", packet.get_source());
+                        seen_fin = true;
+                    }
+                    out.push(packet_to_output(packet, start));
+                }
+                // Network failure, bail.
+                Err(e) => return (out, Some(e)),
+            }
+        }
+        (out, None)
+    })
+}
 
-    fn poll_shutdown(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Result<(), std::io::Error>> {
-        let state = mem::replace(&mut self.state, State::Invalid);
-        let State::Open(mut state) = state else {
-            self.state = state;
-            panic!("invalid state to poll_read: {:?}", self.state)
-        };
-        let pending = match mem::replace(&mut state.write, WriteState::Invalid) {
-            WriteState::Ready(sender) => Box::pin(Self::send(
-                TcpSegmentOutput {
-                    source: self.out.src_port,
-                    destination: self.out.dest_port,
-                    //state: State::Pending {
-                    //    pause: plan.pause.clone(),
-                    //},
-                    sequence_number: state.write_sequence_number,
-                    acknowledgment: 0,
-                    data_offset: 0,
-                    reserved: 0,
-                    flags: TcpFlags::FIN,
-                    window: 0,
-                    checksum: None,
-                    urgent_ptr: 0,
-                    options: Vec::new(),
-                    payload: Vec::new(),
-                    received: None,
-                    sent: None,
+fn packet_to_output(packet: TcpPacket, start: Instant) -> TcpSegmentOutput {
+    TcpSegmentOutput {
+        received: TimeDelta::from_std(start.elapsed()).ok(),
+        sent: None,
+        sequence_number: packet.get_sequence(),
+        flags: packet.get_flags(),
+        source: packet.get_source(),
+        window: packet.get_window(),
+        acknowledgment: packet.get_acknowledgement(),
+        checksum: Some(packet.get_checksum()),
+        data_offset: packet.get_data_offset(),
+        destination: packet.get_destination(),
+        reserved: packet.get_reserved(),
+        urgent_ptr: packet.get_urgent_ptr(),
+        options: packet
+            .get_options_iter()
+            .map(|opts| match opts.get_number() {
+                TcpOptionNumbers::NOP if opts.payload().len() == 0 => TcpSegmentOptionOutput::Nop,
+                TcpOptionNumbers::TIMESTAMPS if opts.payload().len() == 8 => {
+                    TcpSegmentOptionOutput::Timestamps {
+                        tsval: u32::from_be_bytes(opts.payload()[..4].try_into().unwrap()),
+                        tsecr: u32::from_be_bytes(opts.payload()[4..8].try_into().unwrap()),
+                    }
+                }
+                TcpOptionNumbers::MSS if opts.payload().len() == 2 => TcpSegmentOptionOutput::Mss(
+                    u16::from_be_bytes(opts.payload().try_into().unwrap()),
+                ),
+                TcpOptionNumbers::WSCALE if opts.payload().len() == 1 => {
+                    TcpSegmentOptionOutput::Wscale(u8::from_be_bytes(
+                        opts.payload().try_into().unwrap(),
+                    ))
+                }
+                TcpOptionNumbers::SACK_PERMITTED if opts.payload().len() == 0 => {
+                    TcpSegmentOptionOutput::SackPermitted
+                }
+                _ => TcpSegmentOptionOutput::Raw {
+                    kind: opts.get_number().0,
+                    value: opts.payload().to_vec(),
                 },
-                self.local_ip.unwrap(),
-                self.remote_ip.unwrap(),
-                sender,
-            )),
-            WriteState::Pending(pending) => pending,
-            WriteState::Invalid => panic!("invalid write state for shutdown"),
-        };
-        self.pending_write(cx, pending, state)
+            })
+            .collect(),
+        payload: packet.payload().to_vec(),
     }
 }

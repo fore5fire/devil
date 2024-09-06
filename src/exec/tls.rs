@@ -1,9 +1,11 @@
+use std::mem;
 use std::task::Poll;
 use std::time::Instant;
-use std::{pin::Pin, sync::Arc};
+use std::{pin::pin, sync::Arc};
 
 use anyhow::{anyhow, bail};
 use chrono::Duration;
+use derivative::Derivative;
 use rustls::pki_types::ServerName;
 use rustls::RootCertStore;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -30,8 +32,11 @@ pub(super) struct TlsRunner {
     size_hint: Option<usize>,
 }
 
+#[derive(Derivative)]
+#[derivative(Debug)]
 enum State {
     Pending {
+        #[derivative(Debug = "ignore")]
         connector: TlsConnector,
         domain: Box<String>,
         pause: TlsPauseOutput,
@@ -47,31 +52,6 @@ enum State {
         transport: Runner,
     },
     Invalid,
-}
-
-impl std::fmt::Debug for State {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Pending {
-                connector: _,
-                domain,
-                pause,
-            } => {
-                write!(
-                    f,
-                    "Pending {{ connector: <Opaque>, domain: {domain}, pause: {pause:?} }}"
-                )
-            }
-            Self::Open { start, transport } => {
-                write!(f, "Open {{ start: {start:?}, transport: {transport:?} }}")
-            }
-            Self::Completed { transport } => write!(f, "Completed {{ transport: {transport:?} }}"),
-            Self::StartFailed { transport } => {
-                write!(f, "StartFailed {{ transport: {transport:?} }}")
-            }
-            Self::Invalid => write!(f, "Invalid"),
-        }
-    }
 }
 
 impl TlsRunner {
@@ -191,7 +171,7 @@ impl TlsRunner {
             start,
             transport: pause::new_stream(
                 self.ctx.clone(),
-                Tee::new(Timing::new(connection, None)),
+                Tee::new(Timing::new(connection)),
                 // TODO: Implement read size hints.
                 vec![PauseSpec {
                     group_offset: 0,
@@ -227,33 +207,48 @@ impl TlsRunner {
     }
 
     pub async fn execute(&mut self) {
-        let body = std::mem::take(&mut self.out.plan.body);
-        if let Err(e) = self.write_all(&body).await {
+        let State::Open { start, transport } = mem::replace(&mut self.state, State::Invalid) else {
+            panic!("invalid state for execute: {:?}", self.state)
+        };
+        let (mut reader, mut writer) = tokio::io::split(transport);
+
+        let handle = tokio::spawn(async move {
+            let mut buf = [0; 512];
+            loop {
+                // Read and ignore the data since its already recorded by Tee.
+                match reader.read(&mut buf).await {
+                    Ok(size) if size == 0 => {
+                        return (reader, Ok(()));
+                    }
+                    Err(e) => {
+                        return (reader, Err(e));
+                    }
+                    _ => {}
+                }
+            }
+        });
+        if let Err(e) = writer.write_all(&self.out.plan.body).await {
             self.out.errors.push(TlsError {
                 kind: "write failure".to_owned(),
                 message: e.to_string(),
             });
-            self.out.plan.body = body;
-            self.complete();
-            return;
         }
-        self.out.plan.body = body;
-        if let Err(e) = self.flush().await {
-            self.out.errors.push(TlsError {
-                kind: "write failure".to_owned(),
-                message: e.to_string(),
-            });
-            self.complete();
-            return;
-        }
-        let mut response = Vec::new();
-        if let Err(e) = self.read_to_end(&mut response).await {
+        if let Err(e) = writer.shutdown().await {
             self.out.errors.push(TlsError {
                 kind: "read failure".to_owned(),
                 message: e.to_string(),
             });
-            self.complete();
-            return;
+        }
+        let (reader, read_result) = handle.await.expect("tls reader should not panic");
+        if let Err(e) = read_result {
+            self.out.errors.push(TlsError {
+                kind: "read failure".to_owned(),
+                message: e.to_string(),
+            });
+        }
+        self.state = State::Open {
+            start,
+            transport: reader.unsplit(writer),
         }
     }
 
@@ -266,6 +261,7 @@ impl TlsRunner {
     }
 
     fn complete(&mut self) {
+        let end_time = Instant::now();
         let state = std::mem::replace(&mut self.state, State::Invalid);
         let (start, transport) = match state {
             State::Open {
@@ -287,9 +283,10 @@ impl TlsRunner {
             }
             State::Invalid => panic!("tls has invalid end state"),
         };
-        let end_time = Instant::now();
         let (tee, send_pause, receive_pause) = transport.finish_stream();
-        let (stream, writes, reads, truncated_reads) = tee.into_parts();
+        let (stream, writes, reads, truncated_reads, pattern_match) = tee.into_parts();
+
+        let end_time = stream.shutdown_end().unwrap_or(end_time);
 
         let mut receive_pause = receive_pause.into_iter();
         self.out.pause.receive_body.start = receive_pause.next().unwrap_or_default();
@@ -355,7 +352,7 @@ impl AsyncRead for TlsRunner {
                 self.state
             ))));
         };
-        Pin::new(transport).poll_read(cx, buf)
+        pin!(transport).poll_read(cx, buf)
     }
 }
 
@@ -371,7 +368,7 @@ impl AsyncWrite for TlsRunner {
                 self.state
             ))));
         };
-        Pin::new(transport).poll_write(cx, buf)
+        pin!(transport).poll_write(cx, buf)
     }
 
     fn poll_flush(
@@ -384,7 +381,7 @@ impl AsyncWrite for TlsRunner {
                 self.state
             ))));
         };
-        Pin::new(transport).poll_flush(cx)
+        pin!(transport).poll_flush(cx)
     }
 
     fn poll_shutdown(
@@ -397,11 +394,7 @@ impl AsyncWrite for TlsRunner {
                 self.state
             ))));
         };
-        let poll = Pin::new(transport).poll_shutdown(cx);
-        if let Poll::Ready(Ok(())) = &poll {
-            self.complete();
-        }
-        poll
+        pin!(transport).poll_shutdown(cx)
     }
 }
 

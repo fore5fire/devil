@@ -148,6 +148,10 @@ where
         &mut self.inner
     }
 
+    pub fn inner_ref(&self) -> &T {
+        &self.inner
+    }
+
     pub fn finish(self) -> (T, Vec<Vec<PauseValueOutput>>) {
         (self.inner, self.out)
     }
@@ -298,6 +302,10 @@ impl<T: AsyncWrite + std::fmt::Debug> PauseWriter<T> {
 
     pub fn inner_mut(&mut self) -> &mut T {
         &mut self.inner
+    }
+
+    pub fn inner_ref(&self) -> &T {
+        &self.inner
     }
 
     pub fn finish(self) -> (T, Vec<Vec<PauseValueOutput>>) {

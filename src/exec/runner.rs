@@ -71,7 +71,7 @@ impl Runner {
 
     pub fn size_hint(&mut self, hint: Option<usize>) -> Option<usize> {
         match self {
-            Self::RawTcp(r) => None,
+            Self::RawTcp(_) => None,
             Self::Tcp(r) => r.size_hint(hint),
             Self::Tls(r) => r.size_hint(hint),
             Self::H1c(r) | Self::H1(r) => r.size_hint(hint),
@@ -85,7 +85,7 @@ impl Runner {
 
     pub fn executor_size_hint(&self) -> Option<usize> {
         match self {
-            Self::RawTcp(r) => None,
+            Self::RawTcp(_) => None,
             Self::Tcp(r) => r.executor_size_hint(),
             Self::Tls(r) => r.executor_size_hint(),
             Self::H1c(r) | Self::H1(r) => r.executor_size_hint(),
@@ -107,10 +107,11 @@ impl Runner {
                 assert!(transport.is_none());
                 Box::pin(r.start())
             }
-            Self::Tcp(r) => {
-                assert!(transport.is_none());
-                Box::pin(r.start())
-            }
+            Self::Tcp(r) => Box::pin(match transport {
+                Some(Runner::RawTcp(transport)) => Box::pin(r.start(*transport)),
+                Some(_) => panic!("tcp requires raw_tcp transport"),
+                None => panic!("no plan should have tcp as a base protocol"),
+            }),
             Self::Tls(r) => {
                 Box::pin(r.start(transport.expect("no plan should have tls as a base protocol")))
             }
@@ -155,7 +156,7 @@ impl Runner {
     pub async fn finish(self: Self) -> (Output, Option<Runner>) {
         match self {
             Self::RawTcp(r) => {
-                let out = r.finish();
+                let out = r.finish().await;
                 (Output::RawTcp(out), None)
             }
             Self::Tcp(r) => {
@@ -212,7 +213,9 @@ impl AsyncRead for Runner {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         match *self {
-            Self::RawTcp(ref mut r) => pin!(r).poll_read(cx, buf),
+            Self::RawTcp(_) => {
+                panic!("raw_tcp doesn't support stream reading")
+            }
             Self::Tcp(ref mut r) => pin!(r).poll_read(cx, buf),
             Self::Tls(ref mut r) => pin!(r).poll_read(cx, buf),
             Self::H1c(ref mut r) | Self::H1(ref mut r) => pin!(r).poll_read(cx, buf),
@@ -233,7 +236,9 @@ impl AsyncWrite for Runner {
         buf: &[u8],
     ) -> std::task::Poll<Result<usize, std::io::Error>> {
         match *self {
-            Self::RawTcp(ref mut r) => pin!(r).poll_write(cx, buf),
+            Self::RawTcp(_) => {
+                panic!("raw_tcp doesn't support stream writing")
+            }
             Self::Tcp(ref mut r) => pin!(r).poll_write(cx, buf),
             Self::Tls(ref mut r) => pin!(r).poll_write(cx, buf),
             Self::H1c(ref mut r) | Self::H1(ref mut r) => pin!(r).poll_write(cx, buf),
@@ -250,7 +255,9 @@ impl AsyncWrite for Runner {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
         match *self {
-            Self::RawTcp(ref mut r) => pin!(r).poll_flush(cx),
+            Self::RawTcp(_) => {
+                panic!("raw_tcp doesn't support stream writing")
+            }
             Self::Tcp(ref mut r) => pin!(r).poll_flush(cx),
             Self::Tls(ref mut r) => pin!(r).poll_flush(cx),
             Self::H1c(ref mut r) | Self::H1(ref mut r) => pin!(r).poll_flush(cx),
@@ -267,7 +274,9 @@ impl AsyncWrite for Runner {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
         match *self {
-            Self::RawTcp(ref mut r) => pin!(r).poll_shutdown(cx),
+            Self::RawTcp(_) => {
+                panic!("raw_tcp doesn't support stream writing")
+            }
             Self::Tcp(ref mut r) => pin!(r).poll_shutdown(cx),
             Self::Tls(ref mut r) => pin!(r).poll_shutdown(cx),
             Self::H1c(ref mut r) | Self::H1(ref mut r) => pin!(r).poll_shutdown(cx),

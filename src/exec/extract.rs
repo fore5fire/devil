@@ -22,6 +22,7 @@ pub fn new<T>(inner: T) -> (oneshot::Receiver<T>, Transport<T>) {
 }
 
 impl<T: Stream> AsyncRead for Transport<T> {
+    #[inline]
     fn poll_read(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -32,6 +33,7 @@ impl<T: Stream> AsyncRead for Transport<T> {
 }
 
 impl<T: Stream> AsyncWrite for Transport<T> {
+    #[inline]
     fn poll_write(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -39,12 +41,14 @@ impl<T: Stream> AsyncWrite for Transport<T> {
     ) -> std::task::Poll<Result<usize, std::io::Error>> {
         pin!(self.inner.as_mut().unwrap()).poll_write(cx, buf)
     }
+    #[inline]
     fn poll_flush(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
         pin!(self.inner.as_mut().unwrap()).poll_flush(cx)
     }
+    #[inline]
     fn poll_shutdown(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,

@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::{collections::HashMap, rc::Rc};
 
+use byteorder::{ByteOrder, NetworkEndian};
+use bytes::Buf;
 use cel_interpreter::{
     objects::{Key, Map},
     Value,
@@ -652,6 +654,7 @@ pub struct Http2RequestOutput {
     pub method: Option<Vec<u8>>,
     pub headers: Vec<(Vec<u8>, Vec<u8>)>,
     pub body: Vec<u8>,
+    pub frames: Vec<Http2FrameOutput>,
     pub duration: Duration,
     pub headers_duration: Option<Duration>,
     pub body_duration: Option<Duration>,
@@ -686,6 +689,7 @@ pub struct Http2Response {
     pub headers: Option<Vec<(Vec<u8>, Vec<u8>)>>,
     pub body: Option<Vec<u8>>,
     pub trailers: Option<Vec<(Vec<u8>, Vec<u8>)>>,
+    pub frames: Vec<Http2FrameOutput>,
     pub duration: Duration,
     pub header_duration: Option<Duration>,
     pub time_to_first_byte: Option<Duration>,
@@ -724,6 +728,601 @@ impl From<Http2Response> for Value {
 }
 
 #[derive(Debug, Clone)]
+pub enum Http2FrameOutput {
+    Data(Http2DataFrameOutput),
+    Headers(Http2HeadersFrameOutput),
+    Priority(Http2PriorityFrameOutput),
+    RstStream(Http2RstStreamFrameOutput),
+    Settings(Http2SettingsFrameOutput),
+    PushPromise(Http2PushPromiseFrameOutput),
+    Ping(Http2PingFrameOutput),
+    Goaway(Http2GoawayFrameOutput),
+    WindowUpdate(Http2WindowUpdateFrameOutput),
+    Continuation(Http2ContinuationFrameOutput),
+    Generic(Http2GenericFrameOutput),
+}
+
+impl Http2FrameOutput {
+    pub fn flags(&self) -> u8 {
+        match self {
+            Self::Data(frame) => frame.flags,
+            Self::Headers(frame) => frame.flags,
+            Self::Priority(frame) => frame.flags,
+            Self::RstStream(frame) => frame.flags,
+            Self::Settings(frame) => frame.flags,
+            Self::PushPromise(frame) => frame.flags,
+            Self::Ping(frame) => frame.flags,
+            Self::Goaway(frame) => frame.flags,
+            Self::WindowUpdate(frame) => frame.flags,
+            Self::Continuation(frame) => frame.flags,
+            Self::Generic(frame) => frame.flags,
+        }
+    }
+    pub fn r(&self) -> bool {
+        match self {
+            Self::Data(frame) => frame.r,
+            Self::Headers(frame) => frame.r,
+            Self::Priority(frame) => frame.r,
+            Self::RstStream(frame) => frame.r,
+            Self::Settings(frame) => frame.r,
+            Self::PushPromise(frame) => frame.r,
+            Self::Ping(frame) => frame.r,
+            Self::Goaway(frame) => frame.r,
+            Self::WindowUpdate(frame) => frame.r,
+            Self::Continuation(frame) => frame.r,
+            Self::Generic(frame) => frame.r,
+        }
+    }
+    pub fn stream_id(&self) -> u32 {
+        match self {
+            Self::Data(frame) => frame.stream_id,
+            Self::Headers(frame) => frame.stream_id,
+            Self::Priority(frame) => frame.stream_id,
+            Self::RstStream(frame) => frame.stream_id,
+            Self::Settings(frame) => frame.stream_id,
+            Self::PushPromise(frame) => frame.stream_id,
+            Self::Ping(frame) => frame.stream_id,
+            Self::Goaway(frame) => frame.stream_id,
+            Self::WindowUpdate(frame) => frame.stream_id,
+            Self::Continuation(frame) => frame.stream_id,
+            Self::Generic(frame) => frame.stream_id,
+        }
+    }
+    pub fn new(kind: u8, flags: u8, r: bool, stream_id: u32, mut payload: &[u8]) -> Self {
+        match kind {
+            0x0 if payload.len() >= Http2FrameFlag::Padded.min_bytes(flags) => {
+                let padded = Http2FrameFlag::Padded.set_in(flags);
+                let mut pad_len = 0;
+                if padded {
+                    pad_len = usize::from(payload[0]);
+                    payload = &payload[1..];
+                }
+                Self::Data(Http2DataFrameOutput {
+                    flags,
+                    end_stream: Http2FrameFlag::EndStream.set_in(flags),
+                    r,
+                    stream_id,
+                    data: payload[..payload.len() - pad_len].to_vec(),
+                    padding: padded.then(|| payload[payload.len() - pad_len..].to_vec()),
+                })
+            }
+            0x1 if payload.len()
+                >= Http2FrameFlag::Padded.min_bytes(flags)
+                    + Http2FrameFlag::Priority.min_bytes(flags) =>
+            {
+                let padded = Http2FrameFlag::Padded.set_in(flags);
+                let mut pad_len = 0;
+                if padded {
+                    pad_len = usize::from(payload[0]);
+                    payload = &payload[1..];
+                }
+                let priority = Http2FrameFlag::Priority.set_in(flags);
+                let (mut e, mut stream_dependency, mut weight) = (None, None, None);
+                if priority {
+                    e = Some(payload[0] & 1 << 7 != 0);
+                    stream_dependency = Some(NetworkEndian::read_u32(payload) & !(1 << 31));
+                    weight = Some(payload[4]);
+                    payload = &payload[5..];
+                }
+                Self::Headers(Http2HeadersFrameOutput {
+                    flags,
+                    end_stream: Http2FrameFlag::EndStream.set_in(flags),
+                    end_headers: Http2FrameFlag::EndHeaders.set_in(flags),
+                    r,
+                    stream_id,
+                    e,
+                    stream_dependency,
+                    weight,
+                    header_block_fragment: payload[..payload.len() - pad_len].to_vec(),
+                    padding: padded.then(|| payload[payload.len() - pad_len..].to_vec()),
+                })
+            }
+            0x2 if payload.len() == 5 => Self::Priority(Http2PriorityFrameOutput {
+                flags,
+                r,
+                stream_id,
+                e: payload[0] & 1 << 7 != 0,
+                stream_dependency: NetworkEndian::read_u32(payload) & !(1 << 31),
+                weight: payload[4],
+            }),
+            0x3 if payload.len() == 4 => Self::RstStream(Http2RstStreamFrameOutput {
+                flags,
+                r,
+                stream_id,
+                error_code: NetworkEndian::read_u32(payload),
+            }),
+            0x4 if payload.len() % 6 == 0 => Self::Settings(Http2SettingsFrameOutput {
+                flags,
+                ack: Http2FrameFlag::Ack.set_in(flags),
+                r,
+                stream_id,
+                parameters: payload
+                    .chunks_exact(6)
+                    .map(|chunk| Http2SettingsParameterOutput {
+                        id: NetworkEndian::read_u16(chunk),
+                        value: NetworkEndian::read_u32(&chunk[2..]),
+                    })
+                    .collect(),
+            }),
+            0x5 if payload.len() >= Http2FrameFlag::Padded.min_bytes(flags) + 4 => {
+                let padded = Http2FrameFlag::Padded.set_in(flags);
+                let mut pad_len = 0;
+                if padded {
+                    pad_len = usize::from(payload[0]);
+                    payload = &payload[1..];
+                }
+                Self::PushPromise(Http2PushPromiseFrameOutput {
+                    flags,
+                    end_headers: Http2FrameFlag::EndHeaders.set_in(flags),
+                    r,
+                    stream_id,
+                    promised_r: payload[0] & 1 << 7 != 0,
+                    promised_stream_id: NetworkEndian::read_u32(payload) & !(1 << 31),
+                    header_block_fragment: payload[4..payload.len() - pad_len].to_vec(),
+                    padding: padded.then(|| payload[payload.len() - pad_len..].to_vec()),
+                })
+            }
+            0x6 => Self::Ping(Http2PingFrameOutput {
+                flags,
+                ack: Http2FrameFlag::Ack.set_in(flags),
+                r,
+                stream_id,
+                data: payload.to_vec(),
+            }),
+            0x7 if payload.len() >= 8 => Self::Goaway(Http2GoawayFrameOutput {
+                flags,
+                r,
+                stream_id,
+                last_r: payload[0] & 1 << 7 != 0,
+                last_stream_id: NetworkEndian::read_u32(payload) & !(1 << 31),
+                error_code: NetworkEndian::read_u32(&payload[4..]),
+                debug_data: payload[8..].to_vec(),
+            }),
+            0x8 if payload.len() == 4 => Self::WindowUpdate(Http2WindowUpdateFrameOutput {
+                flags,
+                r,
+                stream_id,
+                window_r: payload[0] & 1 << 7 != 0,
+                window_size_increment: NetworkEndian::read_u32(payload) & !(1 << 31),
+            }),
+            0x9 => Self::Continuation(Http2ContinuationFrameOutput {
+                flags,
+                end_headers: Http2FrameFlag::EndHeaders.set_in(flags),
+                r,
+                stream_id,
+                header_block_fragment: payload.to_vec(),
+            }),
+            _ => Self::Generic(Http2GenericFrameOutput {
+                r#type: kind,
+                flags,
+                r,
+                stream_id,
+                payload: payload.to_vec(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum Http2FrameFlag {
+    Ack,
+    EndStream,
+    EndHeaders,
+    Padded,
+    Priority,
+}
+
+impl Http2FrameFlag {
+    #[inline]
+    fn set_in(&self, flags: u8) -> bool {
+        match *self {
+            Self::Ack => flags & 0x1 != 0,
+            Self::EndStream => flags & 0x1 != 0,
+            Self::EndHeaders => flags & 0x4 != 0,
+            Self::Padded => flags & 0x8 != 0,
+            Self::Priority => flags & 0x20 != 0,
+        }
+    }
+    #[inline]
+    fn min_bytes(&self, flags: u8) -> usize {
+        if !self.set_in(flags) {
+            return 0;
+        }
+        match *self {
+            Self::Ack => 0,
+            Self::EndStream => 0,
+            Self::EndHeaders => 0,
+            Self::Padded => 1,
+            Self::Priority => 5,
+        }
+    }
+}
+
+impl From<Http2FrameOutput> for Value {
+    fn from(value: Http2FrameOutput) -> Self {
+        match value {
+            Http2FrameOutput::Data(x) => Value::Map(Map {
+                map: Rc::new(HashMap::from([("data".into(), x.into())])),
+            }),
+            Http2FrameOutput::Headers(x) => Value::Map(Map {
+                map: Rc::new(HashMap::from([("headers".into(), x.into())])),
+            }),
+            Http2FrameOutput::Priority(x) => Value::Map(Map {
+                map: Rc::new(HashMap::from([("priority".into(), x.into())])),
+            }),
+            Http2FrameOutput::RstStream(x) => Value::Map(Map {
+                map: Rc::new(HashMap::from([("rst_stream".into(), x.into())])),
+            }),
+            Http2FrameOutput::Settings(x) => Value::Map(Map {
+                map: Rc::new(HashMap::from([("settings".into(), x.into())])),
+            }),
+            Http2FrameOutput::PushPromise(x) => Value::Map(Map {
+                map: Rc::new(HashMap::from([("push_promise".into(), x.into())])),
+            }),
+            Http2FrameOutput::Ping(x) => Value::Map(Map {
+                map: Rc::new(HashMap::from([("ping".into(), x.into())])),
+            }),
+            Http2FrameOutput::Goaway(x) => Value::Map(Map {
+                map: Rc::new(HashMap::from([("goaway".into(), x.into())])),
+            }),
+            Http2FrameOutput::WindowUpdate(x) => Value::Map(Map {
+                map: Rc::new(HashMap::from([("window_update".into(), x.into())])),
+            }),
+            Http2FrameOutput::Continuation(x) => Value::Map(Map {
+                map: Rc::new(HashMap::from([("continuation".into(), x.into())])),
+            }),
+            Http2FrameOutput::Generic(x) => Value::Map(Map {
+                map: Rc::new(HashMap::from([("generic".into(), x.into())])),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Http2DataFrameOutput {
+    flags: u8,
+    end_stream: bool,
+    r: bool,
+    stream_id: u32,
+    data: Vec<u8>,
+    padding: Option<Vec<u8>>,
+}
+
+impl From<Http2DataFrameOutput> for Value {
+    fn from(value: Http2DataFrameOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("flags".into(), u64::from(value.flags).into()),
+                ("end_stream".into(), value.end_stream.into()),
+                ("r".into(), value.r.into()),
+                ("stream_id".into(), u64::from(value.stream_id).into()),
+                ("data".into(), value.data.into()),
+                ("padding".into(), value.padding.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Http2HeadersFrameOutput {
+    flags: u8,
+    end_stream: bool,
+    end_headers: bool,
+    r: bool,
+    stream_id: u32,
+    e: Option<bool>,
+    stream_dependency: Option<u32>,
+    weight: Option<u8>,
+    header_block_fragment: Vec<u8>,
+    padding: Option<Vec<u8>>,
+}
+
+impl From<Http2HeadersFrameOutput> for Value {
+    fn from(value: Http2HeadersFrameOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("flags".into(), u64::from(value.flags).into()),
+                ("end_stream".into(), value.end_stream.into()),
+                ("end_headers".into(), value.end_headers.into()),
+                ("r".into(), value.r.into()),
+                ("stream_id".into(), u64::from(value.stream_id).into()),
+                ("e".into(), value.e.into()),
+                (
+                    "stream_dependency".into(),
+                    value.stream_dependency.map(u64::from).into(),
+                ),
+                ("weight".into(), value.weight.map(u64::from).into()),
+                (
+                    "header_block_fragment".into(),
+                    value.header_block_fragment.into(),
+                ),
+                ("padding".into(), value.padding.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Http2PriorityFrameOutput {
+    flags: u8,
+    r: bool,
+    stream_id: u32,
+    e: bool,
+    stream_dependency: u32,
+    weight: u8,
+}
+
+impl From<Http2PriorityFrameOutput> for Value {
+    fn from(value: Http2PriorityFrameOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("flags".into(), u64::from(value.flags).into()),
+                ("r".into(), value.r.into()),
+                ("stream_id".into(), u64::from(value.stream_id).into()),
+                ("e".into(), value.e.into()),
+                (
+                    "stream_dependency".into(),
+                    u64::from(value.stream_dependency).into(),
+                ),
+                ("weight".into(), u64::from(value.weight).into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Http2RstStreamFrameOutput {
+    flags: u8,
+    r: bool,
+    stream_id: u32,
+    error_code: u32,
+}
+
+impl From<Http2RstStreamFrameOutput> for Value {
+    fn from(value: Http2RstStreamFrameOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("flags".into(), u64::from(value.flags).into()),
+                ("r".into(), value.r.into()),
+                ("stream_id".into(), u64::from(value.stream_id).into()),
+                ("error_code".into(), u64::from(value.error_code).into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Http2SettingsFrameOutput {
+    flags: u8,
+    ack: bool,
+    r: bool,
+    stream_id: u32,
+    parameters: Vec<Http2SettingsParameterOutput>,
+}
+
+impl From<Http2SettingsFrameOutput> for Value {
+    fn from(value: Http2SettingsFrameOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("flags".into(), u64::from(value.flags).into()),
+                ("ack".into(), value.ack.into()),
+                ("r".into(), value.r.into()),
+                ("stream_id".into(), u64::from(value.stream_id).into()),
+                (
+                    "parameters".into(),
+                    value
+                        .parameters
+                        .into_iter()
+                        .map(|p| p.into())
+                        .collect::<Vec<Http2SettingsParameterOutput>>()
+                        .into(),
+                ),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Http2SettingsParameterOutput {
+    id: u16,
+    value: u32,
+}
+
+impl From<Http2SettingsParameterOutput> for Value {
+    fn from(value: Http2SettingsParameterOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("id".into(), u64::from(value.id).into()),
+                ("value".into(), u64::from(value.value).into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Http2PushPromiseFrameOutput {
+    flags: u8,
+    end_headers: bool,
+    r: bool,
+    stream_id: u32,
+    promised_r: bool,
+    promised_stream_id: u32,
+    header_block_fragment: Vec<u8>,
+    padding: Option<Vec<u8>>,
+}
+
+impl From<Http2PushPromiseFrameOutput> for Value {
+    fn from(value: Http2PushPromiseFrameOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("flags".into(), u64::from(value.flags).into()),
+                ("end_headers".into(), value.end_headers.into()),
+                ("r".into(), value.r.into()),
+                ("stream_id".into(), u64::from(value.stream_id).into()),
+                ("promised_r".into(), value.promised_r.into()),
+                (
+                    "promised_stream_id".into(),
+                    u64::from(value.promised_stream_id).into(),
+                ),
+                (
+                    "header_block_fragment".into(),
+                    value.header_block_fragment.into(),
+                ),
+                ("padding".into(), value.padding.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Http2PingFrameOutput {
+    flags: u8,
+    ack: bool,
+    r: bool,
+    stream_id: u32,
+    data: Vec<u8>,
+}
+
+impl From<Http2PingFrameOutput> for Value {
+    fn from(value: Http2PingFrameOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("flags".into(), u64::from(value.flags).into()),
+                ("ack".into(), value.ack.into()),
+                ("r".into(), value.r.into()),
+                ("stream_id".into(), u64::from(value.stream_id).into()),
+                ("data".into(), value.data.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Http2GoawayFrameOutput {
+    flags: u8,
+    r: bool,
+    stream_id: u32,
+    last_r: bool,
+    last_stream_id: u32,
+    error_code: u32,
+    debug_data: Vec<u8>,
+}
+
+impl From<Http2GoawayFrameOutput> for Value {
+    fn from(value: Http2GoawayFrameOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("flags".into(), u64::from(value.flags).into()),
+                ("r".into(), value.r.into()),
+                ("stream_id".into(), u64::from(value.stream_id).into()),
+                ("last_r".into(), value.last_r.into()),
+                (
+                    "last_stream_id".into(),
+                    u64::from(value.last_stream_id).into(),
+                ),
+                ("error_code".into(), u64::from(value.error_code).into()),
+                ("debug_data".into(), value.debug_data.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Http2WindowUpdateFrameOutput {
+    flags: u8,
+    r: bool,
+    stream_id: u32,
+    window_r: bool,
+    window_size_increment: u32,
+}
+
+impl From<Http2WindowUpdateFrameOutput> for Value {
+    fn from(value: Http2WindowUpdateFrameOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("flags".into(), u64::from(value.flags).into()),
+                ("r".into(), value.r.into()),
+                ("stream_id".into(), u64::from(value.stream_id).into()),
+                ("window_r".into(), value.window_r.into()),
+                (
+                    "window_size_increment".into(),
+                    u64::from(value.window_size_increment).into(),
+                ),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Http2ContinuationFrameOutput {
+    flags: u8,
+    end_headers: bool,
+    r: bool,
+    stream_id: u32,
+    header_block_fragment: Vec<u8>,
+}
+
+impl From<Http2ContinuationFrameOutput> for Value {
+    fn from(value: Http2ContinuationFrameOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("flags".into(), u64::from(value.flags).into()),
+                ("end_headers".into(), value.end_headers.into()),
+                ("r".into(), value.r.into()),
+                ("stream_id".into(), u64::from(value.stream_id).into()),
+                (
+                    "header_block_fragment".into(),
+                    value.header_block_fragment.into(),
+                ),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Http2GenericFrameOutput {
+    r#type: u8,
+    flags: u8,
+    r: bool,
+    stream_id: u32,
+    payload: Vec<u8>,
+}
+
+impl From<Http2GenericFrameOutput> for Value {
+    fn from(value: Http2GenericFrameOutput) -> Self {
+        Value::Map(Map {
+            map: Rc::new(HashMap::from([
+                ("type".into(), u64::from(value.r#type).into()),
+                ("flags".into(), u64::from(value.flags).into()),
+                ("r".into(), value.r.into()),
+                ("stream_id".into(), u64::from(value.stream_id).into()),
+                ("payload".into(), value.payload.into()),
+            ])),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Http2Error {
     pub kind: String,
     pub message: String,
@@ -739,6 +1338,7 @@ impl From<Http2Error> for Value {
         })
     }
 }
+
 #[derive(Debug, Clone)]
 pub struct Http2FramesOutput {
     pub plan: Http2FramesPlanOutput,
@@ -1156,6 +1756,7 @@ pub struct TcpOutput {
     pub plan: TcpPlanOutput,
     pub sent: Option<TcpSentOutput>,
     pub received: Option<TcpReceivedOutput>,
+    //pub close: TcpCloseOutput,
     pub errors: Vec<TcpError>,
     pub duration: Duration,
     pub handshake_duration: Option<Duration>,
@@ -1168,6 +1769,7 @@ impl From<TcpOutput> for Value {
             map: Rc::new(HashMap::from([
                 ("plan".into(), value.plan.into()),
                 ("sent".into(), value.sent.into()),
+                //("close".into(), value.close.into()),
                 ("received".into(), value.received.into()),
                 ("errors".into(), value.errors.into()),
                 ("duration".into(), value.duration.into()),
@@ -1207,12 +1809,19 @@ impl WithPlannedCapacity for TcpPauseOutput {
     }
 }
 
+//#[derive(Debug, Clone, Default)]
+//pub struct TcpCloseOutput {
+//    pub timed_out: bool,
+//    pub recv_max_reached: bool,
+//    pub pattern_match: Option<Vec<u8>>,
+//}
+
 #[derive(Debug, Clone)]
 pub struct TcpPlanOutput {
     pub dest_host: String,
     pub dest_port: u16,
     pub body: Vec<u8>,
-    pub close: TcpCloseOutput,
+    //pub close: TcpPlanCloseOutput,
     pub pause: TcpPauseOutput,
 }
 
@@ -1223,32 +1832,36 @@ impl From<TcpPlanOutput> for Value {
                 ("dest_host".into(), Value::String(Arc::new(value.dest_host))),
                 ("dest_port".into(), u64::from(value.dest_port).into()),
                 ("body".into(), Value::Bytes(Arc::new(value.body))),
+                //("close".into(), value.close.into()),
                 ("pause".into(), value.pause.into()),
             ])),
         })
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct TcpCloseOutput {
-    pub timeout: Option<Duration>,
-    pub pattern: Option<Regex>,
-    pub pattern_window: Option<u64>,
-    pub bytes: Option<u64>,
-}
-
-impl From<TcpCloseOutput> for Value {
-    fn from(value: TcpCloseOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("timeout".into(), value.timeout.into()),
-                ("pattern".into(), value.pattern.into()),
-                ("pattern_window".into(), value.pattern_window.into()),
-                ("bytes".into(), value.bytes.into()),
-            ])),
-        })
-    }
-}
+//#[derive(Debug, Clone, Default)]
+//pub struct TcpPlanCloseOutput {
+//    pub min_duration: Option<Duration>,
+//    pub read_pattern: Option<Regex>,
+//    pub read_pattern_window: Option<u64>,
+//    pub read_length: Option<u64>,
+//}
+//
+//impl From<TcpPlanCloseOutput> for Value {
+//    fn from(value: TcpPlanCloseOutput) -> Self {
+//        Value::Map(Map {
+//            map: Rc::new(HashMap::from([
+//                ("min_duration".into(), value.min_duration.into()),
+//                ("read_pattern".into(), value.read_pattern.into()),
+//                (
+//                    "read_pattern_window".into(),
+//                    value.read_pattern_window.into(),
+//                ),
+//                ("read_length".into(), value.read_length.into()),
+//            ])),
+//        })
+//    }
+//}
 
 #[derive(Debug, Clone)]
 pub struct TcpSentOutput {

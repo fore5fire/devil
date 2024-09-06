@@ -47,10 +47,13 @@ pub struct Http2Runner {
     header_receive_end: Option<Instant>,
     trailer_receive_start: Option<Instant>,
     trailer_receive_end: Option<Instant>,
+    shutdown_start: Option<Instant>,
+    shutdown_end: Option<Instant>,
     size_hint: Option<usize>,
     close_reason: Option<h2::Reason>,
     send_headers: http::HeaderMap,
     receive_trailers: Option<http::HeaderMap>,
+    stream_id: Option<u32>,
 }
 
 #[derive(Debug)]
@@ -97,6 +100,7 @@ impl Http2Runner {
                     method: plan.method.clone(),
                     headers: plan.headers.clone(),
                     body: plan.body.clone(),
+                    frames: Vec::new(),
                     duration: chrono::Duration::zero(),
                     headers_duration: None,
                     body_duration: None,
@@ -123,10 +127,13 @@ impl Http2Runner {
             header_receive_end: None,
             trailer_receive_start: None,
             trailer_receive_end: None,
+            shutdown_start: None,
+            shutdown_end: None,
             size_hint: None,
             close_reason: None,
             receive_trailers: None,
             send_headers: HeaderMap::new(),
+            stream_id: None,
         })
     }
 
@@ -217,6 +224,7 @@ impl Http2Runner {
 
         let mut conn = transport.ready().await?;
         let (response, send_stream) = conn.send_request(request, !need_send_stream)?;
+        self.stream_id = Some(response.stream_id().into());
 
         // Setup the response to write to the stream once its ready.
 
@@ -355,7 +363,7 @@ impl Http2Runner {
     }
 
     fn complete(&mut self) {
-        let end = Instant::now();
+        let end_time = self.shutdown_end.unwrap_or_else(Instant::now);
         let (resp_head, resp_body) = match mem::replace(&mut self.read_state, ReadState::Invalid) {
             ReadState::Body { body, head, .. } => {
                 let (body, pauses) = body.finish();
@@ -374,6 +382,16 @@ impl Http2Runner {
             ReadState::Invalid => panic!("invalid state for http2 finish"),
             _ => return,
         };
+        if let Some(req) = &mut self.out.request {
+            //req.frames = self
+            //    .transport
+            //    .as_ref()
+            //    .map(|t| self.stream_id.map(|id| t.sent_frames(id)))
+            //    .flatten()
+            //    .into_iter()
+            //    .flatten()
+            //    .collect();
+        }
         self.out.response = Some(crate::Http2Response {
             status_code: Some(resp_head.status.into()),
             content_length: None,
@@ -393,6 +411,15 @@ impl Http2Runner {
                     .collect(),
             ),
             body: resp_body,
+            frames: Vec::new(),
+            //frames: self
+            //    .transport
+            //    .as_ref()
+            //    .map(|t| self.stream_id.map(|id| t.received_frames(id)))
+            //    .flatten()
+            //    .into_iter()
+            //    .flatten()
+            //    .collect(),
             trailers: mem::take(&mut self.receive_trailers).map(|trailers| {
                 trailers
                     .into_iter()
@@ -406,9 +433,10 @@ impl Http2Runner {
                     .collect()
             }),
             duration: chrono::Duration::from_std(
-                end - self
-                    .start_time
-                    .expect("start time should be set in current state"),
+                end_time
+                    - self
+                        .start_time
+                        .expect("start time should be set in current state"),
             )
             .expect("duration should fit in std::time::Duration"),
             header_duration: self
@@ -533,7 +561,7 @@ impl AsyncWrite for Http2Runner {
     }
 
     fn poll_flush(
-        mut self: std::pin::Pin<&mut Self>,
+        self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
         // TODO: implement flush with custom http2 implementation
@@ -544,6 +572,10 @@ impl AsyncWrite for Http2Runner {
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
+        if self.shutdown_start.is_none() {
+            self.shutdown_start = Some(Instant::now());
+        }
+
         let stream = match &mut self.write_state {
             WriteState::Body { stream, .. } => stream.inner_mut(),
             WriteState::Completed {
@@ -558,7 +590,12 @@ impl AsyncWrite for Http2Runner {
             ),
         };
 
-        pin!(stream).poll_shutdown(cx)
+        let result = ready!(pin!(stream).poll_shutdown(cx));
+
+        if self.shutdown_end.is_none() {
+            self.shutdown_end = Some(Instant::now());
+        }
+        Poll::Ready(result)
     }
 }
 

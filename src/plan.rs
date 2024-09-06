@@ -1,8 +1,6 @@
 use crate::bindings::{EnumKind, Literal, ValueOrArray};
 use crate::{
-    bindings, cel_functions, Error, GraphQlPauseOutput, Http1PauseOutput, Http2FramesPauseOutput,
-    Http2PauseOutput, HttpPauseOutput, RawTcpPauseOutput, Result, State, StepPlanOutput,
-    TcpCloseOutput, TcpPauseOutput, TcpSegmentOptionOutput, TcpSegmentOutput, TlsPauseOutput, Regex
+    bindings, cel_functions, Error, GraphQlPauseOutput, Http1PauseOutput, Http2FramesPauseOutput, Http2PauseOutput, HttpPauseOutput, RawTcpPauseOutput, Regex, Result, State, StepPlanOutput, TcpPauseOutput, TcpSegmentOptionOutput, TcpSegmentOutput, TlsPauseOutput
 };
 use anyhow::{anyhow, bail};
 use base64::Engine;
@@ -781,7 +779,7 @@ pub struct TcpRequest {
     pub host: PlanValue<String>,
     pub port: PlanValue<u16>,
     pub body: PlanValue<Vec<u8>>,
-    pub close: TcpClose,
+    //pub close: TcpClose,
     pub pause: TcpPause,
 }
 
@@ -796,7 +794,7 @@ impl Evaluate<crate::TcpPlanOutput> for TcpRequest {
             dest_host: self.host.evaluate(state)?,
             dest_port: self.port.evaluate(state)?,
             body: self.body.evaluate(state)?.into(),
-            close: self.close.evaluate(state)?.into(),
+            //close: self.close.evaluate(state)?.into(),
             pause: self.pause.evaluate(state)?,
         })
     }
@@ -819,47 +817,47 @@ impl TryFrom<bindings::Tcp> for TcpRequest {
                 .map(PlanValue::<Vec<u8>>::try_from)
                 .transpose()?
                 .unwrap_or_else(|| PlanValue::Literal(Vec::new())),
-            close: binding.close.unwrap_or_default().try_into()?,
+            //close: binding.close.unwrap_or_default().try_into()?,
             pause: binding.pause.unwrap_or_default().try_into()?,
         })
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct TcpClose {
-    timeout: Option<PlanValue<Duration>>,
-    pattern: Option<PlanValue<Regex>>,
-    pattern_window: Option<PlanValue<u64>>,
-    bytes: Option<PlanValue<u64>>,
-}
+//#[derive(Debug, Clone)]
+//pub struct TcpClose {
+//    timeout: Option<PlanValue<Duration>>,
+//    pattern: Option<PlanValue<Regex>>,
+//    pattern_window: Option<PlanValue<u64>>,
+//    bytes: Option<PlanValue<u64>>,
+//}
+//
+//impl TryFrom<bindings::TcpClose> for TcpClose {
+//    type Error = Error;
+//    fn try_from(value: bindings::TcpClose) -> std::result::Result<Self, Self::Error> {
+//        Ok(Self {
+//            timeout: value.timeout.map(PlanValue::try_from).transpose()?,
+//            pattern: value.pattern.map(PlanValue::try_from).transpose()?,
+//            pattern_window: value.pattern_window.map(PlanValue::try_from).transpose()?,
+//            bytes: value.bytes.map(PlanValue::try_from).transpose()?,
+//        })
+//    }
+//}
 
-impl TryFrom<bindings::TcpClose> for TcpClose {
-    type Error = Error;
-    fn try_from(value: bindings::TcpClose) -> std::result::Result<Self, Self::Error> {
-        Ok(Self {
-            timeout: value.timeout.map(PlanValue::try_from).transpose()?,
-            pattern: value.pattern.map(PlanValue::try_from).transpose()?,
-            pattern_window: value.pattern_window.map(PlanValue::try_from).transpose()?,
-            bytes: value.bytes.map(PlanValue::try_from).transpose()?,
-        })
-    }
-}
-
-impl Evaluate<TcpCloseOutput> for TcpClose {
-    fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<TcpCloseOutput>
-    where
-        S: State<'a, O, I>,
-        O: Into<&'a str>,
-        I: IntoIterator<Item = O>,
-    {
-        Ok(TcpCloseOutput {
-            timeout: self.timeout.as_ref().map(|timeout| timeout.evaluate(state)).transpose()?,
-            pattern: self.pattern.as_ref().map(|pattern| pattern.evaluate(state)).transpose()?,
-            pattern_window: self.pattern_window.as_ref().map(|window| window.evaluate(state)).transpose()?,
-            bytes: self.bytes.as_ref().map(|bytes| bytes.evaluate(state)).transpose()?,
-        })
-    }
-}
+//impl Evaluate<TcpPlanCloseOutput> for TcpClose {
+//    fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<TcpPlanCloseOutput>
+//    where
+//        S: State<'a, O, I>,
+//        O: Into<&'a str>,
+//        I: IntoIterator<Item = O>,
+//    {
+//        Ok(TcpPlanCloseOutput {
+//            timeout: self.timeout.as_ref().map(|timeout| timeout.evaluate(state)).transpose()?,
+//            pattern: self.pattern.as_ref().map(|pattern| pattern.evaluate(state)).transpose()?,
+//            pattern_window: self.pattern_window.as_ref().map(|window| window.evaluate(state)).transpose()?,
+//            bytes: self.bytes.as_ref().map(|bytes| bytes.evaluate(state)).transpose()?,
+//        })
+//    }
+//}
 
 #[derive(Debug, Clone, Default)]
 pub struct TcpPause {
@@ -1827,32 +1825,38 @@ impl Step {
                 graphql,
                 h1c,
                 tcp,
+                raw_tcp,
             } => StepProtocols::GraphQlH1c {
                 graphql: graphql.try_into()?,
                 h1c: h1c.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
+                raw_tcp: raw_tcp.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::GraphQlH1 {
                 graphql,
                 h1,
                 tls,
                 tcp,
+                raw_tcp,
             } => StepProtocols::GraphQlH1 {
                 graphql: graphql.try_into()?,
                 h1: h1.unwrap_or_default().try_into()?,
                 tls: tls.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
+                raw_tcp: raw_tcp.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::GraphQlH2c {
                 graphql,
                 h2c,
                 http2_frames,
                 tcp,
+                raw_tcp,
             } => StepProtocols::GraphQlH2c {
                 graphql: graphql.try_into()?,
                 h2c: h2c.unwrap_or_default().try_into()?,
                 http2_frames: http2_frames.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
+                raw_tcp: raw_tcp.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::GraphQlH2 {
                 graphql,
@@ -1860,12 +1864,14 @@ impl Step {
                 http2_frames,
                 tls,
                 tcp,
+                raw_tcp,
             } => StepProtocols::GraphQlH2 {
                 graphql: graphql.try_into()?,
                 h2: h2.unwrap_or_default().try_into()?,
                 http2_frames: http2_frames.unwrap_or_default().try_into()?,
                 tls: tls.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
+                raw_tcp: raw_tcp.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::GraphQlH3 {
                 graphql,
@@ -1884,38 +1890,46 @@ impl Step {
             bindings::StepProtocols::H1c {
                 h1c,
                 tcp,
+                raw_tcp,
             } => StepProtocols::H1c {
                 h1c: h1c.try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
+                raw_tcp: raw_tcp.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::H1 {
                 h1,
                 tls,
                 tcp,
+                raw_tcp,
             } => StepProtocols::H1 {
                 h1: h1.try_into()?,
                 tls: tls.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
+                raw_tcp: raw_tcp.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::H2c {
                 h2c,
                 http2_frames,
                 tcp,
+                raw_tcp,
             } => StepProtocols::H2c {
                 h2c: h2c.try_into()?,
                 http2_frames: http2_frames.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
+                raw_tcp: raw_tcp.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::H2 {
                 h2,
                 http2_frames,
                 tls,
                 tcp,
+                raw_tcp,
             } => StepProtocols::H2 {
                 h2: h2.try_into()?,
                 http2_frames: http2_frames.unwrap_or_default().try_into()?,
                 tls: tls.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
+                raw_tcp: raw_tcp.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::H3 { h3, quic, udp } => StepProtocols::H3 {
                 h3: h3.try_into()?,
@@ -1925,16 +1939,19 @@ impl Step {
             bindings::StepProtocols::Tls {
                 tls,
                 tcp,
+                raw_tcp,
             } => StepProtocols::Tls {
                 tls: tls.try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
+                raw_tcp: raw_tcp.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::Dtls { dtls, udp } => StepProtocols::Dtls {
                 dtls: dtls.try_into()?,
                 udp: udp.unwrap_or_default().try_into()?,
             },
-            bindings::StepProtocols::Tcp { tcp } => StepProtocols::Tcp {
+            bindings::StepProtocols::Tcp { tcp, raw_tcp } => StepProtocols::Tcp {
                 tcp: tcp.try_into()?,
+                raw_tcp: raw_tcp.unwrap_or_default().try_into()?,
             },
             bindings::StepProtocols::RawTcp { raw_tcp } => StepProtocols::RawTcp {
                 raw_tcp: raw_tcp.try_into()?,
@@ -2160,18 +2177,21 @@ pub enum StepProtocols {
         graphql: GraphQlRequest,
         h1c: Http1Request,
         tcp: TcpRequest,
+        raw_tcp: RawTcpRequest,
     },
     GraphQlH1 {
         graphql: GraphQlRequest,
         h1: Http1Request,
         tls: TlsRequest,
         tcp: TcpRequest,
+        raw_tcp: RawTcpRequest,
     },
     GraphQlH2c {
         graphql: GraphQlRequest,
         h2c: Http2Request,
         http2_frames: Http2FramesRequest,
         tcp: TcpRequest,
+        raw_tcp: RawTcpRequest,
     },
     GraphQlH2 {
         graphql: GraphQlRequest,
@@ -2179,6 +2199,7 @@ pub enum StepProtocols {
         http2_frames: Http2FramesRequest,
         tls: TlsRequest,
         tcp: TcpRequest,
+        raw_tcp: RawTcpRequest,
     },
     GraphQlH3 {
         graphql: GraphQlRequest,
@@ -2192,22 +2213,26 @@ pub enum StepProtocols {
     H1c {
         h1c: Http1Request,
         tcp: TcpRequest,
+        raw_tcp: RawTcpRequest,
     },
     H1 {
         h1: Http1Request,
         tls: TlsRequest,
         tcp: TcpRequest,
+        raw_tcp: RawTcpRequest,
     },
     H2c {
         h2c: Http2Request,
         http2_frames: Http2FramesRequest,
         tcp: TcpRequest,
+        raw_tcp: RawTcpRequest,
     },
     H2 {
         h2: Http2Request,
         http2_frames: Http2FramesRequest,
         tls: TlsRequest,
         tcp: TcpRequest,
+        raw_tcp: RawTcpRequest,
     },
     H3 {
         h3: Http3Request,
@@ -2217,6 +2242,7 @@ pub enum StepProtocols {
     Tls {
         tls: TlsRequest,
         tcp: TcpRequest,
+        raw_tcp: RawTcpRequest,
     },
     Dtls {
         dtls: TlsRequest,
@@ -2224,6 +2250,7 @@ pub enum StepProtocols {
     },
     Tcp {
         tcp: TcpRequest,
+        raw_tcp: RawTcpRequest,
     },
     RawTcp {
         raw_tcp: RawTcpRequest,
@@ -2247,6 +2274,7 @@ impl StepProtocols {
                 graphql,
                 h1c,
                 tcp,
+                raw_tcp,
             } => {
                 vec![
                     Protocol::GraphQl(graphql),
@@ -2259,12 +2287,14 @@ impl StepProtocols {
                 h1,
                 tls,
                 tcp,
+                raw_tcp,
             } => {
                 vec![
                     Protocol::GraphQl(graphql),
                     Protocol::H1(h1),
                     Protocol::Tls(tls),
                     Protocol::Tcp(tcp),
+                    Protocol::RawTcp(raw_tcp),
                 ]
             }
             Self::GraphQlH2c {
@@ -2272,12 +2302,14 @@ impl StepProtocols {
                 h2c,
                 http2_frames,
                 tcp,
+                raw_tcp,
             } => {
                 vec![
                     Protocol::GraphQl(graphql),
                     Protocol::H2c(h2c),
                     Protocol::Http2Frames(http2_frames),
                     Protocol::Tcp(tcp),
+                    Protocol::RawTcp(raw_tcp),
                 ]
             }
             Self::GraphQlH2 {
@@ -2286,6 +2318,7 @@ impl StepProtocols {
                 http2_frames,
                 tls,
                 tcp,
+                raw_tcp,
             } => {
                 vec![
                     Protocol::GraphQl(graphql),
@@ -2293,6 +2326,7 @@ impl StepProtocols {
                     Protocol::Http2Frames(http2_frames),
                     Protocol::Tls(tls),
                     Protocol::Tcp(tcp),
+                    Protocol::RawTcp(raw_tcp),
                 ]
             }
             Self::GraphQlH3 {
@@ -2314,32 +2348,38 @@ impl StepProtocols {
             Self::H1c {
                 h1c,
                 tcp,
+                raw_tcp,
             } => {
                 vec![
                     Protocol::H1c(h1c),
                     Protocol::Tcp(tcp),
+                    Protocol::RawTcp(raw_tcp),
                 ]
             }
             Self::H1 {
                 h1,
                 tls,
                 tcp,
+                raw_tcp,
             } => {
                 vec![
                     Protocol::H1(h1),
                     Protocol::Tls(tls),
                     Protocol::Tcp(tcp),
+                    Protocol::RawTcp(raw_tcp),
                 ]
             }
             Self::H2c {
                 h2c,
                 http2_frames,
                 tcp,
+                raw_tcp,
             } => {
                 vec![
                     Protocol::H2c(h2c),
                     Protocol::Http2Frames(http2_frames),
                     Protocol::Tcp(tcp),
+                    Protocol::RawTcp(raw_tcp),
                 ]
             }
             Self::H2 {
@@ -2347,12 +2387,14 @@ impl StepProtocols {
                 http2_frames,
                 tls,
                 tcp,
+                raw_tcp,
             } => {
                 vec![
                     Protocol::H2(h2),
                     Protocol::Http2Frames(http2_frames),
                     Protocol::Tls(tls),
                     Protocol::Tcp(tcp),
+                    Protocol::RawTcp(raw_tcp),
                 ]
             }
             Self::H3 { h3, quic, udp } => {
@@ -2361,17 +2403,19 @@ impl StepProtocols {
             Self::Tls {
                 tls,
                 tcp,
+                raw_tcp,
             } => {
                 vec![
                     Protocol::Tls(tls),
                     Protocol::Tcp(tcp),
+                    Protocol::RawTcp(raw_tcp),
                 ]
             }
             Self::Dtls { dtls, udp } => {
                 vec![Protocol::Tls(dtls), Protocol::Udp(udp)]
             }
-            Self::Tcp { tcp } => {
-                vec![Protocol::Tcp(tcp)]
+            Self::Tcp { tcp, raw_tcp } => {
+                vec![Protocol::Tcp(tcp), Protocol::RawTcp(raw_tcp)]
             }
             Self::RawTcp { raw_tcp } => {
                 vec![Protocol::RawTcp(raw_tcp)]

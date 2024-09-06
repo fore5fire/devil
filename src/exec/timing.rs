@@ -2,26 +2,98 @@ use std::fmt::Debug;
 use std::io::ErrorKind;
 use std::pin::{pin, Pin};
 use std::task::{ready, Poll};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::tee::Stream;
 
 use anyhow::anyhow;
-use chrono::TimeDelta;
-use futures::FutureExt;
+use derivative::Derivative;
 use tokio::io::{self, AsyncRead, AsyncWrite};
-use tokio::time::{sleep, Sleep};
 
 #[derive(Debug)]
-pub struct Timing<T: Stream> {
+pub struct Timing<T: AsyncRead + AsyncWrite + Unpin + Send> {
+    inner: TimingReader<TimingWriter<T>>,
+}
+
+impl<T: Stream> Timing<T> {
+    pub fn new(wrap: T) -> Self {
+        Self {
+            inner: TimingReader::new(TimingWriter::new(wrap)),
+        }
+    }
+    pub fn into_inner(self) -> T {
+        self.inner.into_inner().into_inner()
+    }
+    pub fn inner_mut(&mut self) -> &'_ mut T {
+        self.inner.inner_mut().inner_mut()
+    }
+    pub fn inner_ref(&self) -> &'_ T {
+        self.inner.inner_ref().inner_ref()
+    }
+    pub fn first_write(&self) -> Option<Instant> {
+        self.inner.inner_ref().first_write
+    }
+    pub fn last_write(&self) -> Option<Instant> {
+        self.inner.inner_ref().last_write
+    }
+    pub fn shutdown_start(&self) -> Option<Instant> {
+        self.inner.inner_ref().shutdown_start()
+    }
+    pub fn shutdown_end(&self) -> Option<Instant> {
+        self.inner.inner_ref().shutdown_end()
+    }
+    pub fn first_read(&self) -> Option<Instant> {
+        self.inner.first_read()
+    }
+    pub fn last_read(&self) -> Option<Instant> {
+        self.inner.last_read()
+    }
+}
+
+impl<T: AsyncWrite + AsyncRead + Unpin + Send> AsyncRead for Timing<T> {
+    #[inline]
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        pin!(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> AsyncWrite for Timing<T> {
+    #[inline]
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<Result<usize, std::io::Error>> {
+        pin!(&mut self.inner).poll_write(cx, buf)
+    }
+    #[inline]
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        pin!(&mut self.inner).poll_flush(cx)
+    }
+    #[inline]
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        pin!(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct TimingReader<T: AsyncRead + Unpin + Send> {
+    #[derivative(Debug = "ignore")]
     inner: T,
     first_read: Option<Instant>,
     last_read: Option<Instant>,
-    first_write: Option<Instant>,
-    last_write: Option<Instant>,
     read_state: ReadState,
-    sleep: Option<Pin<Box<Sleep>>>,
-    read_timeout: Option<Duration>,
 }
 
 #[derive(Debug)]
@@ -30,18 +102,13 @@ enum ReadState {
     TimedOut,
 }
 
-impl<T: Stream> Timing<T> {
-    pub fn new(wrap: T, read_timeout: Option<TimeDelta>) -> Self {
-        let read_timeout = read_timeout.map(|timeout| timeout.to_std().unwrap());
+impl<T: AsyncRead + Unpin + Send> TimingReader<T> {
+    pub fn new(wrap: T) -> Self {
         Self {
             inner: wrap,
             first_read: None,
             last_read: None,
-            first_write: None,
-            last_write: None,
             read_state: ReadState::Open,
-            sleep: None,
-            read_timeout,
         }
     }
     pub fn into_inner(self) -> T {
@@ -50,21 +117,18 @@ impl<T: Stream> Timing<T> {
     pub fn inner_mut(&mut self) -> &'_ mut T {
         &mut self.inner
     }
+    pub fn inner_ref(&self) -> &'_ T {
+        &self.inner
+    }
     pub fn first_read(&self) -> Option<Instant> {
         self.first_read
     }
     pub fn last_read(&self) -> Option<Instant> {
         self.last_read
     }
-    pub fn first_write(&self) -> Option<Instant> {
-        self.first_write
-    }
-    pub fn last_write(&self) -> Option<Instant> {
-        self.last_write
-    }
 }
 
-impl<T: Stream> AsyncRead for Timing<T> {
+impl<T: AsyncRead + Unpin + Send> AsyncRead for TimingReader<T> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -74,21 +138,6 @@ impl<T: Stream> AsyncRead for Timing<T> {
             ReadState::Open => {
                 let poll = pin!(&mut self.inner).poll_read(cx, buf);
                 let now = Instant::now();
-
-                // We're waiting for data - apply the timeout if set.
-                if poll.is_pending() {
-                    if let Some(timeout) = self.read_timeout {
-                        // Get the running timer or start one.
-                        let sleep = self.sleep.get_or_insert_with(|| Box::pin(sleep(timeout)));
-                        // Advance the timer.
-                        ready!(sleep.poll_unpin(cx));
-                        self.read_state = ReadState::TimedOut;
-                        return Poll::Ready(Err(io::Error::new(
-                            ErrorKind::TimedOut,
-                            anyhow!("read timeout reached"),
-                        )));
-                    }
-                }
 
                 ready!(poll)?;
 
@@ -106,7 +155,86 @@ impl<T: Stream> AsyncRead for Timing<T> {
     }
 }
 
-impl<T: Stream> AsyncWrite for Timing<T> {
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> AsyncWrite for TimingReader<T> {
+    #[inline]
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<Result<usize, std::io::Error>> {
+        pin!(&mut self.inner).poll_write(cx, buf)
+    }
+    #[inline]
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        pin!(&mut self.inner).poll_flush(cx)
+    }
+    #[inline]
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        pin!(&mut self.inner).poll_shutdown(cx)
+    }
+}
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub struct TimingWriter<T: AsyncWrite + Unpin + Send> {
+    #[derivative(Debug = "ignore")]
+    inner: T,
+    first_write: Option<Instant>,
+    last_write: Option<Instant>,
+    shutdown_start: Option<Instant>,
+    shutdown_end: Option<Instant>,
+}
+
+impl<T: AsyncWrite + Unpin + Send> TimingWriter<T> {
+    pub fn new(wrap: T) -> Self {
+        Self {
+            inner: wrap,
+            first_write: None,
+            last_write: None,
+            shutdown_start: None,
+            shutdown_end: None,
+        }
+    }
+    pub fn into_inner(self) -> T {
+        self.inner
+    }
+    pub fn inner_mut(&mut self) -> &'_ mut T {
+        &mut self.inner
+    }
+    pub fn inner_ref(&self) -> &'_ T {
+        &self.inner
+    }
+    pub fn first_write(&self) -> Option<Instant> {
+        self.first_write
+    }
+    pub fn last_write(&self) -> Option<Instant> {
+        self.last_write
+    }
+    pub fn shutdown_start(&self) -> Option<Instant> {
+        self.shutdown_start
+    }
+    pub fn shutdown_end(&self) -> Option<Instant> {
+        self.shutdown_end
+    }
+}
+
+impl<T: AsyncWrite + AsyncRead + Unpin + Send> AsyncRead for TimingWriter<T> {
+    #[inline]
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        pin!(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl<T: AsyncWrite + Unpin + Send> AsyncWrite for TimingWriter<T> {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -117,6 +245,7 @@ impl<T: Stream> AsyncWrite for Timing<T> {
         self.first_write = self.first_write.or(self.last_write);
         Poll::Ready(Ok(read))
     }
+    #[inline]
     fn poll_flush(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -127,6 +256,13 @@ impl<T: Stream> AsyncWrite for Timing<T> {
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Result<(), std::io::Error>> {
-        pin!(&mut self.inner).poll_shutdown(cx)
+        if self.shutdown_start.is_none() {
+            self.shutdown_start = Some(Instant::now());
+        }
+        let poll = pin!(&mut self.inner).poll_shutdown(cx);
+        if poll.is_ready() && self.shutdown_end.is_none() {
+            self.shutdown_end = Some(Instant::now());
+        }
+        poll
     }
 }

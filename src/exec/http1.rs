@@ -36,6 +36,7 @@ pub(super) struct Http1Runner {
     resp_start_time: Option<Instant>,
     resp_header_end_time: Option<Instant>,
     first_read: Option<Instant>,
+    shutdown_time: Option<Instant>,
     resp_header_buf: BytesMut,
     req_body_buf: Vec<u8>,
     resp_body_buf: Vec<u8>,
@@ -184,8 +185,8 @@ impl AsyncWrite for Http1Runner {
             } => pin!(transport).poll_shutdown(cx),
             state => panic!("unexpected state {state:?} for http1 poll_shutdown"),
         };
-        if poll.is_ready() {
-            self.complete();
+        if poll.is_ready() && self.shutdown_time.is_none() {
+            self.shutdown_time = Some(Instant::now());
         }
         poll
     }
@@ -211,6 +212,7 @@ impl Http1Runner {
             resp_start_time: None,
             resp_header_end_time: None,
             first_read: None,
+            shutdown_time: None,
             resp_header_buf: BytesMut::new(),
             req_body_buf: Vec::new(),
             resp_body_buf: Vec::new(),
@@ -525,7 +527,8 @@ impl Http1Runner {
     }
 
     fn complete(&mut self) {
-        let end_time = Instant::now();
+        let end_time = self.shutdown_time.unwrap_or_else(Instant::now);
+
         let state = std::mem::replace(&mut self.state, State::Invalid);
         let transport = match state {
             State::SendingHeader { transport }
