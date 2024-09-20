@@ -25,8 +25,8 @@ use crate::{
 };
 
 use super::{
-    http2frames::Http2FramesRunner,
     pause::{PauseReader, PauseSpec, PauseWriter},
+    raw_http2::RawHttp2Runner,
     Context,
 };
 
@@ -36,7 +36,7 @@ pub struct Http2Runner {
     out: Http2Output,
     read_state: ReadState,
     write_state: WriteState,
-    transport: Option<Http2FramesRunner>,
+    transport: Option<RawHttp2Runner>,
     start_time: Option<Instant>,
     header_send_start: Option<Instant>,
     header_send_end: Option<Instant>,
@@ -100,7 +100,6 @@ impl Http2Runner {
                     method: plan.method.clone(),
                     headers: plan.headers.clone(),
                     body: plan.body.clone(),
-                    frames: Vec::new(),
                     duration: chrono::Duration::zero(),
                     headers_duration: None,
                     body_duration: None,
@@ -195,7 +194,7 @@ impl Http2Runner {
         Some(self.out.plan.body.len())
     }
 
-    pub async fn start(&mut self, mut transport: Http2FramesRunner) -> anyhow::Result<()> {
+    pub async fn start(&mut self, mut transport: RawHttp2Runner) -> anyhow::Result<()> {
         let stream = transport.new_stream();
         self.transport = Some(transport);
         self.start_shared(stream.expect("a single stream should be available for non-shared http2"))
@@ -302,7 +301,9 @@ impl Http2Runner {
         }
     }
 
-    pub async fn finish(mut self) -> (Http2Output, Option<Http2FramesRunner>) {
+    pub async fn finish(mut self) -> (Http2Output, Option<RawHttp2Runner>) {
+        let end_time = self.shutdown_end.unwrap_or_else(Instant::now);
+
         let mut read_state = mem::replace(&mut self.read_state, ReadState::Invalid);
         let ReadState::Body { ref mut body, .. } = read_state else {
             panic!("invalid read state for finish: {:?}", self.read_state);
@@ -358,12 +359,7 @@ impl Http2Runner {
         }
 
         self.read_state = read_state;
-        self.complete();
-        (self.out, self.transport)
-    }
 
-    fn complete(&mut self) {
-        let end_time = self.shutdown_end.unwrap_or_else(Instant::now);
         let (resp_head, resp_body) = match mem::replace(&mut self.read_state, ReadState::Invalid) {
             ReadState::Body { body, head, .. } => {
                 let (body, pauses) = body.finish();
@@ -375,23 +371,19 @@ impl Http2Runner {
             }
             ReadState::Headers { response, .. } => match response.now_or_never() {
                 Some(Ok(Ok(resp))) => (resp.into_parts().0, None),
-                Some(Err(e)) => return self.set_error("response processing error", e),
-                Some(Ok(Err(e))) => return self.set_error("response error", e),
-                None => return,
+                Some(Err(e)) => {
+                    self.set_error("response processing error", e);
+                    return (self.out, self.transport);
+                }
+                Some(Ok(Err(e))) => {
+                    self.set_error("response error", e);
+                    return (self.out, self.transport);
+                }
+                None => return (self.out, self.transport),
             },
             ReadState::Invalid => panic!("invalid state for http2 finish"),
-            _ => return,
+            _ => return (self.out, self.transport),
         };
-        if let Some(req) = &mut self.out.request {
-            //req.frames = self
-            //    .transport
-            //    .as_ref()
-            //    .map(|t| self.stream_id.map(|id| t.sent_frames(id)))
-            //    .flatten()
-            //    .into_iter()
-            //    .flatten()
-            //    .collect();
-        }
         self.out.response = Some(crate::Http2Response {
             status_code: Some(resp_head.status.into()),
             content_length: None,
@@ -411,15 +403,6 @@ impl Http2Runner {
                     .collect(),
             ),
             body: resp_body,
-            frames: Vec::new(),
-            //frames: self
-            //    .transport
-            //    .as_ref()
-            //    .map(|t| self.stream_id.map(|id| t.received_frames(id)))
-            //    .flatten()
-            //    .into_iter()
-            //    .flatten()
-            //    .collect(),
             trailers: mem::take(&mut self.receive_trailers).map(|trailers| {
                 trailers
                     .into_iter()
@@ -472,7 +455,8 @@ impl Http2Runner {
                 WriteState::Completed { stream: None }
             }
             write_state => panic!("invalid http2 write state for completion {:?}", write_state),
-        }
+        };
+        (self.out, self.transport)
     }
 
     fn set_error<S, E>(&mut self, kind: S, e: E)
@@ -595,6 +579,7 @@ impl AsyncWrite for Http2Runner {
         if self.shutdown_end.is_none() {
             self.shutdown_end = Some(Instant::now());
         }
+
         Poll::Ready(result)
     }
 }

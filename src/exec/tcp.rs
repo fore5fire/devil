@@ -88,7 +88,6 @@ impl TcpRunner {
             dest_ip: remote_addr_string,
             dest_port: remote_addr.port(),
             body: Vec::new(),
-            segments: Vec::new(),
             time_to_first_byte: None,
             time_to_last_byte: None,
         });
@@ -239,13 +238,16 @@ impl TcpRunner {
         self.reader = Some(reader);
     }
 
-    pub async fn finish(mut self) -> TcpOutput {
+    pub async fn finish(mut self) -> (TcpOutput, RawTcpRunner) {
         let end_time = Instant::now();
         self.complete();
 
         let state = std::mem::replace(&mut self.state, State::Invalid);
-        let State::Open { start, writer, .. } = state else {
-            return self.out;
+        let State::Open {
+            start, writer, raw, ..
+        } = state
+        else {
+            panic!("invalid tcp runner state after complete");
         };
         let Some(reader) = mem::take(&mut self.reader) else {
             panic!("reader unset in Open state");
@@ -289,7 +291,6 @@ impl TcpRunner {
         if !reads.is_empty() {
             self.out.received = Some(TcpReceivedOutput {
                 body: reads,
-                segments: Vec::new(),
                 time_to_first_byte: reader
                     .first_read()
                     .map(|first_read| first_read - start)
@@ -306,7 +307,7 @@ impl TcpRunner {
         }
         self.out.duration = TimeDelta::from_std(end_time - start).unwrap();
         self.state = State::Completed;
-        self.out
+        (self.out, raw)
     }
 
     fn complete(&mut self) {

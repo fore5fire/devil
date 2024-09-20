@@ -41,9 +41,12 @@ pnet = "0.34.0"
 anyhow = { version = "1.0.86", features = ["backtrace"] }
 tokio-util = "0.7.11"
 regex = "1.10.6"
-log = "0.4.22"
-env_logger = "0.11.5"
 thiserror = "1.0.63"
 derivative = "2.2.0"
 http-box = "0.1.6"
 byteorder = "1.5.0"
+bitmask-enum = "2.2.4"
+toml_edit = { version = "0.22.21", features = ["serde"] }
+macro_rules_attribute = "0.2.0"
+tracing = { version = "0.1.40", features = ["async-await", "log"] }
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }

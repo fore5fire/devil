@@ -5,6 +5,10 @@ use indexmap::IndexMap;
 use itertools::{Either, Itertools};
 use serde::{Deserialize, Serialize};
 
+mod raw_http2;
+
+pub use raw_http2::*;
+
 pub trait Merge: std::fmt::Debug + Clone + Serialize + Deserialize<'static> {
     fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self>;
 }
@@ -69,8 +73,9 @@ pub struct Defaults {
     pub h1c: Option<Http1>,
     pub h1: Option<Http1>,
     pub h2c: Option<Http2>,
+    pub raw_h2c: Option<RawHttp2>,
     pub h2: Option<Http2>,
-    pub http2_frames: Option<Http2Frames>,
+    pub raw_h2: Option<RawHttp2>,
     pub h3: Option<Http3>,
     pub tls: Option<Tls>,
     pub tcp: Option<Tcp>,
@@ -117,6 +122,10 @@ pub enum ProtocolKind {
     H2,
     #[serde(rename = "h3")]
     H3,
+    #[serde(rename = "raw_h2c")]
+    RawH2c,
+    #[serde(rename = "raw_h2")]
+    RawH2,
     #[serde(rename = "tls")]
     Tls,
     #[serde(rename = "tcp")]
@@ -237,13 +246,13 @@ impl Step {
             StepProtocols::GraphQlH2c {
                 graphql,
                 h2c,
-                http2_frames,
+                raw_h2c,
                 tcp,
                 raw_tcp,
             } => {
                 self.unrecognized.remove("graphql");
                 self.unrecognized.remove("h2c");
-                self.unrecognized.remove("http2_frames");
+                self.unrecognized.remove("raw_h2c");
                 self.unrecognized.remove("tls");
                 self.unrecognized.remove("tcp");
                 self.unrecognized.remove("raw_tcp");
@@ -251,7 +260,7 @@ impl Step {
                 if let Some(x) = &h2c {
                     x.validate()?;
                 };
-                if let Some(x) = &http2_frames {
+                if let Some(x) = &raw_h2c {
                     x.validate()?;
                 };
                 if let Some(x) = &tcp {
@@ -264,14 +273,14 @@ impl Step {
             StepProtocols::GraphQlH2 {
                 graphql,
                 h2,
-                http2_frames,
+                raw_h2,
                 tls,
                 tcp,
                 raw_tcp,
             } => {
                 self.unrecognized.remove("graphql");
                 self.unrecognized.remove("h2");
-                self.unrecognized.remove("http2_frames");
+                self.unrecognized.remove("raw_h2");
                 self.unrecognized.remove("tls");
                 self.unrecognized.remove("tcp");
                 self.unrecognized.remove("raw_tcp");
@@ -279,7 +288,7 @@ impl Step {
                 if let Some(x) = &h2 {
                     x.validate()?;
                 };
-                if let Some(x) = &http2_frames {
+                if let Some(x) = &raw_h2 {
                     x.validate()?;
                 };
                 if let Some(x) = &tls {
@@ -352,16 +361,16 @@ impl Step {
             }
             StepProtocols::H2c {
                 h2c,
-                http2_frames,
+                raw_h2c,
                 tcp,
                 raw_tcp,
             } => {
                 self.unrecognized.remove("h2c");
-                self.unrecognized.remove("http2_frames");
+                self.unrecognized.remove("raw_h2c");
                 self.unrecognized.remove("tcp");
                 self.unrecognized.remove("raw_tcp");
                 h2c.validate()?;
-                if let Some(x) = &http2_frames {
+                if let Some(x) = &raw_h2c {
                     x.validate()?;
                 };
                 if let Some(x) = &tcp {
@@ -373,18 +382,18 @@ impl Step {
             }
             StepProtocols::H2 {
                 h2,
-                http2_frames,
+                raw_h2,
                 tls,
                 tcp,
                 raw_tcp,
             } => {
                 self.unrecognized.remove("h2");
-                self.unrecognized.remove("http2_frames");
+                self.unrecognized.remove("raw_h2");
                 self.unrecognized.remove("tls");
                 self.unrecognized.remove("tcp");
                 self.unrecognized.remove("raw_tcp");
                 h2.validate()?;
-                if let Some(x) = &http2_frames {
+                if let Some(x) = &raw_h2 {
                     x.validate()?;
                 };
                 if let Some(x) = &tls {
@@ -406,6 +415,43 @@ impl Step {
                     x.validate()?;
                 };
                 if let Some(x) = &udp {
+                    x.validate()?;
+                };
+            }
+            StepProtocols::RawH2c {
+                raw_h2c,
+                tcp,
+                raw_tcp,
+            } => {
+                self.unrecognized.remove("raw_h2c");
+                self.unrecognized.remove("tcp");
+                self.unrecognized.remove("raw_tcp");
+                raw_h2c.validate()?;
+                if let Some(x) = &tcp {
+                    x.validate()?;
+                };
+                if let Some(x) = &raw_tcp {
+                    x.validate()?;
+                };
+            }
+            StepProtocols::RawH2 {
+                raw_h2,
+                tls,
+                tcp,
+                raw_tcp,
+            } => {
+                self.unrecognized.remove("raw_h2");
+                self.unrecognized.remove("tls");
+                self.unrecognized.remove("tcp");
+                self.unrecognized.remove("raw_tcp");
+                raw_h2.validate()?;
+                if let Some(x) = &tls {
+                    x.validate()?;
+                };
+                if let Some(x) = &tcp {
+                    x.validate()?;
+                };
+                if let Some(x) = &raw_tcp {
                     x.validate()?;
                 };
             }
@@ -494,14 +540,14 @@ pub enum StepProtocols {
     GraphQlH2c {
         graphql: GraphQl,
         h2c: Option<Http2>,
-        http2_frames: Option<Http2Frames>,
+        raw_h2c: Option<RawHttp2>,
         tcp: Option<Tcp>,
         raw_tcp: Option<RawTcp>,
     },
     GraphQlH2 {
         graphql: GraphQl,
         h2: Option<Http2>,
-        http2_frames: Option<Http2Frames>,
+        raw_h2: Option<RawHttp2>,
         tls: Option<Tls>,
         tcp: Option<Tcp>,
         raw_tcp: Option<RawTcp>,
@@ -528,13 +574,13 @@ pub enum StepProtocols {
     },
     H2c {
         h2c: Http2,
-        http2_frames: Option<Http2Frames>,
+        raw_h2c: Option<RawHttp2>,
         tcp: Option<Tcp>,
         raw_tcp: Option<RawTcp>,
     },
     H2 {
         h2: Http2,
-        http2_frames: Option<Http2Frames>,
+        raw_h2: Option<RawHttp2>,
         tls: Option<Tls>,
         tcp: Option<Tcp>,
         raw_tcp: Option<RawTcp>,
@@ -543,6 +589,17 @@ pub enum StepProtocols {
         h3: Http3,
         quic: Option<Quic>,
         udp: Option<Udp>,
+    },
+    RawH2c {
+        raw_h2c: RawHttp2,
+        tcp: Option<Tcp>,
+        raw_tcp: Option<RawTcp>,
+    },
+    RawH2 {
+        raw_h2: RawHttp2,
+        tls: Option<Tls>,
+        tcp: Option<Tcp>,
+        raw_tcp: Option<RawTcp>,
     },
     Tls {
         tls: Tls,
@@ -613,27 +670,27 @@ impl StepProtocols {
             Self::GraphQlH2c {
                 graphql,
                 h2c,
-                http2_frames,
+                raw_h2c,
                 tcp,
                 raw_tcp,
             } => Self::GraphQlH2c {
                 graphql: graphql.merge(default.graphql),
                 h2c: Some(h2c.unwrap_or_default().merge(default.h2c)),
-                http2_frames: Some(http2_frames.unwrap_or_default().merge(default.http2_frames)),
+                raw_h2c: Some(raw_h2c.unwrap_or_default().merge(default.raw_h2c)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
                 raw_tcp: Some(raw_tcp.unwrap_or_default().merge(default.raw_tcp)),
             },
             Self::GraphQlH2 {
                 graphql,
                 h2,
-                http2_frames,
+                raw_h2,
                 tls,
                 tcp,
                 raw_tcp,
             } => Self::GraphQlH2 {
                 graphql: graphql.merge(default.graphql),
                 h2: Some(h2.unwrap_or_default().merge(default.h2)),
-                http2_frames: Some(http2_frames.unwrap_or_default().merge(default.http2_frames)),
+                raw_h2: Some(raw_h2.unwrap_or_default().merge(default.raw_h2)),
                 tls: Some(tls.unwrap_or_default().merge(default.tls)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
                 raw_tcp: Some(raw_tcp.unwrap_or_default().merge(default.raw_tcp)),
@@ -671,24 +728,24 @@ impl StepProtocols {
             },
             Self::H2c {
                 h2c,
-                http2_frames,
+                raw_h2c,
                 tcp,
                 raw_tcp,
             } => Self::H2c {
                 h2c: h2c.merge(default.h2c),
-                http2_frames: Some(http2_frames.unwrap_or_default().merge(default.http2_frames)),
+                raw_h2c: Some(raw_h2c.unwrap_or_default().merge(default.raw_h2c)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
                 raw_tcp: Some(raw_tcp.unwrap_or_default().merge(default.raw_tcp)),
             },
             Self::H2 {
                 h2,
-                http2_frames,
+                raw_h2,
                 tls,
                 tcp,
                 raw_tcp,
             } => Self::H2 {
                 h2: h2.merge(default.h2),
-                http2_frames: Some(http2_frames.unwrap_or_default().merge(default.http2_frames)),
+                raw_h2: Some(raw_h2.unwrap_or_default().merge(default.raw_h2)),
                 tls: Some(tls.unwrap_or_default().merge(default.tls)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
                 raw_tcp: Some(raw_tcp.unwrap_or_default().merge(default.raw_tcp)),
@@ -697,6 +754,26 @@ impl StepProtocols {
                 h3: h3.merge(default.h3),
                 quic: Some(quic.unwrap_or_default().merge(default.quic)),
                 udp: Some(udp.unwrap_or_default().merge(default.udp)),
+            },
+            Self::RawH2c {
+                raw_h2c,
+                tcp,
+                raw_tcp,
+            } => Self::RawH2c {
+                raw_h2c: raw_h2c.merge(default.raw_h2c),
+                tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
+                raw_tcp: Some(raw_tcp.unwrap_or_default().merge(default.raw_tcp)),
+            },
+            Self::RawH2 {
+                raw_h2,
+                tls,
+                tcp,
+                raw_tcp,
+            } => Self::RawH2 {
+                raw_h2: raw_h2.merge(default.raw_h2),
+                tls: Some(tls.unwrap_or_default().merge(default.tls)),
+                tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
+                raw_tcp: Some(raw_tcp.unwrap_or_default().merge(default.raw_tcp)),
             },
             Self::Tls { tls, tcp, raw_tcp } => Self::Tls {
                 tls: tls.merge(default.tls),
@@ -736,6 +813,8 @@ impl StepProtocols {
             Self::H2c { .. } => ProtocolKind::H2c,
             Self::H2 { .. } => ProtocolKind::H2,
             Self::H3 { .. } => ProtocolKind::H3,
+            Self::RawH2c { .. } => ProtocolKind::RawH2c,
+            Self::RawH2 { .. } => ProtocolKind::RawH2,
             Self::Tls { .. } => ProtocolKind::Tls,
             Self::Dtls { .. } => ProtocolKind::Dtls,
             Self::Tcp { .. } => ProtocolKind::Tcp,
@@ -842,7 +921,7 @@ pub struct GraphQlPause {
 impl Merge for GraphQlPause {
     fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
         let Some(first) = first else { return second };
-        let Some(second) = second else {
+        let Some(_second) = second else {
             return Some(first);
         };
         Some(Self {
@@ -1101,89 +1180,6 @@ impl Http2Pause {
     fn validate(&self) -> crate::Result<()> {
         if let Some(open) = &self.open {
             open.validate()?;
-        }
-        if !self.unrecognized.is_empty() {
-            bail!(
-                "unrecognized field{} {}",
-                if self.unrecognized.len() == 1 {
-                    ""
-                } else {
-                    "s"
-                },
-                self.unrecognized.keys().join(", "),
-            );
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct Http2Frames {
-    pub host: Option<Value>,
-    pub port: Option<Value>,
-    #[serde(default)]
-    pub pause: Option<Http2FramesPause>,
-    #[serde(flatten)]
-    pub unrecognized: toml::Table,
-}
-
-impl Http2Frames {
-    fn merge(self, default: Option<Self>) -> Self {
-        let Some(default) = default else {
-            return self;
-        };
-        Self {
-            host: Value::merge(self.host, default.host),
-            port: Value::merge(self.port, default.port),
-            pause: Http2FramesPause::merge(self.pause, default.pause),
-            unrecognized: toml::Table::new(),
-        }
-    }
-
-    fn validate(&self) -> crate::Result<()> {
-        if let Some(p) = &self.pause {
-            p.validate()?;
-        }
-        if !self.unrecognized.is_empty() {
-            bail!(
-                "unrecognized field{} {}",
-                if self.unrecognized.len() == 1 {
-                    ""
-                } else {
-                    "s"
-                },
-                self.unrecognized.keys().join(", "),
-            );
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Http2FramesPause {
-    pub handshake: Option<PausePoints>,
-    #[serde(flatten)]
-    pub unrecognized: toml::Table,
-}
-
-impl Merge for Http2FramesPause {
-    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
-        let Some(first) = first else { return second };
-        let Some(second) = second else {
-            return Some(first);
-        };
-
-        Some(Self {
-            handshake: PausePoints::merge(first.handshake, second.handshake),
-            unrecognized: toml::Table::new(),
-        })
-    }
-}
-
-impl Http2FramesPause {
-    fn validate(&self) -> crate::Result<()> {
-        if let Some(handshake) = &self.handshake {
-            handshake.validate()?;
         }
         if !self.unrecognized.is_empty() {
             bail!(

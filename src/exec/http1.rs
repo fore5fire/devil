@@ -10,6 +10,7 @@ use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
 use chrono::Duration;
+use pnet::transport;
 use tokio::io::ReadBuf;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -22,6 +23,7 @@ use crate::AddContentLength;
 use crate::Http1Error;
 use crate::Http1PlanOutput;
 use crate::Http1RequestOutput;
+use crate::StepOutput;
 use crate::WithPlannedCapacity;
 use crate::{Http1Output, Http1Response};
 

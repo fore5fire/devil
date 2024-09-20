@@ -5,13 +5,14 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail};
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use super::raw_tcp::RawTcpRunner;
 use super::runner::Runner;
 use super::tcp::TcpRunner;
 use super::tls::TlsRunner;
 use super::{http1::Http1Runner, Context};
 use crate::{
-    HttpOutput, HttpPauseOutput, HttpPlanOutput, HttpRequestOutput, HttpResponse, TcpPlanOutput,
-    TlsPlanOutput,
+    HttpOutput, HttpPauseOutput, HttpPlanOutput, HttpRequestOutput, HttpResponse, RawTcpPlanOutput,
+    TcpPlanOutput, TlsPlanOutput,
 };
 
 #[derive(Debug)]
@@ -82,15 +83,39 @@ impl HttpRunner {
 
         // For now we always use TCP and possibly TLS. To support HTTP/3 we'll need to decide
         // whether to use UPD and QUIC instead.
-        transports.push(Runner::Tcp(Box::new(TcpRunner::new(
+        transports.push(Runner::RawTcp(Box::new(RawTcpRunner::new(
             ctx.clone(),
-            TcpPlanOutput {
+            RawTcpPlanOutput {
                 dest_host: plan
                     .url
                     .host()
                     .ok_or_else(|| anyhow!("url is missing host"))?
                     .to_string(),
                 dest_port: plan
+                    .url
+                    .port_or_known_default()
+                    .ok_or_else(|| anyhow!("url is missing port"))?,
+                src_host: None,
+                src_port: None,
+                // Unused, probably will remove.
+                isn: 0,
+                // Unused, probably will remove.
+                window: 1000,
+                // Only used when RawTcp is executor.
+                segments: Vec::new(),
+                //close: TcpPlanCloseOutput::default(),
+                pause: crate::RawTcpPauseOutput::default(),
+            },
+        ))));
+        transports.push(Runner::Tcp(Box::new(TcpRunner::new(
+            ctx.clone(),
+            TcpPlanOutput {
+                host: plan
+                    .url
+                    .host()
+                    .ok_or_else(|| anyhow!("url is missing host"))?
+                    .to_string(),
+                port: plan
                     .url
                     .port_or_known_default()
                     .ok_or_else(|| anyhow!("url is missing port"))?,
@@ -145,7 +170,7 @@ impl HttpRunner {
 
     pub fn size_hint(&mut self, size_hint: Option<usize>) -> Option<usize> {
         let State::Pending { transports } = &mut self.state else {
-            panic!("invalid state to call start")
+            panic!("invalid state to call size_hint")
         };
         let mut size_hint = match &mut self.inner {
             HttpProtocol::Http1(p) => p.size_hint(size_hint),

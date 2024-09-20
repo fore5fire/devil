@@ -46,7 +46,7 @@ enum State {
         transport: PauseStream<Tee<Timing<TlsStream<Runner>>>>,
     },
     Completed {
-        transport: Option<Runner>,
+        transport: Runner,
     },
     StartFailed {
         transport: Runner,
@@ -252,7 +252,7 @@ impl TlsRunner {
         }
     }
 
-    pub fn finish(mut self) -> (TlsOutput, Option<Runner>) {
+    pub fn finish(mut self) -> (TlsOutput, Runner) {
         self.complete();
         let State::Completed { transport } = self.state else {
             unreachable!();
@@ -272,16 +272,10 @@ impl TlsRunner {
                 return;
             }
             State::StartFailed { transport } => {
-                self.state = State::Completed {
-                    transport: Some(transport),
-                };
+                self.state = State::Completed { transport };
                 return;
             }
-            State::Pending { .. } => {
-                self.state = State::Completed { transport: None };
-                return;
-            }
-            State::Invalid => panic!("tls has invalid end state"),
+            state => panic!("tls has invalid end state {state:?}"),
         };
         let (tee, send_pause, receive_pause) = transport.finish_stream();
         let (stream, writes, reads, truncated_reads, pattern_match) = tee.into_parts();
@@ -319,9 +313,7 @@ impl TlsRunner {
 
         let (inner, conn) = stream.into_inner().into_inner();
 
-        self.state = State::Completed {
-            transport: Some(inner),
-        };
+        self.state = State::Completed { transport: inner };
 
         self.out.version = match conn.protocol_version() {
             Some(rustls::ProtocolVersion::SSLv2) => Some(TlsVersion::SSL2),

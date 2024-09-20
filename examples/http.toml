@@ -89,12 +89,12 @@ url = "http://example.com/test"
 [http2_example.h2]
 url = "https://example.com/test"
 
-# HTTP2 without TLS
-#[h2c_example.http2]
+# HTTP/2 without TLS
+#[h2c_example.h2c]
 #url = "http://example.com/test"
 
-# HTTP3
-#[http3_example.http3]
+# HTTP/3
+#[http3_example.h3]
 #url = "https://example.com/test"
 
 [[courier.defaults]]

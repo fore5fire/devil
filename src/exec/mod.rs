@@ -4,8 +4,8 @@ pub mod graphql;
 pub mod http;
 pub mod http1;
 pub mod http2;
-pub mod http2frames;
 mod pause;
+pub mod raw_http2;
 pub mod raw_tcp;
 mod runner;
 pub mod tcp;
@@ -20,12 +20,13 @@ use std::sync::Arc;
 use anyhow::bail;
 use futures::future::try_join_all;
 use indexmap::IndexMap;
-use itertools::{Either, Itertools};
+use itertools::{Either, Itertools, Position};
 use tokio::sync::Barrier;
 use tokio_task_pool::Pool;
+use tracing::debug;
 
 use crate::{
-    Evaluate, IterableKey, Output, Parallelism, Plan, Protocol, ProtocolField, Step, StepOutput,
+    Evaluate, IterableKey, Parallelism, Plan, Protocol, ProtocolField, Step, StepOutput,
     StepPlanOutput, StepPlanOutputs,
 };
 
@@ -174,13 +175,20 @@ impl<'a> Executor<'a> {
                 let mut shared_transport =
                     Executor::start_runners(None, shared_runners, count_usize).await?;
                 let shared_transports = match &mut shared_transport {
-                    Some(Runner::Http2Frames(r)) => {
-                        Either::Left(itertools::repeat_n(r.new_stream(), count_usize).map(|s| {
-                            Some(Runner::MuxHttp2Frames(s.expect(
+                    Some(Runner::RawH2c(r)) => Either::Left(Either::Left(
+                        itertools::repeat_n(r.new_stream(), count_usize).map(|s| {
+                            Some(Runner::MuxRawH2c(s.expect(
                                 "a stream should be available for each concurrent run",
                             )))
-                        }))
-                    }
+                        }),
+                    )),
+                    Some(Runner::RawH2(r)) => Either::Left(Either::Right(
+                        itertools::repeat_n(r.new_stream(), count_usize).map(|s| {
+                            Some(Runner::MuxRawH2(s.expect(
+                                "a stream should be available for each concurrent run",
+                            )))
+                        }),
+                    )),
                     Some(r) => {
                         bail!(
                             "concurrent sharing of protocol {:?} is not supported",
@@ -290,19 +298,18 @@ impl<'a> Executor<'a> {
             .into_iter()
             .map(|proto| {
                 let req = proto.evaluate(inputs)?;
-                match &req {
-                    StepPlanOutput::GraphQl(req) => inputs.current.graphql = Some(req.clone()),
-                    StepPlanOutput::Http(req) => inputs.current.http = Some(req.clone()),
-                    StepPlanOutput::H1c(req) => inputs.current.h1c = Some(req.clone()),
-                    StepPlanOutput::H1(req) => inputs.current.h1 = Some(req.clone()),
-                    StepPlanOutput::H2c(req) => inputs.current.h2c = Some(req.clone()),
-                    StepPlanOutput::H2(req) => inputs.current.h2 = Some(req.clone()),
-                    StepPlanOutput::Http2Frames(req) => {
-                        inputs.current.http2_frames = Some(req.clone())
-                    }
-                    StepPlanOutput::Tls(req) => inputs.current.tls = Some(req.clone()),
-                    StepPlanOutput::Tcp(req) => inputs.current.tcp = Some(req.clone()),
-                    StepPlanOutput::RawTcp(req) => inputs.current.raw_tcp = Some(req.clone()),
+                match req.clone() {
+                    StepPlanOutput::GraphQl(req) => inputs.current.graphql = Some(req),
+                    StepPlanOutput::Http(req) => inputs.current.http = Some(req),
+                    StepPlanOutput::H1c(req) => inputs.current.h1c = Some(req),
+                    StepPlanOutput::H1(req) => inputs.current.h1 = Some(req),
+                    StepPlanOutput::H2c(req) => inputs.current.h2c = Some(req),
+                    StepPlanOutput::RawH2c(req) => inputs.current.raw_h2c = Some(req),
+                    StepPlanOutput::H2(req) => inputs.current.h2 = Some(req),
+                    StepPlanOutput::RawH2(req) => inputs.current.raw_h2 = Some(req),
+                    StepPlanOutput::Tls(req) => inputs.current.tls = Some(req),
+                    StepPlanOutput::Tcp(req) => inputs.current.tcp = Some(req),
+                    StepPlanOutput::RawTcp(req) => inputs.current.raw_tcp = Some(req),
                 }
                 Ok(req)
             })
@@ -311,7 +318,14 @@ impl<'a> Executor<'a> {
         // Build the runners.
         let mut runners: Vec<_> = requests
             .into_iter()
-            .map(|req| Runner::new(ctx.clone(), req))
+            .with_position()
+            .map(|(pos, req)| {
+                Runner::new(
+                    ctx.clone(),
+                    req,
+                    matches!(pos, Position::First | Position::Only),
+                )
+            })
             .try_collect()?;
 
         // Compute size hints for each runner.
@@ -349,29 +363,16 @@ impl<'a> Executor<'a> {
     ) -> anyhow::Result<(StepOutput, Option<Runner>)> {
         runner.execute().await;
         let mut output = StepOutput::default();
-        loop {
+        let mut current = Some(runner);
+        while let Some(r) = current {
             if let Some(shared) = shared {
-                if runner.field() == shared {
-                    return Ok((output, Some(runner)));
+                if r.field() == shared {
+                    return Ok((output, Some(r)));
                 }
             }
-            let (out, inner) = runner.finish().await;
-            match out {
-                Output::GraphQl(out) => output.graphql = Some(out),
-                Output::Http(out) => output.http = Some(out),
-                Output::H1c(out) => output.h1c = Some(out),
-                Output::H1(out) => output.h1 = Some(out),
-                Output::H2c(out) => output.h2c = Some(out),
-                Output::H2(out) => output.h2 = Some(out),
-                Output::Http2Frames(out) => output.http2_frames = Some(out),
-                Output::Tls(out) => output.tls = Some(out),
-                Output::Tcp(out) => output.tcp = Some(out),
-                Output::RawTcp(out) => output.raw_tcp = Some(out),
-            }
-            let Some(inner) = inner else {
-                break;
-            };
-            runner = inner;
+            let inner = r.finish(&mut output).await;
+            debug!(?inner, "finished runner");
+            current = inner;
         }
         Ok((output, None))
     }

@@ -2,10 +2,11 @@ use std::{pin::pin, sync::Arc};
 
 use futures::future::BoxFuture;
 use tokio::io::{AsyncRead, AsyncWrite};
+use tracing::info;
 
-use super::http2frames::Http2FramesRunner;
+use super::raw_http2::RawHttp2Runner;
 use super::{http2::Http2Runner, raw_tcp::RawTcpRunner};
-use crate::{Output, ProtocolField, StepPlanOutput};
+use crate::{ProtocolField, StepOutput, StepPlanOutput};
 
 use super::{
     graphql::GraphQlRunner, http::HttpRunner, http1::Http1Runner, tcp::TcpRunner, tls::TlsRunner,
@@ -18,12 +19,14 @@ pub(super) enum Runner {
     H1c(Box<Http1Runner>),
     H1(Box<Http1Runner>),
     H2c(Box<Http2Runner>),
+    RawH2c(Box<RawHttp2Runner>),
     H2(Box<Http2Runner>),
-    Http2Frames(Box<Http2FramesRunner>),
+    RawH2(Box<RawHttp2Runner>),
     Tls(Box<TlsRunner>),
     Tcp(Box<TcpRunner>),
     RawTcp(Box<RawTcpRunner>),
-    MuxHttp2Frames(h2::client::SendRequest<bytes::Bytes>),
+    MuxRawH2(h2::client::SendRequest<bytes::Bytes>),
+    MuxRawH2c(h2::client::SendRequest<bytes::Bytes>),
     //PipelinedHttp(PipelineRunner<HttpRunner>),
     //PipelinedH1c(PipelineRunner<Http1Runner>),
     //PipelinedH1(PipelineRunner<Http1Runner>),
@@ -32,7 +35,11 @@ pub(super) enum Runner {
 }
 
 impl Runner {
-    pub(super) fn new(ctx: Arc<super::Context>, step: StepPlanOutput) -> crate::Result<Self> {
+    pub(super) fn new(
+        ctx: Arc<super::Context>,
+        step: StepPlanOutput,
+        executor: bool,
+    ) -> crate::Result<Self> {
         Ok(match step {
             StepPlanOutput::RawTcp(output) => {
                 Self::RawTcp(Box::new(RawTcpRunner::new(ctx, output)))
@@ -43,9 +50,12 @@ impl Runner {
             StepPlanOutput::H1c(output) => Runner::H1c(Box::new(Http1Runner::new(ctx, output))),
             StepPlanOutput::H1(output) => Runner::H1(Box::new(Http1Runner::new(ctx, output))),
             StepPlanOutput::H2c(output) => Self::H2c(Box::new(Http2Runner::new(ctx, output)?)),
+            StepPlanOutput::RawH2c(output) => {
+                Self::RawH2c(Box::new(RawHttp2Runner::new(ctx, output, executor)))
+            }
             StepPlanOutput::H2(output) => Self::H2(Box::new(Http2Runner::new(ctx, output)?)),
-            StepPlanOutput::Http2Frames(output) => {
-                Self::Http2Frames(Box::new(Http2FramesRunner::new(ctx, output)))
+            StepPlanOutput::RawH2(output) => {
+                Self::RawH2(Box::new(RawHttp2Runner::new(ctx, output, executor)))
             }
             StepPlanOutput::GraphQl(output) => {
                 Self::GraphQl(Box::new(GraphQlRunner::new(ctx, output)?))
@@ -61,9 +71,11 @@ impl Runner {
             Self::H1c(_) => ProtocolField::H1c,
             Self::H1(_) => ProtocolField::H1,
             Self::H2c(_) => ProtocolField::H2c,
-            Self::H2(_) => ProtocolField::Http2Frames,
-            Self::Http2Frames(_) => ProtocolField::Http2Frames,
-            Self::MuxHttp2Frames(_) => ProtocolField::Http2Frames,
+            Self::RawH2c(_) => ProtocolField::RawH2c,
+            Self::MuxRawH2c(_) => ProtocolField::RawH2c,
+            Self::H2(_) => ProtocolField::H2,
+            Self::RawH2(_) => ProtocolField::RawH2,
+            Self::MuxRawH2(_) => ProtocolField::RawH2,
             Self::Http(_) => ProtocolField::Http,
             Self::GraphQl(_) => ProtocolField::GraphQl,
         }
@@ -76,8 +88,8 @@ impl Runner {
             Self::Tls(r) => r.size_hint(hint),
             Self::H1c(r) | Self::H1(r) => r.size_hint(hint),
             Self::H2c(r) | Self::H2(r) => r.size_hint(hint),
-            Self::Http2Frames(r) => r.size_hint(hint),
-            Self::MuxHttp2Frames(_) => None,
+            Self::RawH2c(r) | Self::RawH2(r) => r.size_hint(hint),
+            Self::MuxRawH2(_) | Self::MuxRawH2c(_) => None,
             Self::Http(r) => r.size_hint(hint),
             Self::GraphQl(r) => r.size_hint(hint),
         }
@@ -92,8 +104,10 @@ impl Runner {
             Self::H2c(r) | Self::H2(r) => r.executor_size_hint(),
             Self::Http(r) => r.executor_size_hint(),
             Self::GraphQl(r) => r.executor_size_hint(),
-            Self::Http2Frames(_) => unimplemented!(),
-            Self::MuxHttp2Frames(_) => unimplemented!(),
+            Self::RawH2c(_) => None,
+            Self::RawH2(_) => None,
+            Self::MuxRawH2c(_) => unimplemented!(),
+            Self::MuxRawH2(_) => unimplemented!(),
         }
     }
 
@@ -119,16 +133,21 @@ impl Runner {
                 Box::pin(r.start(transport.expect("no plan should have http1 as a base protocol")))
             }
             Self::H2c(r) | Self::H2(r) => match transport {
-                Some(Runner::Http2Frames(transport)) => Box::pin(r.start(*transport)),
-                Some(Runner::MuxHttp2Frames(transport)) => Box::pin(r.start_shared(transport)),
+                Some(Runner::RawH2(transport)) | Some(Runner::RawH2c(transport)) => {
+                    info!("h2 has raw_h2 transport");
+                    Box::pin(r.start(*transport))
+                }
+                Some(Runner::MuxRawH2c(transport)) | Some(Runner::MuxRawH2(transport)) => {
+                    Box::pin(r.start_shared(transport))
+                }
                 Some(_) => panic!("http2 requires http2_frames transport"),
                 None => panic!("no stack should use http2 as a base protocol"),
             },
-            Self::Http2Frames(r) => Box::pin(r.start(
+            Self::RawH2(r) | Self::RawH2c(r) => Box::pin(r.start(
                 transport.expect("no plan should have http2_frames as a base protocol"),
                 concurrent_shares,
             )),
-            Self::MuxHttp2Frames(_) => Box::pin(async { Ok(()) }),
+            Self::MuxRawH2(_) | Self::MuxRawH2c(_) => Box::pin(async { Ok(()) }),
             Self::Http(r) => {
                 assert!(transport.is_none());
                 Box::pin(r.start())
@@ -146,62 +165,72 @@ impl Runner {
             Self::Tls(r) => r.execute().await,
             Self::H1c(r) | Self::H1(r) => r.execute().await,
             Self::H2c(r) | Self::H2(r) => r.execute().await,
-            Self::Http2Frames(_) => unimplemented!(),
-            Self::MuxHttp2Frames(_) => unimplemented!(),
+            Self::RawH2c(r) | Self::RawH2(r) => r.execute().await,
+            Self::MuxRawH2c(_) | Self::MuxRawH2(_) => {
+                panic!("cannot multiplex and execute at the same layer")
+            }
             Self::Http(r) => r.execute().await,
             Self::GraphQl(r) => r.execute().await,
         }
     }
 
-    pub async fn finish(self: Self) -> (Output, Option<Runner>) {
+    pub async fn finish(self: Self, output: &mut StepOutput) -> Option<Runner> {
         match self {
             Self::RawTcp(r) => {
-                let out = r.finish().await;
-                (Output::RawTcp(out), None)
+                output.raw_tcp = Some(r.finish().await);
+                None
             }
             Self::Tcp(r) => {
-                let out = r.finish().await;
-                (Output::Tcp(out), None)
+                let (out, inner) = r.finish().await;
+                output.tcp = Some(out);
+                Some(Runner::RawTcp(Box::new(inner)))
             }
             Self::Tls(r) => {
                 let (out, inner) = r.finish();
-                (Output::Tls(out), inner)
+                output.tls = Some(out);
+                Some(inner)
             }
             Self::Http(r) => {
                 let (out, inner) = r.finish();
-                (Output::Http(out), inner)
+                output.http = Some(out);
+                inner
             }
             Self::H1c(r) => {
                 let (out, inner) = r.finish();
-                (Output::H1c(out), inner)
+                output.h1c = Some(out);
+                inner
             }
             Self::H1(r) => {
                 let (out, inner) = r.finish();
-                (Output::H1(out), inner)
+                output.h1 = Some(out);
+                inner
             }
             Self::H2c(r) => {
                 let (out, inner) = r.finish().await;
-                (
-                    Output::H2c(out),
-                    inner.map(|inner| Runner::Http2Frames(Box::new(inner))),
-                )
+                output.h2c = Some(out);
+                inner.map(|inner| Runner::RawH2c(Box::new(inner)))
+            }
+            Self::RawH2c(r) => {
+                let (out, inner) = r.finish().await;
+                output.raw_h2c = Some(out);
+                inner
             }
             Self::H2(r) => {
                 let (out, inner) = r.finish().await;
-                (
-                    Output::H2(out),
-                    inner.map(|inner| Runner::Http2Frames(Box::new(inner))),
-                )
+                output.h2 = Some(out);
+                inner.map(|inner| Runner::RawH2(Box::new(inner)))
             }
-            Self::Http2Frames(r) => {
+            Self::RawH2(r) => {
                 let (out, inner) = r.finish().await;
-                (Output::Http2Frames(out), inner)
+                output.raw_h2 = Some(out);
+                inner
             }
             Self::GraphQl(r) => {
                 let (out, inner) = r.finish();
-                (Output::GraphQl(out), inner)
+                output.graphql = Some(out);
+                inner
             }
-            Self::MuxHttp2Frames(_) => panic!(),
+            Self::MuxRawH2(_) | Self::MuxRawH2c(_) => panic!(),
         }
     }
 }
@@ -220,8 +249,11 @@ impl AsyncRead for Runner {
             Self::Tls(ref mut r) => pin!(r).poll_read(cx, buf),
             Self::H1c(ref mut r) | Self::H1(ref mut r) => pin!(r).poll_read(cx, buf),
             Self::H2c(ref mut r) | Self::H2(ref mut r) => pin!(r).poll_read(cx, buf),
-            Self::Http2Frames(_) | Self::MuxHttp2Frames(_) => {
-                panic!("http2_frames doesn't support stream reading")
+            Self::RawH2c(_) | Self::MuxRawH2c(_) => {
+                panic!("raw_h2c doesn't support stream reading")
+            }
+            Self::RawH2(_) | Self::MuxRawH2(_) => {
+                panic!("raw_h2 doesn't support stream reading")
             }
             Self::Http(ref mut r) => pin!(r).poll_read(cx, buf),
             Self::GraphQl(_) => panic!("graphql cannot be used as a transport"),
@@ -242,10 +274,13 @@ impl AsyncWrite for Runner {
             Self::Tcp(ref mut r) => pin!(r).poll_write(cx, buf),
             Self::Tls(ref mut r) => pin!(r).poll_write(cx, buf),
             Self::H1c(ref mut r) | Self::H1(ref mut r) => pin!(r).poll_write(cx, buf),
-            Self::Http2Frames(_) | Self::MuxHttp2Frames(_) => {
-                panic!("http2_frames doesn't support stream writing")
+            Self::RawH2c(_) | Self::MuxRawH2c(_) => {
+                panic!("raw_h2c doesn't support stream writing")
             }
             Self::H2c(ref mut r) | Self::H2(ref mut r) => pin!(r).poll_write(cx, buf),
+            Self::RawH2(_) | Self::MuxRawH2(_) => {
+                panic!("raw_h2 doesn't support stream writing")
+            }
             Self::Http(ref mut r) => pin!(r).poll_write(cx, buf),
             Self::GraphQl(_) => panic!("graphql cannot be used as a transport"),
         }
@@ -261,10 +296,13 @@ impl AsyncWrite for Runner {
             Self::Tcp(ref mut r) => pin!(r).poll_flush(cx),
             Self::Tls(ref mut r) => pin!(r).poll_flush(cx),
             Self::H1c(ref mut r) | Self::H1(ref mut r) => pin!(r).poll_flush(cx),
-            Self::Http2Frames(_) | Self::MuxHttp2Frames(_) => {
-                panic!("http2_frames doesn't support stream writing")
+            Self::RawH2c(_) | Self::MuxRawH2c(_) => {
+                panic!("h2c doesn't support stream writing")
             }
             Self::H2c(ref mut r) | Self::H2(ref mut r) => pin!(r).poll_flush(cx),
+            Self::RawH2(_) | Self::MuxRawH2(_) => {
+                panic!("h2 doesn't support stream writing")
+            }
             Self::Http(ref mut r) => pin!(r).poll_flush(cx),
             Self::GraphQl(_) => panic!("graphql cannot be used as a transport"),
         }
@@ -281,8 +319,11 @@ impl AsyncWrite for Runner {
             Self::Tls(ref mut r) => pin!(r).poll_shutdown(cx),
             Self::H1c(ref mut r) | Self::H1(ref mut r) => pin!(r).poll_shutdown(cx),
             Self::H2c(ref mut r) | Self::H2(ref mut r) => pin!(r).poll_shutdown(cx),
-            Self::Http2Frames(_) | Self::MuxHttp2Frames(_) => {
-                panic!("http2_frames doesn't support stream writing")
+            Self::RawH2c(_) | Self::MuxRawH2c(_) => {
+                panic!("raw_h2c doesn't support stream writing")
+            }
+            Self::RawH2(_) | Self::MuxRawH2(_) => {
+                panic!("raw_h2 doesn't support stream writing")
             }
             Self::Http(ref mut r) => pin!(r).poll_shutdown(cx),
             Self::GraphQl(_) => panic!("graphql cannot be used as a transport"),

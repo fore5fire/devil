@@ -1,12 +1,11 @@
 use std::mem;
 use std::net::SocketAddr;
-use std::{io, net::IpAddr, pin::Pin, str::FromStr, sync::Arc, time::Instant};
+use std::{io, net::IpAddr, pin::Pin, sync::Arc, time::Instant};
 
 use anyhow::{anyhow, bail};
 use chrono::TimeDelta;
 use futures::Future;
 use itertools::Itertools;
-use log::{debug, info};
 use pnet::packet::tcp::{self, MutableTcpPacket, TcpOption};
 use pnet::{
     packet::{ip::IpNextHeaderProtocols, tcp::TcpPacket},
@@ -24,6 +23,7 @@ use tokio::{
     sync::{mpsc, oneshot},
     task::JoinHandle,
 };
+use tracing::{debug, info};
 
 use crate::{
     RawTcpError, RawTcpOutput, RawTcpPauseOutput, RawTcpPlanOutput, TcpSegmentOptionOutput,
@@ -73,10 +73,11 @@ enum State {
 struct OpenState {
     send_write: mpsc::UnboundedSender<Option<TcpPacket<'static>>>,
     write_done: JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>>,
-    reads: JoinHandle<(Vec<TcpSegmentOutput>, Option<io::Error>)>,
+    reads: Option<JoinHandle<(Vec<TcpSegmentOutput>, Option<io::Error>)>>,
     reads_done: oneshot::Sender<usize>,
     remote_addr: SocketAddr,
     local_addr: SocketAddr,
+    send_segments: Vec<TcpSegmentOutput>,
 }
 
 impl RawTcpRunner {
@@ -112,11 +113,9 @@ impl RawTcpRunner {
         };
 
         // DNS lookup for remote address.
-        let Some(remote_addr) = net::lookup_host(SocketAddr::new(
-            IpAddr::from_str(&self.out.plan.dest_host).map_err(|e| {
-                anyhow!("parse raw_tcp.src_host '{}': {e}", self.out.plan.dest_host)
-            })?,
-            self.out.plan.dest_port,
+        let Some(remote_addr) = net::lookup_host(format!(
+            "{}:{}",
+            self.out.plan.dest_host, self.out.plan.dest_port,
         ))
         .await
         .map_err(|e| {
@@ -148,20 +147,17 @@ impl RawTcpRunner {
             .clone()
             .unwrap_or_else(|| "localhost".to_owned());
         let src_port = self.out.plan.src_port.unwrap_or(0);
-        let Some(local_addr) = net::lookup_host(SocketAddr::new(
-            IpAddr::from_str(&src_host)
-                .map_err(|e| anyhow!("parse raw_tcp.src_host '{src_host}': {e}"))?,
-            src_port,
-        ))
-        .await
-        .map_err(|e| {
-            anyhow!(
-                "lookup host '{}:{}': {e}",
-                self.out.plan.dest_host,
-                self.out.plan.dest_port
-            )
-        })?
-        .next() else {
+        let Some(local_addr) = net::lookup_host(format!("{}:{}", src_host, src_port,))
+            .await
+            .map_err(|e| {
+                anyhow!(
+                    "lookup host '{}:{}': {e}",
+                    self.out.plan.dest_host,
+                    self.out.plan.dest_port
+                )
+            })?
+            .next()
+        else {
             self.out.errors.push(RawTcpError {
                 kind: "dns lookup".to_owned(),
                 message: format!(
@@ -217,13 +213,18 @@ impl RawTcpRunner {
             self.state = State::CompletedEmpty;
         })?;
 
-        let start = Instant::now();
-        let (reads_done, recv_reads_done) = oneshot::channel();
-        let reads = reader(read, remote_addr, start, recv_reads_done);
+        let start = || {
+            let start = Instant::now();
+            self.start_time = Some(start);
+            let (reads_done, recv_reads_done) = oneshot::channel();
+            let reads = reader(read, remote_addr, start, recv_reads_done);
+            (start, reads, reads_done)
+        };
 
         let write_sequence_number = self.out.plan.isn;
 
         if self.out.plan.segments.is_empty() {
+            let (start, reads, reads_done) = start();
             let (_, read) = transport::transport_channel(
                 65535,
                 TransportChannelType::Layer4(transport::TransportProtocol::Ipv4(
@@ -247,6 +248,8 @@ impl RawTcpRunner {
                 local_addr,
             }
         } else {
+            let send_segments = self.out.plan.segments.clone();
+            let (_, reads, reads_done) = start();
             // TODO: Use AsyncFd instead of one thread per request.
             //let write_fd = AsyncFd::new(write.socket.fd)?;
             //let readable = read_fd.readable().await?;
@@ -266,10 +269,11 @@ impl RawTcpRunner {
             self.state = State::Open(OpenState {
                 send_write,
                 write_done,
-                reads,
+                reads: Some(reads),
                 reads_done,
                 local_addr,
                 remote_addr,
+                send_segments,
             });
         }
         Ok(())
@@ -291,7 +295,37 @@ impl RawTcpRunner {
         }
     }
 
-    pub async fn execute(&mut self) {}
+    pub async fn execute(&mut self) {
+        let State::Open(state) = &mut self.state else {
+            panic!("invalid state to execute raw_tcp: {:?}", self.state);
+        };
+        let send_segments = mem::take(&mut state.send_segments);
+        let reads = mem::take(&mut state.reads).expect("reads handle should be set on execute");
+        // TODO: implement pauses, probably moving send and recieve into the same task or with a
+        // mutex.
+        let (send, receive) = join!(
+            async {
+                for segment in send_segments {
+                    self.send(segment)?
+                }
+                Ok::<_, anyhow::Error>(())
+            },
+            reads
+        );
+        if let Err(e) = send {
+            self.out.errors.push(RawTcpError {
+                kind: "send error".to_owned(),
+                message: e.to_string(),
+            });
+        };
+        if let Err(e) = receive {
+            self.out.errors.push(RawTcpError {
+                kind: "receive error".to_owned(),
+                message: e.to_string(),
+            });
+        };
+        self.shutdown(0, 0);
+    }
 
     pub async fn finish(mut self) -> RawTcpOutput {
         self.shutdown(0, 0);
@@ -327,7 +361,7 @@ impl RawTcpRunner {
                 }
             }
             State::CompletedEmpty => {}
-            _ => panic!("invalid state to finish raw_tcp"),
+            state => panic!("invalid state to finish raw_tcp: {state:?}"),
         };
         self.out
     }
@@ -339,8 +373,10 @@ impl RawTcpRunner {
             State::Open(OpenState {
                 reads_done, reads, ..
             }) => {
-                reads_done.send(expect_read_len);
-                self.state = State::Completed { reads }
+                _ = reads_done.send(expect_read_len);
+                self.state = State::Completed {
+                    reads: reads.expect("reads handle should be set at shutdown"),
+                }
             }
             State::Passive {
                 writes_done,
@@ -349,11 +385,11 @@ impl RawTcpRunner {
                 reads,
                 ..
             } => {
-                reads_done.send(expect_read_len);
-                writes_done.send(expect_write_len);
+                _ = reads_done.send(expect_read_len);
+                _ = writes_done.send(expect_write_len);
                 self.state = State::CompletedPassive { reads, writes }
             }
-            _ => return,
+            state => self.state = state,
         }
 
         self.out.duration = self
@@ -416,8 +452,8 @@ impl RawTcpRunner {
                     TcpSegmentOptionOutput::Wscale(val) => TcpOption::wscale(*val),
                     TcpSegmentOptionOutput::SackPermitted => TcpOption::sack_perm(),
                     TcpSegmentOptionOutput::Sack(acks) => TcpOption::selective_ack(acks),
-                    TcpSegmentOptionOutput::Raw { .. } => {
-                        panic!("sending raw tcp segment options is not yet supported")
+                    TcpSegmentOptionOutput::Generic { .. } => {
+                        panic!("sending generic tcp segment options is not yet supported")
                     }
                 })
                 .collect_vec(),
@@ -560,7 +596,7 @@ fn packet_to_output(packet: TcpPacket, start: Instant) -> TcpSegmentOutput {
                 TcpOptionNumbers::SACK_PERMITTED if opts.payload().len() == 0 => {
                     TcpSegmentOptionOutput::SackPermitted
                 }
-                _ => TcpSegmentOptionOutput::Raw {
+                _ => TcpSegmentOptionOutput::Generic {
                     kind: opts.get_number().0,
                     value: opts.payload().to_vec(),
                 },

@@ -4,9 +4,9 @@ use std::pin::{pin, Pin};
 use std::task::{ready, Poll};
 
 use derivative::Derivative;
-use log::info;
 use regex::bytes::Regex;
 use tokio::io::{self, AsyncRead, AsyncWrite};
+use tracing::info;
 
 pub trait Stream: AsyncRead + AsyncWrite + Unpin + Debug + Send {}
 

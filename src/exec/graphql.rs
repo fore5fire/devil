@@ -111,6 +111,8 @@ impl<'a> GraphQlRunner {
     }
 
     pub fn finish(mut self) -> (GraphQlOutput, Option<Runner>) {
+        let end_time = self.end_time.unwrap_or(Instant::now());
+
         let State::Running {
             start_time,
             transport,
@@ -118,7 +120,7 @@ impl<'a> GraphQlRunner {
         else {
             return (self.out, None);
         };
-        let end_time = Instant::now();
+
         let resp_body: Option<serde_json::Value> = match serde_json::from_slice(&self.resp) {
             Ok(resp) => Some(resp),
             Err(e) => {
@@ -145,15 +147,15 @@ impl<'a> GraphQlRunner {
                 resp.full = resp_body.into();
             }
             resp.duration = chrono::Duration::from_std(
-                self.end_time.unwrap_or(end_time)
+                end_time
                     - self
                         .resp_start_time
                         .expect("response start time should be set before header is processed"),
             )
             .unwrap();
         }
-        self.out.duration =
-            chrono::Duration::from_std(self.end_time.unwrap_or(end_time) - start_time).unwrap();
+        self.out.duration = chrono::Duration::from_std(end_time - start_time).unwrap();
+
         (self.out, Some(transport))
     }
 }

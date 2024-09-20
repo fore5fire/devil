@@ -1,6 +1,7 @@
 use clap::{Parser, ValueEnum};
 use devil::exec::Executor;
-use devil::{Plan, StepOutput};
+use devil::{Http2FrameOutput, Plan, StepOutput};
+use tracing_subscriber::EnvFilter;
 
 // Simple program to greet a person
 #[derive(Parser, Debug)]
@@ -12,7 +13,7 @@ struct Args {
 
     /// Print responses at a lower level protocol.
     #[arg(short, long, value_enum, value_delimiter = ',')]
-    level: Vec<Protocol>,
+    level: Option<Vec<Protocol>>,
 
     /// Print requests at a lower level protocol.
     #[arg(short = 'L', long, value_enum)]
@@ -31,19 +32,22 @@ struct Args {
 #[clap(rename_all = "lower")]
 enum Protocol {
     GraphQL,
-    HTTP,
+    Http,
+    Http2Frames,
     TLS,
     TCP,
     TCPSegments,
-    UDP,
-    QUIC,
-    IP,
-    NONE,
+    Udp,
+    Quic,
+    Ip,
+    None,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    env_logger::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
 
     let args = Args::parse();
     let buffer = std::fs::read(&args.file)?;
@@ -83,19 +87,6 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                         );
                     }
                 }
-                if let Some(tcp) = &proto.tcp {
-                    if let Some(sent) = &tcp.sent {
-                        for seg in &sent.segments {
-                            println!(
-                                "> {}",
-                                String::from_utf8_lossy(&seg.payload).replace("\n", "\n> ")
-                            );
-                        }
-                        if let Some(ttfb) = &sent.time_to_first_byte {
-                            println!("sent time to first byte: {}", ttfb);
-                        }
-                    }
-                }
             }
             Protocol::TCP => {
                 if let Some(tcp) = &proto.tcp {
@@ -123,7 +114,14 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                     }
                 }
             }
-            Protocol::HTTP => {
+            Protocol::Http2Frames => {
+                if let Some(http) = proto.raw_http2() {
+                    for frame in &http.sent {
+                        print_frame('>', frame);
+                    }
+                }
+            }
+            Protocol::Http => {
                 if let Some(http) = &proto.http {
                     println!(
                         "> {}{} {}",
@@ -251,28 +249,33 @@ fn print_proto(args: &Args, proto: &StepOutput) {
         }
     }
 
-    let mut out_level = args.level.as_slice();
-    if out_level.is_empty() {
-        out_level = if proto.graphql.is_some() {
-            &[Protocol::GraphQL]
-        //} else if proto.http3.is_some() {
-        //    vec![Protocol::HTTP]
-        } else if proto.http2().is_some() {
-            &[Protocol::HTTP]
-        } else if proto.http1().is_some() {
-            &[Protocol::HTTP]
-        } else if proto.http.is_some() {
-            &[Protocol::HTTP]
-        } else if proto.tls.is_some() {
-            &[Protocol::TLS]
-        } else if proto.tcp.is_some() {
-            &[Protocol::TCP]
-        } else if proto.raw_tcp.is_some() {
-            &[Protocol::TCPSegments]
-        } else {
-            &[]
-        }
-    };
+    let out_level = args
+        .level
+        .as_ref()
+        .map(|level| level.as_slice())
+        .unwrap_or_else(|| {
+            if proto.graphql.is_some() {
+                &[Protocol::GraphQL]
+            //} else if proto.http3.is_some() {
+            //    vec![Protocol::HTTP]
+            } else if proto.http2().is_some() {
+                &[Protocol::Http]
+            } else if proto.http1().is_some() {
+                &[Protocol::Http]
+            } else if proto.http.is_some() {
+                &[Protocol::Http]
+            } else if proto.raw_http2().is_some() {
+                &[Protocol::Http2Frames]
+            } else if proto.tls.is_some() {
+                &[Protocol::TLS]
+            } else if proto.tcp.is_some() {
+                &[Protocol::TCP]
+            } else if proto.raw_tcp.is_some() {
+                &[Protocol::TCPSegments]
+            } else {
+                &[]
+            }
+        });
 
     for level in out_level {
         // Default output is at the highest level protocol in the request.
@@ -292,35 +295,6 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                         println!("handshake end pause duration: {}", p.duration);
                     }
                     println!("total duration: {}", raw.duration);
-                }
-                if let Some(tcp) = &proto.tcp {
-                    if let Some(received) = &tcp.received {
-                        for segment in &received.segments {
-                            println!("< {segment:?}");
-                        }
-                    }
-                    for e in &tcp.errors {
-                        println!("{} error: {}", e.kind, e.message);
-                    }
-                    for p in &tcp.pause.handshake.start {
-                        println!("handshake start pause duration: {}", p.duration);
-                    }
-                    for p in &tcp.pause.handshake.end {
-                        println!("handshake end pause duration: {}", p.duration);
-                    }
-                    for p in &tcp.pause.send_body.start {
-                        println!("send body start pause duration: {}", p.duration);
-                    }
-                    for p in &tcp.pause.send_body.end {
-                        println!("send body end pause duration: {}", p.duration);
-                    }
-                    for p in &tcp.pause.receive_body.start {
-                        println!("receive body start pause duration: {}", p.duration);
-                    }
-                    for p in &tcp.pause.receive_body.end {
-                        println!("receive body end pause duration: {}", p.duration);
-                    }
-                    println!("total duration: {}", tcp.duration);
                 }
             }
             Protocol::TCP => {
@@ -393,7 +367,14 @@ fn print_proto(args: &Args, proto: &StepOutput) {
                     println!("total duration: {}", tls.duration);
                 }
             }
-            Protocol::HTTP => {
+            Protocol::Http2Frames => {
+                if let Some(http) = proto.raw_http2() {
+                    for frame in &http.received {
+                        print_frame('<', frame);
+                    }
+                }
+            }
+            Protocol::Http => {
                 if let Some(http) = &proto.http {
                     if let Some(resp) = &http.response {
                         println!(
@@ -582,5 +563,106 @@ fn print_proto(args: &Args, proto: &StepOutput) {
             }
             _ => {}
         }
+    }
+}
+
+fn print_frame(direction: char, frame: &Http2FrameOutput) {
+    let d = direction;
+    println!("{d} type: {:}", frame.r#type());
+    println!("{d} flags: {:#010b}", frame.flags().bits());
+    match frame {
+        Http2FrameOutput::Data(frame) => {
+            println!("{d}   END_STREAM: {}", frame.end_stream);
+            println!("{d}   PADDING: {}", frame.padding.is_some());
+        }
+        Http2FrameOutput::Headers(frame) => {
+            println!("{d}   END_STREAM: {}", frame.end_stream);
+            println!("{d}   END_HEADERS: {}", frame.end_headers);
+            println!("{d}   PADDING: {}", frame.padding.is_some());
+            println!("{d}   PRIORITY: {}", frame.priority.is_some());
+        }
+        Http2FrameOutput::Settings(frame) => {
+            println!("{d}   ACK: {}", frame.ack);
+        }
+        Http2FrameOutput::PushPromise(frame) => {
+            println!("{d}   END_HEADERS: {}", frame.end_headers());
+            println!("{d}   PADDING: {}", frame.padding.is_some());
+        }
+        Http2FrameOutput::Ping(frame) => {
+            println!("{d}   ACK: {}", frame.ack);
+        }
+        Http2FrameOutput::Continuation(frame) => {
+            println!("{d}   END_HEADERS: {}", frame.end_headers);
+        }
+        _ => {}
+    }
+    let r = frame.r();
+    if r {
+        println!("{d} r: 1");
+    }
+    println!("{d} stream_id: {}", frame.stream_id());
+    match frame {
+        Http2FrameOutput::Data(frame) => {
+            println!("{d} data: {:?}", frame.data);
+            if frame
+                .padding
+                .as_ref()
+                .is_some_and(|pad| pad.iter().any(|byte| *byte != 0))
+            {
+                println!("{d} padding: {:?}", frame.padding);
+            }
+        }
+        Http2FrameOutput::Headers(frame) => {
+            if let Some(priority) = &frame.priority {
+                println!("{d} exclusive: {}", priority.e);
+                println!("{d} stream dependency: {}", priority.stream_dependency);
+                println!("{d} weight: {}", priority.weight);
+            }
+            println!(
+                "{d} header block fragment: {:?}",
+                frame.header_block_fragment
+            );
+            if frame
+                .padding
+                .as_ref()
+                .is_some_and(|pad| pad.iter().any(|byte| *byte != 0))
+            {
+                println!("{d} padding: {:?}", frame.padding);
+            }
+        }
+        Http2FrameOutput::Settings(frame) => {
+            println!("{d} parameters:");
+            for param in &frame.parameters {
+                println!("{d}   ID: {}", param.id);
+                println!("{d}   value: {:#06x}", param.value);
+            }
+        }
+        Http2FrameOutput::PushPromise(frame) => {
+            if frame.promised_r {
+                println!("{d} promised stream ID r bit: 1");
+            }
+            println!("{d} promised stream ID: {}", frame.promised_stream_id);
+            println!(
+                "{d} header block fragment: {:?}",
+                frame.header_block_fragment
+            );
+            if frame
+                .padding
+                .as_ref()
+                .is_some_and(|pad| pad.iter().any(|byte| *byte != 0))
+            {
+                println!("{d} padding: {:?}", frame.padding);
+            }
+        }
+        Http2FrameOutput::Ping(frame) => {
+            println!("{d} data: {:?}", frame.data);
+        }
+        Http2FrameOutput::Continuation(frame) => {
+            println!(
+                "{d} header block fragment: {:?}",
+                frame.header_block_fragment
+            );
+        }
+        _ => {}
     }
 }

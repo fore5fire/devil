@@ -1,0 +1,16 @@
+devil.version = 0
+
+# Basic HTTP/2 request
+[basic.h2]
+url = "https://example.com/test"
+
+# Send raw HTTP/2 frames
+[raw.raw_h2]
+host = "example.com"
+port = 443
+[[raw.raw_h2.frames]]
+[raw.raw_h2.frames.generic]
+type = 0xff
+flags = 0b00001001
+stream_id = 0x10
+payload = { base64 = "" }
