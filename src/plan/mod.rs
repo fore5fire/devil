@@ -2124,19 +2124,19 @@ impl Default for Run {
     }
 }
 
-impl Evaluate<crate::RunOutput> for Run {
-    fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::RunOutput>
+impl Evaluate<crate::RunPlanOutput> for Run {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::RunPlanOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
-        let out = crate::RunOutput {
+        let out = crate::RunPlanOutput {
             run_if: self.run_if.evaluate(state)?,
             run_while: self
                 .run_while.clone().evaluate(state)?,
             run_for: self
-                .run_for.clone().evaluate(state)?,
+                .run_for.clone().evaluate(state)?.map(|pairs| pairs.into_iter().map(|(key, v)| crate::RunForOutput {key, value: v.into()}).collect()),
             count: self.count.evaluate(state)?,
             parallel: self.parallel.evaluate(state)?,
             share: self

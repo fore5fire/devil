@@ -2,7 +2,7 @@ use anyhow::bail;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
-use super::{Merge, PausePoints, Value};
+use super::{Merge, PausePoints, Validate, Value};
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct RawHttp2 {

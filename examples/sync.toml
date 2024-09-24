@@ -1,0 +1,55 @@
+devil.version = 0
+
+# Run 5 parallel requests, but wait to send the last byte until all previous
+# bytes have been flushed by all 5 requests.
+[single_packet_attack.http]
+    url = "https://example.com/"
+    method = "GET"
+    [[join_example.pause]]
+    after = "http.pause.request_body.end"
+    offset_bytes = -1
+    duration = "1s"
+    [[join_example.pause]]
+    after = "http.pause.request_body.end"
+    offset_bytes = -1
+    await = "join"
+
+    [join_example.sync.join]
+    kind = "barrier"
+    [join_example.run]
+    parallel = true
+    count = 5
+
+# Run 5 parallel requests, but send the first 3 header bytes in ordered series.
+[sequence_example.http]
+    url = "https://example.com/"
+    method = "GET"
+    [sequence_example.http.pause.headers.start]
+    await = "sequence"
+    [sequence_example.http.signal.headers.start]
+    target = "sequence"
+    op = "unlock"
+    offset_bytes = 3
+
+    [sequence_example.sync.sequence]
+    kind = "sequence"
+    [sequence_example.run]
+    parallel = true
+    count = 5
+
+# Do the single packet attack but fix the order of the last written byte.
+[timeless_timing_attack.http]
+    url = "https://example.com/"
+    method = "GET"
+    [timeless_timing_attack.http.pause.request_body.end]
+    await = "sequence"
+    offset_bytes = -1
+    [timeless_timing_attack.http.signal.request_body.end]
+    target = "sequence"
+    op = "unlock"
+
+    [timeless_timing_attack.sync.sequence]
+    kind = "sequence"
+    [timeless_timing_attack.run]
+    parallel = true
+    count = 5

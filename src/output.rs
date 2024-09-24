@@ -2888,10 +2888,10 @@ pub trait WithPlannedCapacity {
 }
 
 #[derive(Debug, Clone)]
-pub struct RunOutput {
+pub struct RunPlanOutput {
     pub run_if: bool,
     pub run_while: Option<bool>,
-    pub run_for: Option<Vec<(crate::IterableKey, crate::PlanData)>>,
+    pub run_for: Option<Vec<RunForOutput>>,
     pub count: u64,
     pub parallel: Parallelism,
     pub share: Option<ProtocolField>,

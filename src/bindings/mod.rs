@@ -5,11 +5,18 @@ use indexmap::IndexMap;
 use itertools::{Either, Itertools};
 use serde::{Deserialize, Serialize};
 
+mod pause;
 mod raw_http2;
+mod signal;
 
+pub use pause::*;
 pub use raw_http2::*;
+pub use signal::*;
 
 pub trait Merge: std::fmt::Debug + Clone + Serialize + Deserialize<'static> {
+    // TODO: Since all types handle option wrappers the same way, just have implementations handle
+    // merging if both are some and provide a default implementation of the fn which unwraps
+    // options.
     fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self>;
 }
 
@@ -48,7 +55,7 @@ pub struct Settings {
     pub unrecognized: toml::Table,
 }
 
-impl Settings {
+impl Validate for Settings {
     fn validate(&self) -> crate::Result<()> {
         if !self.unrecognized.is_empty() {
             bail!(
@@ -167,8 +174,8 @@ pub struct Step {
     pub unrecognized: toml::Table,
     #[serde(flatten)]
     pub protocols: StepProtocols,
-    #[serde(default)]
     pub run: Option<Run>,
+    pub sync: Option<Vec<Sync>>,
 }
 
 impl Step {
@@ -840,7 +847,7 @@ pub struct Run {
     pub unrecognized: toml::Table,
 }
 
-impl Run {
+impl Merge for Run {
     fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
         let Some(first) = first else {
             return second;
@@ -855,6 +862,28 @@ impl Run {
             count: first.count.or(second.count),
             parallel: first.parallel.or(second.parallel),
             share: first.share.or(second.share),
+            unrecognized: toml::Table::new(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Sync {
+    Barrier { name: String },
+    Sequence { name: String },
+}
+
+impl Merge for Sync {
+    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
+        let Some(first) = first else {
+            return second;
+        };
+        let Some(second) = second else {
+            return Some(first);
+        };
+        Some(Self {
+            name: first.name.or(second.name),
+            kind: first.kind.or(second.kind),
             unrecognized: toml::Table::new(),
         })
     }
@@ -930,7 +959,7 @@ impl Merge for GraphQlPause {
     }
 }
 
-impl GraphQlPause {
+impl Validate for GraphQlPause {
     fn validate(&self) -> crate::Result<()> {
         if !self.unrecognized.is_empty() {
             bail!(
@@ -1014,17 +1043,17 @@ impl Merge for HttpPause {
         };
 
         Some(Self {
-            open: PausePoints::merge(first.open, second.open),
-            request_headers: PausePoints::merge(first.request_headers, second.request_headers),
-            request_body: PausePoints::merge(first.request_body, second.request_body),
-            response_headers: PausePoints::merge(first.response_headers, second.response_headers),
-            response_body: PausePoints::merge(first.response_body, second.response_body),
+            open: Points::merge(first.open, second.open),
+            request_headers: Points::merge(first.request_headers, second.request_headers),
+            request_body: Points::merge(first.request_body, second.request_body),
+            response_headers: Points::merge(first.response_headers, second.response_headers),
+            response_body: Points::merge(first.response_body, second.response_body),
             unrecognized: toml::Table::new(),
         })
     }
 }
 
-impl HttpPause {
+impl Validate for HttpPause {
     fn validate(&self) -> crate::Result<()> {
         if !self.unrecognized.is_empty() {
             bail!(
@@ -1090,17 +1119,17 @@ impl Merge for Http1Pause {
         };
 
         Some(Self {
-            open: PausePoints::merge(first.open, second.open),
-            request_headers: PausePoints::merge(first.request_headers, second.request_headers),
-            request_body: PausePoints::merge(first.request_body, second.request_body),
-            response_headers: PausePoints::merge(first.response_headers, second.response_headers),
-            response_body: PausePoints::merge(first.response_body, second.response_body),
+            open: Points::merge(first.open, second.open),
+            request_headers: Points::merge(first.request_headers, second.request_headers),
+            request_body: Points::merge(first.request_body, second.request_body),
+            response_headers: Points::merge(first.response_headers, second.response_headers),
+            response_body: Points::merge(first.response_body, second.response_body),
             unrecognized: toml::Table::new(),
         })
     }
 }
 
-impl Http1Pause {
+impl Validate for Http1Pause {
     fn validate(&self) -> crate::Result<()> {
         if let Some(open) = &self.open {
             open.validate()?;
@@ -1166,17 +1195,17 @@ impl Merge for Http2Pause {
         };
 
         Some(Self {
-            open: PausePoints::merge(first.open, second.open),
-            request_headers: PausePoints::merge(first.request_headers, second.request_headers),
-            request_body: PausePoints::merge(first.request_body, second.request_body),
-            response_headers: PausePoints::merge(first.response_headers, second.response_headers),
-            response_body: PausePoints::merge(first.response_body, second.response_body),
+            open: Points::merge(first.open, second.open),
+            request_headers: Points::merge(first.request_headers, second.request_headers),
+            request_body: Points::merge(first.request_body, second.request_body),
+            response_headers: Points::merge(first.response_headers, second.response_headers),
+            response_body: Points::merge(first.response_body, second.response_body),
             unrecognized: toml::Table::new(),
         })
     }
 }
 
-impl Http2Pause {
+impl Validate for Http2Pause {
     fn validate(&self) -> crate::Result<()> {
         if let Some(open) = &self.open {
             open.validate()?;
@@ -1283,15 +1312,15 @@ impl Merge for TlsPause {
         };
 
         Some(Self {
-            handshake: PausePoints::merge(first.handshake, second.handshake),
-            send_body: PausePoints::merge(first.send_body, second.send_body),
-            receive_body: PausePoints::merge(first.receive_body, second.receive_body),
+            handshake: Points::merge(first.handshake, second.handshake),
+            send_body: Points::merge(first.send_body, second.send_body),
+            receive_body: Points::merge(first.receive_body, second.receive_body),
             unrecognized: toml::Table::new(),
         })
     }
 }
 
-impl TlsPause {
+impl Validate for TlsPause {
     fn validate(&self) -> crate::Result<()> {
         if !self.unrecognized.is_empty() {
             bail!(
@@ -1415,15 +1444,15 @@ impl Merge for TcpPause {
         };
 
         Some(Self {
-            handshake: PausePoints::merge(first.handshake, second.handshake),
-            send_body: PausePoints::merge(first.send_body, second.send_body),
-            receive_body: PausePoints::merge(first.receive_body, second.receive_body),
+            handshake: Points::merge(first.handshake, second.handshake),
+            send_body: Points::merge(first.send_body, second.send_body),
+            receive_body: Points::merge(first.receive_body, second.receive_body),
             unrecognized: toml::Table::new(),
         })
     }
 }
 
-impl TcpPause {
+impl Validate for TcpPause {
     fn validate(&self) -> crate::Result<()> {
         if !self.unrecognized.is_empty() {
             bail!(
@@ -1449,8 +1478,8 @@ pub struct RawTcp {
     pub isn: Option<Value>,
     pub window: Option<Value>,
     pub segments: Option<ValueOrArray<TcpSegment>>,
-    #[serde(default)]
     pub pause: Option<RawTcpPause>,
+    pub signal: Option<RawTcpSignal>,
     #[serde(flatten)]
     pub unrecognized: toml::Table,
 }
@@ -1469,6 +1498,7 @@ impl RawTcp {
             window: Value::merge(self.window, default.window),
             segments: ValueOrArray::merge(self.segments, default.segments),
             pause: RawTcpPause::merge(self.pause, default.pause),
+            signal: RawTcpSignal::merge(self.signal, default.signal),
             unrecognized: toml::Table::new(),
         }
     }
@@ -1539,7 +1569,7 @@ impl Merge for TcpSegment {
     }
 }
 
-impl TcpSegment {
+impl Validate for TcpSegment {
     fn validate(&self) -> crate::Result<()> {
         if !self.unrecognized.is_empty() {
             bail!(
@@ -1571,13 +1601,50 @@ impl Merge for RawTcpPause {
         };
 
         Some(Self {
-            handshake: PausePoints::merge(first.handshake, second.handshake),
+            handshake: Points::merge(first.handshake, second.handshake),
             unrecognized: toml::Table::new(),
         })
     }
 }
 
-impl RawTcpPause {
+impl Validate for RawTcpPause {
+    fn validate(&self) -> crate::Result<()> {
+        if !self.unrecognized.is_empty() {
+            bail!(
+                "unrecognized field{} {}",
+                if self.unrecognized.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                self.unrecognized.keys().join(", "),
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RawTcpSignal {
+    pub handshake: Option<SignalPoints>,
+    #[serde(flatten)]
+    pub unrecognized: toml::Table,
+}
+
+impl Merge for RawTcpSignal {
+    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
+        let Some(first) = first else { return second };
+        let Some(second) = second else {
+            return Some(first);
+        };
+        Some(Self {
+            handshake: Points::merge(first.handshake, second.handshake),
+            unrecognized: toml::Table::new(),
+        })
+    }
+}
+
+impl Validate for RawTcpSignal {
     fn validate(&self) -> crate::Result<()> {
         if !self.unrecognized.is_empty() {
             bail!(
@@ -1655,13 +1722,13 @@ impl Merge for QuicPause {
         };
 
         Some(Self {
-            handshake: PausePoints::merge(first.handshake, second.handshake),
+            handshake: Points::merge(first.handshake, second.handshake),
             unrecognized: toml::Table::new(),
         })
     }
 }
 
-impl QuicPause {
+impl Validate for QuicPause {
     fn validate(&self) -> crate::Result<()> {
         if !self.unrecognized.is_empty() {
             bail!(
@@ -1740,14 +1807,14 @@ impl Merge for UdpPause {
         };
 
         Some(Self {
-            send_body: PausePoints::merge(first.send_body, second.send_body),
-            receive_body: PausePoints::merge(first.receive_body, second.receive_body),
+            send_body: Points::merge(first.send_body, second.send_body),
+            receive_body: Points::merge(first.receive_body, second.receive_body),
             unrecognized: toml::Table::new(),
         })
     }
 }
 
-impl UdpPause {
+impl Validate for UdpPause {
     fn validate(&self) -> crate::Result<()> {
         if !self.unrecognized.is_empty() {
             bail!(
@@ -1761,94 +1828,6 @@ impl UdpPause {
             );
         }
         Ok(())
-    }
-}
-
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct PausePoints {
-    pub start: Option<ValueOrArray<PauseValue>>,
-    pub end: Option<ValueOrArray<PauseValue>>,
-    #[serde(flatten)]
-    pub unrecognized: toml::Table,
-}
-
-impl PausePoints {
-    /// Merge two groups of pause values, with first groups taking presedence over second. If the same
-    /// after tag is found in both groups, all entries with that after tag second are ignored.
-    /// Otherwise, they are appended.
-    fn merge(first: Option<PausePoints>, second: Option<PausePoints>) -> Option<PausePoints> {
-        let Some(mut first) = first else {
-            return second;
-        };
-        let Some(second) = second else {
-            return Some(first);
-        };
-        first.start = ValueOrArray::merge(first.start, second.start);
-        first.end = ValueOrArray::merge(first.end, second.end);
-        Some(first)
-    }
-
-    fn validate(&self) -> crate::Result<()> {
-        for pause in self.start.iter().flatten() {
-            pause.validate()?;
-        }
-        for pause in self.end.iter().flatten() {
-            pause.validate()?;
-        }
-        if !self.unrecognized.is_empty() {
-            bail!(
-                "unrecognized field{} {}",
-                if self.unrecognized.len() == 1 {
-                    ""
-                } else {
-                    "s"
-                },
-                self.unrecognized.keys().join(", "),
-            );
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct PauseValue {
-    pub duration: Option<Value>,
-    pub offset_bytes: Option<Value>,
-    pub join: Option<ValueOrArray<String>>,
-    #[serde(flatten)]
-    pub unrecognized: toml::Table,
-}
-
-impl PauseValue {
-    fn validate(&self) -> crate::Result<()> {
-        if !self.unrecognized.is_empty() {
-            bail!(
-                "unrecognized field{} {}",
-                if self.unrecognized.len() == 1 {
-                    ""
-                } else {
-                    "s"
-                },
-                self.unrecognized.keys().join(", "),
-            );
-        }
-        Ok(())
-    }
-}
-
-impl Merge for PauseValue {
-    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
-        let Some(first) = first else { return second };
-        let Some(second) = second else {
-            return Some(first);
-        };
-
-        Some(Self {
-            duration: Value::merge(first.duration, second.duration),
-            offset_bytes: Value::merge(first.offset_bytes, second.offset_bytes),
-            join: first.join.or(second.join),
-            unrecognized: toml::Table::new(),
-        })
     }
 }
 
@@ -1917,15 +1896,6 @@ impl<'a, T> IntoIterator for &'a mut ValueOrArray<T> {
         match self {
             ValueOrArray::Value(val) => Either::Left(std::iter::once(val)),
             ValueOrArray::Array(vec) => Either::Right(vec.iter_mut()),
-        }
-    }
-}
-
-impl<T> ValueOrArray<T> {
-    fn iter(&self) -> impl Iterator<Item = &T> {
-        match self {
-            ValueOrArray::Value(val) => Either::Left(std::iter::once(val)),
-            ValueOrArray::Array(vec) => Either::Right(vec.iter()),
         }
     }
 }
@@ -2137,4 +2107,56 @@ pub enum Iterable {
     ExpressionVars {
         vars: IndexMap<String, String>,
     },
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct Points<T> {
+    pub start: Option<ValueOrArray<T>>,
+    pub end: Option<ValueOrArray<T>>,
+    #[serde(flatten)]
+    pub unrecognized: toml::Table,
+}
+
+impl<T: Merge> Merge for Points<T> {
+    /// Merge two groups of pause values, with first groups taking presedence over second. If the same
+    /// after tag is found in both groups, all entries with that after tag second are ignored.
+    /// Otherwise, they are appended.
+    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
+        let Some(mut first) = first else {
+            return second;
+        };
+        let Some(second) = second else {
+            return Some(first);
+        };
+        first.start = ValueOrArray::merge(first.start, second.start);
+        first.end = ValueOrArray::merge(first.end, second.end);
+        Some(first)
+    }
+}
+
+impl<T: Validate> Points<T> {
+    pub(super) fn validate(&self) -> crate::Result<()> {
+        for pause in self.start.iter().flatten() {
+            pause.validate()?;
+        }
+        for pause in self.end.iter().flatten() {
+            pause.validate()?;
+        }
+        if !self.unrecognized.is_empty() {
+            bail!(
+                "unrecognized field{} {}",
+                if self.unrecognized.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                self.unrecognized.keys().join(", "),
+            );
+        }
+        Ok(())
+    }
+}
+
+pub trait Validate {
+    fn validate(&self) -> crate::Result<()>;
 }
