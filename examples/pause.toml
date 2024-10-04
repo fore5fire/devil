@@ -1,76 +1,76 @@
 devil.version = 0
 
-#[http_pause.http]
-#url = "https://example.com/"
-#pause.request_body.end.duration = "500ms"
-#
-#[http1_pause.http1]
-#url = "https://example.com/test"
-#[http1_pause.http1.pause]
-#request_headers.end.duration = "50us"
-#response_headers.end = [{duration = "5ms"}, {duration = "10ms", offset_bytes = 100 }]
-#[http1_pause.tcp.pause]
-## Pause after the tcp handshake but before the tls handshake. Could also be
-## done using `http1_pause.tls.pause.before`.
-#handshake.end.duration = "1s"
-#
-#[simple_tcp.tcp]
-#host = "example.com"
-#port = 80
-#body = "GET / HTTP/1.0\r\n\r\n"
-#[simple_tcp.tcp.pause]
-#handshake.start.duration = "250ms"
-#handshake.end.duration = "250ms"
-#send_body.start.duration = "250ms"
-#send_body.end.duration = "250ms"
-#receive_body.start.duration = "250ms"
-#receive_body.end.duration = "250ms"
-#
-#[simple_tls.tls]
-#host = "example.com"
-#port = 443
-#body = "GET / HTTP/1.0\r\n\r\n"
-#[simple_tls.tls.pause]
-#handshake.start.duration = "250ms"
-#handshake.end.duration = "250ms"
-#send_body.start.duration = "250ms"
-#send_body.end.duration = "250ms"
-#receive_body.start.duration = "250ms"
-#receive_body.end.duration = "250ms"
-#
-#[multi_pause.tls]
-#host = "example.com"
-#port = 443
-#body = "GET / HTTP/1.0\r\n\r\n"
-#pause.handshake.end.duration = "500ms"
-#[[multi_pause.tls.pause.send_body.end]]
-#duration = "500ms"
-#[[multi_pause.tls.pause.send_body.end]]
-#offset_bytes = 50
-#duration = "500ms"
-#[multi_pause.tls.pause.receive_body.end]
-##match = "<< >>"
-#offset_bytes = 50
-#duration = "500ms"
+[http_pause.http]
+    url = "https://example.com/"
+    pause.request_body.end.duration = "500ms"
+
+[http1_pause.http1]
+    url = "https://example.com/test"
+    [http1_pause.http1.pause]
+    request_headers.end.duration = "50us"
+    response_headers.end = [{duration = "5ms"}, {duration = "10ms", offset_bytes = 100 }]
+    [http1_pause.tcp.pause]
+    # Pause after the tcp handshake but before the tls handshake. Could also be
+    # done using `http1_pause.tls.pause.before`.
+    handshake.end.duration = "1s"
+
+[simple_tcp.tcp]
+    host = "example.com"
+    port = 80
+    body = "GET / HTTP/1.0\r\n\r\n"
+    [simple_tcp.tcp.pause]
+    handshake.start.duration = "250ms"
+    handshake.end.duration = "250ms"
+    send_body.start.duration = "250ms"
+    send_body.end.duration = "250ms"
+    receive_body.start.duration = "250ms"
+    receive_body.end.duration = "250ms"
+
+[simple_tls.tls]
+    host = "example.com"
+    port = 443
+    body = "GET / HTTP/1.0\r\n\r\n"
+    [simple_tls.tls.pause]
+    handshake.start.duration = "250ms"
+    handshake.end.duration = "250ms"
+    send_body.start.duration = "250ms"
+    send_body.end.duration = "250ms"
+    receive_body.start.duration = "250ms"
+    receive_body.end.duration = "250ms"
+
+[multi_pause.tls]
+    host = "example.com"
+    port = 443
+    body = "GET / HTTP/1.0\r\n\r\n"
+    pause.handshake.end.duration = "500ms"
+    [[multi_pause.tls.pause.send_body.end]]
+    duration = "500ms"
+    [[multi_pause.tls.pause.send_body.end]]
+    offset_bytes = 50
+    duration = "500ms"
+    [multi_pause.tls.pause.receive_body.end]
+    #match = "<< >>"
+    offset_bytes = 50
+    duration = "500ms"
 
 # Sync parallel requests by pausing until all are ready.
 [parallel_join.h2]
-url = "https://example.com/test"
-headers.Content-Length = "3"
-content_length = 3
-body = "abc"
-[parallel_join.h2.pause.request_body.end]
+    url = "https://example.com/test"
+    headers.Content-Length = "3"
+    content_length = 3
+    body = "abc"
+    [parallel_join.h2.pause.request_body.end]
 # Pause each parallel request a different number of seconds.
-duration = "5s"
+    duration = "5s"
 # Pause each parallel request at a different spot.
 #offset_bytes.cel = "randomInt(0, 20)"
-offset_bytes = -1
+    offset_bytes = -1
 # Pause each request until all other requests with tag "a" are ready to
 # continue. Note that join can be an array but cannot use cel expressions.
-join = "a"
+    join = "a"
 # Equivelant to:
 # join = ["a"]
-[parallel_join.run]
-parallel = true
-count = 5
+    [parallel_join.run]
+    parallel = true
+    count = 5
 

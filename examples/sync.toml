@@ -1,21 +1,22 @@
 devil.version = 0
 
+# Synchronizers allow coordinating timing and ordering across parallel jobs.
+# This is an advanced feature which prioritizes flexibility over ease-of-use.
+
 # Run 5 parallel requests, but wait to send the last byte until all previous
 # bytes have been flushed by all 5 requests.
 [single_packet_attack.http]
     url = "https://example.com/"
     method = "GET"
-    [[join_example.pause]]
-    after = "http.pause.request_body.end"
+    [join_example.pause.ensure_flush]
+    after = "http.request_body.end"
     offset_bytes = -1
     duration = "1s"
-    [[join_example.pause]]
-    after = "http.pause.request_body.end"
-    offset_bytes = -1
+    [join_example.pause.join]
+    after = "pause.ensure_flush"
     await = "join"
 
-    [join_example.sync.join]
-    kind = "barrier"
+    [join_example.sync.join.barrier]
     [join_example.run]
     parallel = true
     count = 5
@@ -24,15 +25,17 @@ devil.version = 0
 [sequence_example.http]
     url = "https://example.com/"
     method = "GET"
-    [sequence_example.http.pause.headers.start]
-    await = "sequence"
-    [sequence_example.http.signal.headers.start]
-    target = "sequence"
+    [sequence_example.pause.sequence_header]
+    after = "http.headers.start"
+    await = "seq"
+    [sequence_example.signal.sequence]
+    after = "pause.sequence_header"
+    target = "seq"
     op = "unlock"
     offset_bytes = 3
 
-    [sequence_example.sync.sequence]
-    kind = "sequence"
+    [sequence_example.sync.priority_lock.sequence]
+    pre_register = true;
     [sequence_example.run]
     parallel = true
     count = 5
@@ -42,14 +45,13 @@ devil.version = 0
     url = "https://example.com/"
     method = "GET"
     [timeless_timing_attack.http.pause.request_body.end]
-    await = "sequence"
+    await = "seq"
     offset_bytes = -1
     [timeless_timing_attack.http.signal.request_body.end]
-    target = "sequence"
+    target = "seq"
     op = "unlock"
 
-    [timeless_timing_attack.sync.sequence]
-    kind = "sequence"
+    [timeless_timing_attack.sync.seq.sequence]
     [timeless_timing_attack.run]
     parallel = true
     count = 5

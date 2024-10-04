@@ -1,7 +1,7 @@
 devil.version = 0
 
 [simple.tcp]
-host = "example.com"
-port = 80
-body = "GET / HTTP/1.0\r\n\r\n"
+    host = "example.com"
+    port = 80
+    body = "GET / HTTP/1.0\r\n\r\n"
 

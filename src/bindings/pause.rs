@@ -2,17 +2,15 @@ use anyhow::bail;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
-use super::{Merge, Points, Validate, ValueOrArray};
-
-pub type PausePoints = ValueOrArray<Points<PauseValue>>;
+use super::{Merge, Validate, Value, ValueOrArray};
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct PauseValue {
-    pub duration: Option<super::Value>,
-    pub offset_bytes: Option<super::Value>,
-    pub r#await: Option<ValueOrArray<String>>,
-    pub before: Option<String>,
-    pub after: Option<String>,
+    pub duration: Option<Value>,
+    pub offset_bytes: Option<Value>,
+    pub r#await: Option<Value>,
+    pub before: Option<Value>,
+    pub after: Option<Value>,
     #[serde(flatten)]
     pub unrecognized: toml::Table,
 }

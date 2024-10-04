@@ -2,7 +2,7 @@ use anyhow::bail;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
-use super::{Merge, PausePoints, Validate, Value};
+use super::{Merge, Value};
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct RawHttp2 {
@@ -10,8 +10,6 @@ pub struct RawHttp2 {
     pub port: Option<Value>,
     pub preamble: Option<Value>,
     pub frames: Option<Vec<Http2Frame>>,
-    #[serde(default)]
-    pub pause: Option<RawHttp2Pause>,
     #[serde(flatten)]
     pub unrecognized: toml::Table,
 }
@@ -26,15 +24,11 @@ impl RawHttp2 {
             port: Value::merge(self.port, default.port),
             preamble: Value::merge(self.preamble, default.preamble),
             frames: self.frames.or(default.frames),
-            pause: RawHttp2Pause::merge(self.pause, default.pause),
             unrecognized: toml::Table::new(),
         }
     }
 
     pub(super) fn validate(&self) -> crate::Result<()> {
-        if let Some(p) = &self.pause {
-            p.validate()?;
-        }
         if let Some(frames) = &self.frames {
             for f in frames {
                 f.validate()?;
@@ -451,48 +445,6 @@ pub struct Http2GenericFrame {
 
 impl Http2GenericFrame {
     fn validate(&self) -> crate::Result<()> {
-        if !self.unrecognized.is_empty() {
-            bail!(
-                "unrecognized field{} {}",
-                if self.unrecognized.len() == 1 {
-                    ""
-                } else {
-                    "s"
-                },
-                self.unrecognized.keys().join(", "),
-            );
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct RawHttp2Pause {
-    pub handshake: Option<PausePoints>,
-
-    #[serde(flatten)]
-    pub unrecognized: toml::Table,
-}
-
-impl Merge for RawHttp2Pause {
-    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
-        let Some(first) = first else { return second };
-        let Some(second) = second else {
-            return Some(first);
-        };
-
-        Some(Self {
-            handshake: PausePoints::merge(first.handshake, second.handshake),
-            unrecognized: toml::Table::new(),
-        })
-    }
-}
-
-impl RawHttp2Pause {
-    fn validate(&self) -> crate::Result<()> {
-        if let Some(handshake) = &self.handshake {
-            handshake.validate()?;
-        }
         if !self.unrecognized.is_empty() {
             bail!(
                 "unrecognized field{} {}",

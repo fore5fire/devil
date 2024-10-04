@@ -26,8 +26,7 @@ use tokio::{
 use tracing::{debug, info};
 
 use crate::{
-    RawTcpError, RawTcpOutput, RawTcpPauseOutput, RawTcpPlanOutput, TcpSegmentOptionOutput,
-    TcpSegmentOutput, WithPlannedCapacity,
+    RawTcpError, RawTcpOutput, RawTcpPlanOutput, TcpSegmentOptionOutput, TcpSegmentOutput,
 };
 
 use super::Context;
@@ -81,7 +80,7 @@ struct OpenState {
 }
 
 impl RawTcpRunner {
-    pub fn new(ctx: Arc<Context>, plan: RawTcpPlanOutput) -> Self {
+    pub fn new(ctx: Arc<Context>, plan: RawTcpPlanOutput, sync: SyncData) -> Self {
         Self {
             ctx,
             state: State::Pending {

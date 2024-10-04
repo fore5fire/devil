@@ -1,38 +1,38 @@
 devil.version = 0
 
 [simple.graphql]
-url = "https://swapi-graphql.netlify.app/.netlify/functions/index"
-query = '''
-{
-    allFilms {
-        films {
-        title
+    url = "https://swapi-graphql.netlify.app/.netlify/functions/index"
+    query = '''
+    {
+        allFilms {
+            films {
+            title
+            }
         }
-    }
-}'''
+    }'''
 
 [get.graphql]
-url = "http://example.com/test"
-query = '''{
-    allFilms {
-        films {
-        title
+    url = "http://example.com/test"
+    query = '''{
+        allFilms {
+            films {
+            title
+            }
         }
-    }
-}'''
-[get.h1c]
-method = "GET"
+    }'''
+    [get.h1c]
+    method = "GET"
 
-#[query_string.graphql]
-#url = "https://swapi-graphql.netlify.app/.netlify/functions/index"
-#query = '''{
-#    allFilms {
-#        films {
-#        title
-#        }
-#    }
-#}'''
-#use_query_string = true
-#[query_string.http]
-#method = "GET"
-#headers = { Content-Type = { unset = true } }
+[query_string.graphql]
+    url = "https://swapi-graphql.netlify.app/.netlify/functions/index"
+    query = '''{
+        allFilms {
+            films {
+            title
+            }
+        }
+    }'''
+    use_query_string = true
+    [query_string.http]
+    method = "GET"
+    headers = { Content-Type = { unset = true } }

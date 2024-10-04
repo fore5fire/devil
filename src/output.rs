@@ -182,7 +182,6 @@ pub struct HttpOutput {
     pub errors: Vec<HttpError>,
     pub protocol: Option<String>,
     pub duration: Duration,
-    pub pause: HttpPauseOutput,
 }
 
 impl From<HttpOutput> for Value {
@@ -195,7 +194,6 @@ impl From<HttpOutput> for Value {
                 ("protocol".into(), value.protocol.into()),
                 ("errors".into(), value.errors.into()),
                 ("duration".into(), value.duration.into()),
-                ("pause".into(), value.pause.into()),
             ])),
         })
     }
@@ -208,7 +206,6 @@ pub struct HttpPlanOutput {
     pub add_content_length: AddContentLength,
     pub headers: Vec<(Vec<u8>, Vec<u8>)>,
     pub body: Vec<u8>,
-    pub pause: HttpPauseOutput,
 }
 
 impl From<HttpPlanOutput> for Value {
@@ -224,44 +221,8 @@ impl From<HttpPlanOutput> for Value {
                     )),
                 ),
                 ("body".into(), value.body.into()),
-                ("pause".into(), value.pause.into()),
             ])),
         })
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct HttpPauseOutput {
-    pub open: PausePointsOutput,
-    pub request_headers: PausePointsOutput,
-    pub request_body: PausePointsOutput,
-    pub response_headers: PausePointsOutput,
-    pub response_body: PausePointsOutput,
-}
-
-impl From<HttpPauseOutput> for Value {
-    fn from(value: HttpPauseOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("open".into(), value.open.into()),
-                ("request_headers".into(), value.request_headers.into()),
-                ("request_body".into(), value.request_body.into()),
-                ("response_headers".into(), value.response_headers.into()),
-                ("response_body".into(), value.response_body.into()),
-            ])),
-        })
-    }
-}
-
-impl WithPlannedCapacity for HttpPauseOutput {
-    fn with_planned_capacity(planned: &Self) -> Self {
-        Self {
-            open: PausePointsOutput::with_planned_capacity(&planned.open),
-            request_headers: PausePointsOutput::with_planned_capacity(&planned.request_headers),
-            request_body: PausePointsOutput::with_planned_capacity(&planned.request_body),
-            response_headers: PausePointsOutput::with_planned_capacity(&planned.response_headers),
-            response_body: PausePointsOutput::with_planned_capacity(&planned.response_body),
-        }
     }
 }
 
@@ -364,7 +325,6 @@ pub struct Http1Output {
     pub response: Option<Http1Response>,
     pub errors: Vec<Http1Error>,
     pub duration: Duration,
-    pub pause: Http1PauseOutput,
 }
 
 impl From<Http1Output> for Value {
@@ -376,7 +336,6 @@ impl From<Http1Output> for Value {
                 ("response".into(), value.response.into()),
                 ("errors".into(), value.errors.into()),
                 ("duration".into(), value.duration.into()),
-                ("pause".into(), value.pause.into()),
             ])),
         })
     }
@@ -390,7 +349,6 @@ pub struct Http1PlanOutput {
     pub add_content_length: AddContentLength,
     pub headers: Vec<(Vec<u8>, Vec<u8>)>,
     pub body: Vec<u8>,
-    pub pause: Http1PauseOutput,
 }
 
 impl From<Http1PlanOutput> for Value {
@@ -411,44 +369,8 @@ impl From<Http1PlanOutput> for Value {
                     )),
                 ),
                 ("body".into(), value.body.clone().into()),
-                ("pause".into(), value.pause.into()),
             ])),
         })
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct Http1PauseOutput {
-    pub open: PausePointsOutput,
-    pub request_headers: PausePointsOutput,
-    pub request_body: PausePointsOutput,
-    pub response_headers: PausePointsOutput,
-    pub response_body: PausePointsOutput,
-}
-
-impl From<Http1PauseOutput> for Value {
-    fn from(value: Http1PauseOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("open".into(), value.open.into()),
-                ("request_headers".into(), value.request_headers.into()),
-                ("request_body".into(), value.request_body.into()),
-                ("response_headers".into(), value.response_headers.into()),
-                ("response_body".into(), value.response_body.into()),
-            ])),
-        })
-    }
-}
-
-impl WithPlannedCapacity for Http1PauseOutput {
-    fn with_planned_capacity(planned: &Self) -> Self {
-        Self {
-            open: PausePointsOutput::with_planned_capacity(&planned.open),
-            request_headers: PausePointsOutput::with_planned_capacity(&planned.request_headers),
-            request_body: PausePointsOutput::with_planned_capacity(&planned.request_body),
-            response_headers: PausePointsOutput::with_planned_capacity(&planned.response_headers),
-            response_body: PausePointsOutput::with_planned_capacity(&planned.response_body),
-        }
     }
 }
 
@@ -564,7 +486,6 @@ pub struct Http2Output {
     pub response: Option<Http2Response>,
     pub errors: Vec<Http2Error>,
     pub duration: Duration,
-    pub pause: Http2PauseOutput,
 }
 
 impl From<Http2Output> for Value {
@@ -576,7 +497,6 @@ impl From<Http2Output> for Value {
                 ("response".into(), value.response.into()),
                 ("errors".into(), value.errors.into()),
                 ("duration".into(), value.duration.into()),
-                ("pause".into(), value.pause.into()),
             ])),
         })
     }
@@ -590,7 +510,6 @@ pub struct Http2PlanOutput {
     pub headers: Vec<(Vec<u8>, Vec<u8>)>,
     pub trailers: Vec<(Vec<u8>, Vec<u8>)>,
     pub body: Vec<u8>,
-    pub pause: Http2PauseOutput,
 }
 
 impl From<Http2PlanOutput> for Value {
@@ -606,44 +525,8 @@ impl From<Http2PlanOutput> for Value {
                     )),
                 ),
                 ("body".into(), value.body.clone().into()),
-                ("pause".into(), value.pause.into()),
             ])),
         })
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct Http2PauseOutput {
-    pub open: PausePointsOutput,
-    pub request_headers: PausePointsOutput,
-    pub request_body: PausePointsOutput,
-    pub response_headers: PausePointsOutput,
-    pub response_body: PausePointsOutput,
-}
-
-impl From<Http2PauseOutput> for Value {
-    fn from(value: Http2PauseOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("open".into(), value.open.into()),
-                ("request_headers".into(), value.request_headers.into()),
-                ("request_body".into(), value.request_body.into()),
-                ("response_headers".into(), value.response_headers.into()),
-                ("response_body".into(), value.response_body.into()),
-            ])),
-        })
-    }
-}
-
-impl WithPlannedCapacity for Http2PauseOutput {
-    fn with_planned_capacity(planned: &Self) -> Self {
-        Self {
-            open: PausePointsOutput::with_planned_capacity(&planned.open),
-            request_headers: PausePointsOutput::with_planned_capacity(&planned.request_headers),
-            request_body: PausePointsOutput::with_planned_capacity(&planned.request_body),
-            response_headers: PausePointsOutput::with_planned_capacity(&planned.response_headers),
-            response_body: PausePointsOutput::with_planned_capacity(&planned.response_body),
-        }
     }
 }
 
@@ -1851,7 +1734,6 @@ pub struct RawHttp2Output {
     pub received: Vec<Http2FrameOutput>,
     pub errors: Vec<RawHttp2Error>,
     pub duration: Duration,
-    pub pause: RawHttp2PauseOutput,
 }
 
 impl From<RawHttp2Output> for Value {
@@ -1861,7 +1743,6 @@ impl From<RawHttp2Output> for Value {
                 ("plan".into(), value.plan.into()),
                 ("errors".into(), value.errors.into()),
                 ("duration".into(), value.duration.into()),
-                ("pause".into(), value.pause.into()),
             ])),
         })
     }
@@ -1873,7 +1754,6 @@ pub struct RawHttp2PlanOutput {
     pub port: u16,
     pub preamble: Option<Vec<u8>>,
     pub frames: Vec<Http2FrameOutput>,
-    pub pause: RawHttp2PauseOutput,
 }
 
 impl From<RawHttp2PlanOutput> for Value {
@@ -1883,33 +1763,8 @@ impl From<RawHttp2PlanOutput> for Value {
                 ("host".into(), value.host.to_string().into()),
                 ("port".into(), u64::from(value.port).into()),
                 //("preamble".into(), value.preamble.into()),
-                ("pause".into(), value.pause.into()),
             ])),
         })
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct RawHttp2PauseOutput {
-    pub handshake: PausePointsOutput,
-}
-
-impl From<RawHttp2PauseOutput> for Value {
-    fn from(value: RawHttp2PauseOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([(
-                "handshake".into(),
-                value.handshake.into(),
-            )])),
-        })
-    }
-}
-
-impl WithPlannedCapacity for RawHttp2PauseOutput {
-    fn with_planned_capacity(planned: &Self) -> Self {
-        Self {
-            handshake: PausePointsOutput::with_planned_capacity(&planned.handshake),
-        }
     }
 }
 
@@ -1937,7 +1792,6 @@ pub struct GraphQlOutput {
     pub response: Option<GraphQlResponse>,
     pub errors: Vec<GraphQlError>,
     pub duration: Duration,
-    pub pause: GraphQlPauseOutput,
 }
 
 impl From<GraphQlOutput> for Value {
@@ -1949,26 +1803,8 @@ impl From<GraphQlOutput> for Value {
                 ("response".into(), value.response.into()),
                 ("errors".into(), value.errors.into()),
                 ("duration".into(), value.duration.into()),
-                ("pause".into(), value.pause.into()),
             ])),
         })
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct GraphQlPauseOutput {}
-
-impl From<GraphQlPauseOutput> for Value {
-    fn from(value: GraphQlPauseOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([])),
-        })
-    }
-}
-
-impl WithPlannedCapacity for GraphQlPauseOutput {
-    fn with_planned_capacity(planned: &Self) -> Self {
-        Self {}
     }
 }
 
@@ -1978,7 +1814,6 @@ pub struct GraphQlPlanOutput {
     pub query: String,
     pub operation: Option<serde_json::Value>,
     pub params: Option<HashMap<Vec<u8>, serde_json::Value>>,
-    pub pause: GraphQlPauseOutput,
 }
 
 impl From<GraphQlPlanOutput> for Value {
@@ -2019,7 +1854,6 @@ impl From<GraphQlPlanOutput> for Value {
                         })
                         .unwrap_or(Value::Null),
                 ),
-                ("pause".into(), value.pause.into()),
             ])),
         })
     }
@@ -2129,7 +1963,6 @@ pub struct TlsOutput {
     pub version: Option<TlsVersion>,
     pub duration: Duration,
     pub handshake_duration: Option<Duration>,
-    pub pause: TlsPauseOutput,
 }
 
 impl From<TlsOutput> for Value {
@@ -2143,38 +1976,8 @@ impl From<TlsOutput> for Value {
                 ("version".into(), value.version.as_ref().into()),
                 ("duration".into(), value.duration.into()),
                 ("handshake_duration".into(), value.handshake_duration.into()),
-                ("pause".into(), value.pause.into()),
             ])),
         })
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct TlsPauseOutput {
-    pub handshake: PausePointsOutput,
-    pub send_body: PausePointsOutput,
-    pub receive_body: PausePointsOutput,
-}
-
-impl From<TlsPauseOutput> for Value {
-    fn from(value: TlsPauseOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("handshake".into(), value.handshake.into()),
-                ("send_body".into(), value.send_body.into()),
-                ("receive_body".into(), value.receive_body.into()),
-            ])),
-        })
-    }
-}
-
-impl WithPlannedCapacity for TlsPauseOutput {
-    fn with_planned_capacity(planned: &Self) -> Self {
-        Self {
-            handshake: PausePointsOutput::with_planned_capacity(&planned.handshake),
-            send_body: PausePointsOutput::with_planned_capacity(&planned.send_body),
-            receive_body: PausePointsOutput::with_planned_capacity(&planned.receive_body),
-        }
     }
 }
 
@@ -2184,7 +1987,6 @@ pub struct TlsPlanOutput {
     pub port: u16,
     pub alpn: Vec<Vec<u8>>,
     pub body: Vec<u8>,
-    pub pause: TlsPauseOutput,
 }
 
 impl From<TlsPlanOutput> for Value {
@@ -2194,7 +1996,6 @@ impl From<TlsPlanOutput> for Value {
                 ("host".into(), value.host.into()),
                 ("port".into(), u64::from(value.port).into()),
                 ("body".into(), value.body.into()),
-                ("pause".into(), value.pause.into()),
             ])),
         })
     }
@@ -2268,7 +2069,6 @@ pub struct TcpOutput {
     pub errors: Vec<TcpError>,
     pub duration: Duration,
     pub handshake_duration: Option<Duration>,
-    pub pause: TcpPauseOutput,
 }
 
 impl From<TcpOutput> for Value {
@@ -2282,38 +2082,8 @@ impl From<TcpOutput> for Value {
                 ("errors".into(), value.errors.into()),
                 ("duration".into(), value.duration.into()),
                 ("handshake_duration".into(), value.handshake_duration.into()),
-                ("pause".into(), value.pause.into()),
             ])),
         })
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct TcpPauseOutput {
-    pub handshake: PausePointsOutput,
-    pub send_body: PausePointsOutput,
-    pub receive_body: PausePointsOutput,
-}
-
-impl From<TcpPauseOutput> for Value {
-    fn from(value: TcpPauseOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("handshake".into(), value.handshake.into()),
-                ("send_body".into(), value.send_body.into()),
-                ("receive_body".into(), value.receive_body.into()),
-            ])),
-        })
-    }
-}
-
-impl WithPlannedCapacity for TcpPauseOutput {
-    fn with_planned_capacity(planned: &Self) -> Self {
-        Self {
-            handshake: PausePointsOutput::with_planned_capacity(&planned.handshake),
-            send_body: PausePointsOutput::with_planned_capacity(&planned.send_body),
-            receive_body: PausePointsOutput::with_planned_capacity(&planned.receive_body),
-        }
     }
 }
 
@@ -2330,7 +2100,6 @@ pub struct TcpPlanOutput {
     pub port: u16,
     pub body: Vec<u8>,
     //pub close: TcpPlanCloseOutput,
-    pub pause: TcpPauseOutput,
 }
 
 impl From<TcpPlanOutput> for Value {
@@ -2341,7 +2110,6 @@ impl From<TcpPlanOutput> for Value {
                 ("port".into(), u64::from(value.port).into()),
                 ("body".into(), Value::Bytes(Arc::new(value.body))),
                 //("close".into(), value.close.into()),
-                ("pause".into(), value.pause.into()),
             ])),
         })
     }
@@ -2438,7 +2206,6 @@ pub struct RawTcpOutput {
     pub errors: Vec<RawTcpError>,
     pub duration: Duration,
     pub handshake_duration: Option<Duration>,
-    pub pause: RawTcpPauseOutput,
 }
 
 impl From<RawTcpOutput> for Value {
@@ -2455,38 +2222,10 @@ impl From<RawTcpOutput> for Value {
                 ("errors".into(), value.errors.into()),
                 ("duration".into(), value.duration.into()),
                 ("handshake_duration".into(), value.handshake_duration.into()),
-                ("pause".into(), value.pause.into()),
             ])),
         })
     }
 }
-
-#[derive(Debug, Clone, Default)]
-pub struct RawTcpPauseOutput {
-    pub handshake: PausePointsOutput,
-}
-
-impl From<RawTcpPauseOutput> for Value {
-    fn from(value: RawTcpPauseOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([(
-                "handshake".into(),
-                value.handshake.into(),
-            )])),
-        })
-    }
-}
-
-impl WithPlannedCapacity for RawTcpPauseOutput {
-    fn with_planned_capacity(planned: &Self) -> Self {
-        Self {
-            handshake: PausePointsOutput::with_planned_capacity(&planned.handshake),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct TcpSegmentPauseOutput {}
 
 #[derive(Debug, Clone)]
 pub struct RawTcpPlanOutput {
@@ -2497,7 +2236,6 @@ pub struct RawTcpPlanOutput {
     pub isn: u32,
     pub window: u16,
     pub segments: Vec<TcpSegmentOutput>,
-    pub pause: RawTcpPauseOutput,
 }
 
 impl From<RawTcpPlanOutput> for Value {
@@ -2525,7 +2263,6 @@ impl From<RawTcpPlanOutput> for Value {
                         value.segments.into_iter().map(Value::from).collect(),
                     )),
                 ),
-                ("pause".into(), value.pause.into()),
             ])),
         })
     }
@@ -2828,48 +2565,47 @@ impl From<OutMap> for Map {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct PausePointsOutput {
-    pub start: Vec<PauseValueOutput>,
-    pub end: Vec<PauseValueOutput>,
-}
-
-impl WithPlannedCapacity for PausePointsOutput {
-    fn with_planned_capacity(planned: &Self) -> Self {
-        Self {
-            start: Vec::with_capacity(planned.start.len()),
-            end: Vec::with_capacity(planned.end.len()),
-        }
-    }
-}
-
-impl From<PausePointsOutput> for Value {
-    fn from(value: PausePointsOutput) -> Self {
-        Self::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("start".into(), value.start.into()),
-                ("end".into(), value.end.into()),
-            ])),
-        })
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct PauseValueOutput {
+    pub location: LocationOutput,
     pub duration: Duration,
     pub offset_bytes: i64,
-    pub join: Vec<String>,
+    pub r#await: Option<String>,
 }
 
 impl From<PauseValueOutput> for Value {
     fn from(value: PauseValueOutput) -> Self {
         Self::Map(Map {
             map: Rc::new(HashMap::from([
+                value.location.into(),
                 ("duration".into(), value.duration.into()),
                 ("offset_bytes".into(), value.offset_bytes.into()),
-                ("join".into(), value.join.into()),
+                ("await".into(), value.r#await.into()),
             ])),
         })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum LocationOutput {
+    Before(String),
+    After(String),
+}
+
+impl LocationOutput {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Before(x) | Self::After(x) => x,
+        }
+    }
+}
+
+impl From<LocationOutput> for (cel_interpreter::objects::Key, cel_interpreter::Value) {
+    fn from(value: LocationOutput) -> Self {
+        match value {
+            LocationOutput::Before(b) => ("before".into(), b.into()),
+            LocationOutput::After(a) => ("after".into(), a.into()),
+        }
     }
 }
 

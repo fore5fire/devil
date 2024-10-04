@@ -2,9 +2,7 @@ use anyhow::bail;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
-use super::{Merge, Points, Validate, ValueOrArray};
-
-pub type SignalPoints = ValueOrArray<Points<SignalValue>>;
+use super::{Merge, Validate};
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct SignalValue {

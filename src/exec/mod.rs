@@ -8,6 +8,7 @@ mod pause;
 pub mod raw_http2;
 pub mod raw_tcp;
 mod runner;
+mod sync;
 pub mod tcp;
 mod tee;
 mod timing;
@@ -31,6 +32,7 @@ use crate::{
 };
 
 use self::runner::Runner;
+use sync::*;
 
 pub struct Executor<'a> {
     locals: HashMap<cel_interpreter::objects::Key, cel_interpreter::Value>,
@@ -107,11 +109,7 @@ impl<'a> Executor<'a> {
 
         // Compute the shared and duplicated protocol stacks.
         let mut stack = step.protocols.into_stack();
-        let shared = step
-            .run
-            .share
-            .map(|share| share.evaluate(&inputs))
-            .transpose()?;
+        let shared = step.run.share.evaluate(&inputs)?;
         let shared_stack = shared
             .map(|share| {
                 stack
@@ -124,15 +122,6 @@ impl<'a> Executor<'a> {
             .map(|i| stack.split_off(i))
             .unwrap_or_default();
 
-        if shared_stack
-            .iter()
-            .flat_map(Protocol::joins)
-            .next()
-            .is_some()
-        {
-            bail!("join not allowed with shared steps");
-        }
-
         // Create the runners for the shared stack in advance.
         let shared_runners =
             Self::prepare_runners(&Arc::new(Context::default()), &shared_stack, &mut inputs)?;
@@ -140,7 +129,8 @@ impl<'a> Executor<'a> {
         match parallel {
             Parallelism::Parallel(max_parallel) => {
                 let ctx = Arc::new(Context {
-                    pause_barriers: stack
+                    pause_barriers: step
+                        .sync
                         .iter()
                         .flat_map(Protocol::joins)
                         .map(|key| Ok((key.to_owned(), Arc::new(Barrier::new(count.try_into()?)))))
@@ -232,9 +222,6 @@ impl<'a> Executor<'a> {
                 );
             }
             Parallelism::Serial => {
-                if stack.iter().flat_map(Protocol::joins).next().is_some() {
-                    bail!("join only allowed with parallel steps");
-                }
                 let ctx = Arc::new(Context::default());
 
                 // Start the shared runners.

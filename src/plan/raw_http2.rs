@@ -11,6 +11,53 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
+pub struct RawHttp2Request {
+    pub host: PlanValue<String>,
+    pub port: PlanValue<u16>,
+    pub preamble: PlanValue<Option<Vec<u8>>>,
+    pub frames: Vec<Http2Frame>,
+}
+
+impl Evaluate<crate::RawHttp2PlanOutput> for RawHttp2Request {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::RawHttp2PlanOutput>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O>,
+    {
+        Ok(crate::RawHttp2PlanOutput {
+            host: self.host.evaluate(state)?,
+            port: self.port.evaluate(state)?,
+            preamble: self.preamble.evaluate(state)?,
+            frames: self.frames.evaluate(state)?,
+        })
+    }
+}
+
+impl TryFrom<bindings::RawHttp2> for RawHttp2Request {
+    type Error = Error;
+    fn try_from(binding: bindings::RawHttp2) -> Result<Self> {
+        Ok(Self {
+            host: binding
+                .host
+                .map(PlanValue::<String>::try_from)
+                .ok_or_else(|| anyhow!("tcp.host is required"))??,
+            port: binding
+                .port
+                .map(PlanValue::<u16>::try_from)
+                .ok_or_else(|| anyhow!("tcp.port is required"))??,
+            preamble: binding.preamble.try_into()?,
+            frames: binding
+                .frames
+                .into_iter()
+                .flatten()
+                .map(Http2Frame::try_from)
+                .try_collect()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum Http2Frame {
     Data(Http2DataFrame),
     Headers(Http2HeadersFrame),
