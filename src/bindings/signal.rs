@@ -8,9 +8,9 @@ use super::{Merge, Validate};
 pub struct SignalValue {
     pub target: Option<super::Value>,
     pub op: Option<super::Value>,
+    pub before: Option<super::Value>,
+    pub after: Option<super::Value>,
     pub offset_bytes: Option<super::Value>,
-    pub before: Option<String>,
-    pub after: Option<String>,
     #[serde(flatten)]
     pub unrecognized: toml::Table,
 }
@@ -42,9 +42,9 @@ impl Merge for SignalValue {
         Some(Self {
             target: super::Value::merge(first.target, second.target),
             op: super::Value::merge(first.op, second.op),
-            offset_bytes: super::Value::merge(first.offset_bytes, second.offset_bytes),
             before: first.before.or(second.before),
             after: first.after.or(second.after),
+            offset_bytes: super::Value::merge(first.offset_bytes, second.offset_bytes),
             unrecognized: toml::Table::new(),
         })
     }

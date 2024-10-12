@@ -97,11 +97,11 @@ pub enum HttpVersion {
 
 #[derive(Debug, Clone)]
 pub struct PauseValue {
-    before: PlanValue<Option<String>>,
-    after: PlanValue<Option<String>>,
-    duration: PlanValue<Option<Duration>>,
-    offset_bytes: PlanValue<Option<i64>>,
-    r#await: PlanValue<Option<String>>,
+    pub before: PlanValue<Option<String>>,
+    pub after: PlanValue<Option<String>>,
+    pub duration: PlanValue<Option<Duration>>,
+    pub offset_bytes: PlanValue<Option<i64>>,
+    pub r#await: PlanValue<Option<String>>,
 }
 
 impl TryFrom<bindings::PauseValue> for PauseValue {
@@ -141,7 +141,66 @@ impl Evaluate<crate::PauseValueOutput> for PauseValue {
             offset_bytes: self.offset_bytes.evaluate(state)?.unwrap_or_default(),
             r#await: self.r#await.evaluate(state)?,
         };
-        match out.location.as_str() {
+        match out.location.id() {
+            "response_headers.end" if out.offset_bytes == 0  => {
+                bail!(
+                    "http.pause.response_headers.end with negative offset is not supported"
+                );
+            }
+            "resp.response_body" if out.offset_bytes == 0 => {
+                bail!(
+                    "http.pause.response_headers.start with negative offset is not supported"
+                );
+            }
+            _ => Ok(out)
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SignalValue {
+    pub before: PlanValue<Option<String>>,
+    pub after: PlanValue<Option<String>>,
+    pub target: PlanValue<Option<String>>,
+    pub offset_bytes: PlanValue<Option<String>>,
+}
+
+impl TryFrom<bindings::SignalValue> for SignalValue {
+    type Error = Error;
+    fn try_from(binding: bindings::SignalValue) -> Result<Self> {
+        Ok(Self {
+            before: binding.before.try_into()?,
+            after: binding.after.try_into()?,
+            target: binding.target.try_into()?,
+            offset_bytes: binding.offset_bytes.try_into()?,
+        })
+    }
+}
+
+impl Evaluate<crate::SignalValueOutput> for SignalValue {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::SignalValueOutput>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O>,
+    {
+        let before = self.before.evaluate(state)?;
+        let after = self.after.evaluate(state)?;
+        if before.is_some() && after.is_some() {
+            bail!("only one of pause.before and pause.after may be set");
+        }
+        let location = match (before, after) {
+            (None, None) => bail!("one of pause.before and pause.after is required"),
+            (Some(b), None) => LocationOutput::Before(b),
+            (None, Some(a)) => LocationOutput::After(a),
+            (Some(_), Some(_)) => bail!("one of pause.before and pause.after is required"),
+        };
+        let out = crate::SignalValueOutput {
+            location,
+            target: self.target.evaluate(state)?.unwrap_or_default(),
+            offset_bytes: self.offset_bytes.evaluate(state)?.unwrap_or_default(),
+        };
+        match out.location.id() {
             "response_headers.end" if out.offset_bytes == 0  => {
                 bail!(
                     "http.pause.response_headers.end with negative offset is not supported"
@@ -271,6 +330,23 @@ impl TryFromPlanData for i64 {
             cel_interpreter::Value::Int(x) => Ok(x),
             val => bail!(
                 "{val:?} has invalid type for 64 bit signed int value",
+            ),
+        }
+    }
+}
+
+impl TryFromPlanData for usize {
+    type Error = Error;
+    fn try_from_plan_data(value: PlanData) -> std::result::Result<Self, Self::Error> {
+        match value.0 {
+            cel_interpreter::Value::UInt(x) => {
+                Ok(usize::try_from(x)?)
+            }
+            cel_interpreter::Value::Int(x) => {
+                Ok(usize::try_from(x)?)
+            }
+            val => bail!(
+                "{val:?} has invalid type for 64 bit unsigned int value",
             ),
         }
     }
@@ -627,6 +703,7 @@ pub struct Step {
     pub run: Run,
     pub sync: IndexMap<String, Synchronizer>,
     pub pause: IndexMap<String, PauseValue>,
+    pub signal: IndexMap<String, SignalValue>,
 }
 
 impl Step {
@@ -849,16 +926,22 @@ impl Step {
 
 #[derive(Debug, Clone)]
 pub enum Synchronizer {
-    Barrier{name: String},
-    Sequence{name: String},
+    Barrier{ count: PlanValue<usize> },
+    Mutex,
+    PriorityMutex,
+    Semaphore{ permits: PlanValue<usize> },
+    PrioritySemaphore{ permits: PlanValue<usize> },
 }
 
 impl TryFrom<bindings::Sync> for Synchronizer {
     type Error = Error;
     fn try_from(value: bindings::Sync) -> std::result::Result<Self, Self::Error> {
         match value {
-            bindings::Sync::Barrier{ name } => Ok(Self::Barrier { name }),
-            bindings::Sync::Sequence{ name } => Ok(Self::Sequence { name }),
+            bindings::Sync::Barrier{ count } => Ok(Self::Barrier { count: count.try_into()? }),
+            bindings::Sync::Mutex => Ok(Self::Mutex),
+            bindings::Sync::PriorityMutex => Ok(Self::PriorityMutex),
+            bindings::Sync::Semaphore{ permits } => Ok(Self::Semaphore { permits: permits.try_into()? }),
+            bindings::Sync::PrioritySemaphore{ permits } => Ok(Self::PrioritySemaphore { permits: permits.try_into()? }),
         }
     }
 }
@@ -1564,6 +1647,23 @@ impl TryFrom<bindings::Value> for PlanValue<i64> {
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
             _ => bail!("invalid type {binding:?} for signed 64 bit integer field"),
+        }
+    }
+}
+impl TryFrom<bindings::Value> for PlanValue<usize> {
+    type Error = Error;
+    fn try_from(binding: bindings::Value) -> Result<Self> {
+        match binding {
+            bindings::Value::Literal(Literal::Int(x)) => {
+                Ok(Self::Literal(x.try_into().map_err(|_| {
+                    anyhow!("out-of-bounds unsigned 64 bit integer literal")
+                })?))
+            }
+            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
+                cel,
+                vars: vars.unwrap_or_default().into_iter().collect(),
+            }),
+            _ => bail!("invalid type {binding:?} for unsigned 64 bit integer field"),
         }
     }
 }

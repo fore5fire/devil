@@ -19,10 +19,7 @@ use super::tee::Tee;
 use super::timing::Timing;
 use super::Context;
 use crate::exec::pause::{Pause, PauseSpec};
-use crate::{
-    TlsError, TlsOutput, TlsPauseOutput, TlsPlanOutput, TlsRequestOutput, TlsResponse, TlsVersion,
-    WithPlannedCapacity,
-};
+use crate::{TlsError, TlsOutput, TlsPlanOutput, TlsRequestOutput, TlsResponse, TlsVersion};
 
 #[derive(Debug)]
 pub(super) struct TlsRunner {
@@ -65,7 +62,7 @@ impl TlsRunner {
         tls_config.alpn_protocols = plan.alpn.clone();
         let connector = tokio_rustls::TlsConnector::from(Arc::new(tls_config));
 
-        let pause = crate::TlsPauseOutput::with_planned_capacity(&plan.pause);
+        let pause = TlsPauseOutput::with_planned_capacity(&plan.pause);
 
         TlsRunner {
             ctx,

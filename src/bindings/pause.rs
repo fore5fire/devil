@@ -2,15 +2,15 @@ use anyhow::bail;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
-use super::{Merge, Validate, Value, ValueOrArray};
+use super::{Merge, Validate, Value};
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct PauseValue {
-    pub duration: Option<Value>,
-    pub offset_bytes: Option<Value>,
-    pub r#await: Option<Value>,
     pub before: Option<Value>,
     pub after: Option<Value>,
+    pub offset_bytes: Option<Value>,
+    pub duration: Option<Value>,
+    pub r#await: Option<Value>,
     #[serde(flatten)]
     pub unrecognized: toml::Table,
 }
@@ -40,11 +40,11 @@ impl Merge for PauseValue {
         };
 
         Some(Self {
-            duration: super::Value::merge(first.duration, second.duration),
-            offset_bytes: super::Value::merge(first.offset_bytes, second.offset_bytes),
-            r#await: first.r#await.or(second.r#await),
             before: first.before.or(second.before),
             after: first.after.or(second.after),
+            offset_bytes: super::Value::merge(first.offset_bytes, second.offset_bytes),
+            duration: super::Value::merge(first.duration, second.duration),
+            r#await: first.r#await.or(second.r#await),
             unrecognized: toml::Table::new(),
         })
     }

@@ -110,46 +110,33 @@ impl Defaults {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProtocolKind {
     #[serde(rename = "graphql")]
     GraphQl,
-    #[serde(rename = "graphqlh1c")]
+    #[serde(rename = "graphql_h1c")]
     GraphQlH1c,
-    #[serde(rename = "graphqlh1")]
+    #[serde(rename = "graphql_h1")]
     GraphQlH1,
-    #[serde(rename = "graphqlh2c")]
+    #[serde(rename = "graphql_h2c")]
     GraphQlH2c,
-    #[serde(rename = "graphqlh2")]
+    #[serde(rename = "graphql_h2")]
     GraphQlH2,
-    #[serde(rename = "graphqlh3")]
+    #[serde(rename = "graphql_h3")]
     GraphQlH3,
-    #[serde(rename = "http")]
     Http,
-    #[serde(rename = "h1c")]
     H1c,
-    #[serde(rename = "h1")]
     H1,
-    #[serde(rename = "h2c")]
     H2c,
-    #[serde(rename = "h2")]
     H2,
-    #[serde(rename = "h3")]
     H3,
-    #[serde(rename = "raw_h2c")]
     RawH2c,
-    #[serde(rename = "raw_h2")]
     RawH2,
-    #[serde(rename = "tls")]
     Tls,
-    #[serde(rename = "tcp")]
     Tcp,
-    #[serde(rename = "raw_tcp")]
     RawTcp,
-    #[serde(rename = "dtls")]
     Dtls,
-    #[serde(rename = "quic")]
     Quic,
-    #[serde(rename = "udp")]
     Udp,
 }
 
@@ -887,9 +874,13 @@ impl Merge for Run {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Sync {
-    Barrier { name: String },
-    Sequence { name: String },
+    Barrier { count: Value },
+    Mutex,
+    PriorityMutex,
+    Semaphore { permits: Value },
+    PrioritySemaphore { permits: Value },
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
