@@ -2,10 +2,11 @@ use super::{Evaluate, PlanData, PlanValue, PlanValueTable, TryFromPlanData};
 use crate::bindings::Literal;
 use crate::{bindings, Error, Result, State};
 use anyhow::{anyhow, bail};
+use serde::Serialize;
 use std::str::FromStr;
 use url::Url;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum AddContentLength {
     Never,
     Auto,

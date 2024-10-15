@@ -1,11 +1,7 @@
-use std::sync::Arc;
-use std::{collections::HashMap, rc::Rc};
+use cel_interpreter::Duration;
+use serde::Serialize;
 
-use cel_interpreter::{objects::Map, Value};
-use chrono::{Duration, TimeDelta};
-use itertools::Itertools;
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RawTcpOutput {
     pub plan: RawTcpPlanOutput,
     pub dest_ip: String,
@@ -19,26 +15,7 @@ pub struct RawTcpOutput {
     pub handshake_duration: Option<Duration>,
 }
 
-impl From<RawTcpOutput> for Value {
-    fn from(value: RawTcpOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("plan".into(), value.plan.into()),
-                ("dest_ip".into(), value.dest_ip.into()),
-                ("dest_port".into(), u64::from(value.dest_port).into()),
-                ("src_host".into(), value.src_host.into()),
-                ("src_port".into(), u64::from(value.src_port).into()),
-                ("sent".into(), value.sent.into()),
-                ("received".into(), value.received.into()),
-                ("errors".into(), value.errors.into()),
-                ("duration".into(), value.duration.into()),
-                ("handshake_duration".into(), value.handshake_duration.into()),
-            ])),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RawTcpPlanOutput {
     pub dest_host: String,
     pub dest_port: u16,
@@ -49,37 +26,7 @@ pub struct RawTcpPlanOutput {
     pub segments: Vec<TcpSegmentOutput>,
 }
 
-impl From<RawTcpPlanOutput> for Value {
-    fn from(value: RawTcpPlanOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("dest_host".into(), Value::String(Arc::new(value.dest_host))),
-                ("dest_port".into(), u64::from(value.dest_port).into()),
-                (
-                    "src_host".into(),
-                    value
-                        .src_host
-                        .map(|src_host| Value::String(Arc::new(src_host)))
-                        .into(),
-                ),
-                (
-                    "src_port".into(),
-                    value.src_port.map(|src_port| u64::from(src_port)).into(),
-                ),
-                ("isn".into(), u64::from(value.isn).into()),
-                ("window".into(), u64::from(value.window).into()),
-                (
-                    "segments".into(),
-                    Value::List(Arc::new(
-                        value.segments.into_iter().map(Value::from).collect(),
-                    )),
-                ),
-            ])),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct TcpSegmentOutput {
     pub source: u16,
     pub destination: u16,
@@ -93,28 +40,12 @@ pub struct TcpSegmentOutput {
     pub urgent_ptr: u16,
     pub options: Vec<TcpSegmentOptionOutput>,
     pub payload: Vec<u8>,
-    pub received: Option<TimeDelta>,
-    pub sent: Option<TimeDelta>,
+    pub received: Option<Duration>,
+    pub sent: Option<Duration>,
 }
 
-impl From<TcpSegmentOutput> for Value {
-    fn from(value: TcpSegmentOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                (
-                    "sequence_number".into(),
-                    u64::from(value.sequence_number).into(),
-                ),
-                (
-                    "payload".into(),
-                    Value::Bytes(Arc::new(value.payload.clone())),
-                ),
-            ])),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TcpSegmentOptionOutput {
     Nop,
     Mss(u16),
@@ -163,77 +94,8 @@ impl TcpSegmentOptionOutput {
     }
 }
 
-impl From<TcpSegmentOptionOutput> for Value {
-    fn from(value: TcpSegmentOptionOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(match value {
-                TcpSegmentOptionOutput::Nop => {
-                    HashMap::from([(TcpSegmentOptionOutput::KIND_KEY.into(), "nop".into())])
-                }
-                TcpSegmentOptionOutput::Timestamps { tsval, tsecr } => HashMap::from([
-                    (TcpSegmentOptionOutput::KIND_KEY.into(), "timestamps".into()),
-                    (
-                        TcpSegmentOptionOutput::TSVAL_KEY.into(),
-                        u64::from(tsval).into(),
-                    ),
-                    (
-                        TcpSegmentOptionOutput::TSECR_KEY.into(),
-                        u64::from(tsecr).into(),
-                    ),
-                ]),
-                TcpSegmentOptionOutput::Mss(val) => HashMap::from([
-                    (TcpSegmentOptionOutput::KIND_KEY.into(), "mss".into()),
-                    (
-                        TcpSegmentOptionOutput::VALUE_KEY.into(),
-                        u64::from(val).into(),
-                    ),
-                ]),
-                TcpSegmentOptionOutput::Wscale(val) => HashMap::from([
-                    (TcpSegmentOptionOutput::KIND_KEY.into(), "wscale".into()),
-                    (
-                        TcpSegmentOptionOutput::VALUE_KEY.into(),
-                        u64::from(val).into(),
-                    ),
-                ]),
-                TcpSegmentOptionOutput::SackPermitted => HashMap::from([(
-                    TcpSegmentOptionOutput::KIND_KEY.into(),
-                    "sack_permitted".into(),
-                )]),
-                TcpSegmentOptionOutput::Sack(val) => HashMap::from([
-                    (TcpSegmentOptionOutput::KIND_KEY.into(), "sack".into()),
-                    (
-                        TcpSegmentOptionOutput::VALUE_KEY.into(),
-                        val.into_iter()
-                            .map(|x| Value::UInt(x.into()))
-                            .collect_vec()
-                            .into(),
-                    ),
-                ]),
-                TcpSegmentOptionOutput::Generic { kind, value } => HashMap::from([
-                    (
-                        TcpSegmentOptionOutput::KIND_KEY.into(),
-                        Value::UInt(kind.into()),
-                    ),
-                    (TcpSegmentOptionOutput::VALUE_KEY.into(), value.into()),
-                ]),
-            }),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RawTcpError {
     pub kind: String,
     pub message: String,
-}
-
-impl From<RawTcpError> for Value {
-    fn from(value: RawTcpError) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("kind".into(), value.kind.into()),
-                ("message".into(), value.message.into()),
-            ])),
-        })
-    }
 }

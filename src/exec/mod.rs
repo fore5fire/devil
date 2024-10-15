@@ -27,8 +27,8 @@ use tokio_task_pool::Pool;
 use tracing::debug;
 
 use crate::{
-    Evaluate, IterableKey, Parallelism, Plan, Protocol, ProtocolField, Step, StepOutput,
-    StepPlanOutput, StepPlanOutputs,
+    Evaluate, IterableKey, Parallelism, Plan, PlanWrapper, Protocol, ProtocolField, Step,
+    StepOutput, StepPlanOutput, StepPlanOutputs,
 };
 
 use self::runner::Runner;
@@ -286,17 +286,25 @@ impl<'a> Executor<'a> {
             .map(|proto| {
                 let req = proto.evaluate(inputs)?;
                 match req.clone() {
-                    StepPlanOutput::GraphQl(req) => inputs.current.graphql = Some(req),
-                    StepPlanOutput::Http(req) => inputs.current.http = Some(req),
-                    StepPlanOutput::H1c(req) => inputs.current.h1c = Some(req),
-                    StepPlanOutput::H1(req) => inputs.current.h1 = Some(req),
-                    StepPlanOutput::H2c(req) => inputs.current.h2c = Some(req),
-                    StepPlanOutput::RawH2c(req) => inputs.current.raw_h2c = Some(req),
-                    StepPlanOutput::H2(req) => inputs.current.h2 = Some(req),
-                    StepPlanOutput::RawH2(req) => inputs.current.raw_h2 = Some(req),
-                    StepPlanOutput::Tls(req) => inputs.current.tls = Some(req),
-                    StepPlanOutput::Tcp(req) => inputs.current.tcp = Some(req),
-                    StepPlanOutput::RawTcp(req) => inputs.current.raw_tcp = Some(req),
+                    StepPlanOutput::GraphQl(req) => {
+                        inputs.current.graphql = Some(PlanWrapper::new(req))
+                    }
+                    StepPlanOutput::Http(req) => inputs.current.http = Some(PlanWrapper::new(req)),
+                    StepPlanOutput::H1c(req) => inputs.current.h1c = Some(PlanWrapper::new(req)),
+                    StepPlanOutput::H1(req) => inputs.current.h1 = Some(PlanWrapper::new(req)),
+                    StepPlanOutput::H2c(req) => inputs.current.h2c = Some(PlanWrapper::new(req)),
+                    StepPlanOutput::RawH2c(req) => {
+                        inputs.current.raw_h2c = Some(PlanWrapper::new(req))
+                    }
+                    StepPlanOutput::H2(req) => inputs.current.h2 = Some(PlanWrapper::new(req)),
+                    StepPlanOutput::RawH2(req) => {
+                        inputs.current.raw_h2 = Some(PlanWrapper::new(req))
+                    }
+                    StepPlanOutput::Tls(req) => inputs.current.tls = Some(PlanWrapper::new(req)),
+                    StepPlanOutput::Tcp(req) => inputs.current.tcp = Some(PlanWrapper::new(req)),
+                    StepPlanOutput::RawTcp(req) => {
+                        inputs.current.raw_tcp = Some(PlanWrapper::new(req))
+                    }
                 }
                 Ok(req)
             })

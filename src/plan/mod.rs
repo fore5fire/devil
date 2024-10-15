@@ -16,6 +16,7 @@ pub use http1::*;
 pub use raw_http2::*;
 pub use http2::*;
 pub use http3::*;
+use serde::Serialize;
 pub use tls::*;
 pub use udp::*;
 pub use quic::*;
@@ -28,8 +29,8 @@ use crate::{
 };
 use anyhow::{anyhow, bail};
 use base64::Engine;
-use cel_interpreter::{Context, Program};
-use chrono::{Duration, NaiveDateTime, TimeZone};
+use cel_interpreter::{Duration, Context, Program};
+use chrono::{NaiveDateTime, TimeDelta, TimeZone};
 use go_parse_duration::parse_duration;
 use indexmap::IndexMap;
 use itertools::Itertools;
@@ -37,7 +38,7 @@ use std::convert::Infallible;
 use std::fmt::Display;
 use std::str::FromStr;
 use std::sync::OnceLock;
-use std::{collections::HashMap, ops::Deref, rc::Rc, sync::Arc};
+use std::{collections::HashMap, ops::Deref, sync::Arc};
 use tokio::sync::Semaphore;
 use url::Url;
 
@@ -378,11 +379,12 @@ impl TryFromPlanData for Duration {
     fn try_from_plan_data(value: PlanData) -> Result<Self> {
         match value.0 {
             cel_interpreter::Value::String(x) => parse_duration(&x)
-                .map(Duration::nanoseconds)
+                .map(TimeDelta::nanoseconds)
+                .map(Duration)
                 .map_err(|e| match e {
                     go_parse_duration::Error::ParseError(s) => anyhow!(s),
                 }),
-            cel_interpreter::Value::Duration(x) => Ok(x),
+            cel_interpreter::Value::Duration(x) => Ok(Duration(x)),
             val => bail!(
                 "{val:?} has invalid type for duration value",
             ),
@@ -538,7 +540,7 @@ impl TryFromPlanData for serde_json::Value {
                     .try_collect()?,
             ),
             cel_interpreter::Value::Map(m) => Self::Object(
-                Rc::try_unwrap(m.map)
+                Arc::try_unwrap(m.map)
                     .unwrap_or_else(|m| (*m).clone())
                     .into_iter()
                     .map(|(k, v)| {
@@ -652,11 +654,11 @@ impl TryFrom<toml::value::Datetime> for PlanData {
         };
 
         Ok(PlanData(
-            offset
+            cel_interpreter::Value::Timestamp(offset
                 .from_local_datetime(&datetime)
                 .single()
                 .ok_or_else(|| anyhow!("ambiguous datetime"))?
-                .into(),
+                ),
         ))
     }
 }
@@ -677,7 +679,7 @@ impl TryFrom<toml::Value> for PlanData {
             )))),
             toml::Value::Table(s) => Ok(Self(cel_interpreter::Value::Map(
                 cel_interpreter::objects::Map {
-                    map: Rc::new(
+                    map: Arc::new(
                         s.into_iter()
                             .map(|(k, v)| {
                                 Ok((
@@ -1029,9 +1031,17 @@ impl Evaluate<crate::RunPlanOutput> for Run {
         let out = crate::RunPlanOutput {
             run_if: self.run_if.evaluate(state)?,
             run_while: self
-                .run_while.clone().evaluate(state)?,
+                .run_while.evaluate(state)?,
             run_for: self
-                .run_for.clone().evaluate(state)?.map(|pairs| pairs.into_iter().map(|(key, v)| crate::RunForOutput {key, value: v.into()}).collect()),
+                .run_for
+                .evaluate(state)?
+                .map(|pairs| pairs
+                    .into_iter()
+                    .map(|(key, v)| Ok::<_,crate::Error>(crate::RunForOutput {
+                        key, 
+                        value: v.0.try_into()?,
+                    })).try_collect())
+                .transpose()?,
             count: self.count.evaluate(state)?,
             parallel: self.parallel.evaluate(state)?,
             share: self.share.evaluate(state)?,
@@ -2166,7 +2176,7 @@ impl Evaluate<Vec<(IterableKey, PlanData)>> for IterablePlanValue {
                         ))
                     })
                     .try_collect(),
-                cel_interpreter::Value::Map(m) => Rc::try_unwrap(m.map)
+                cel_interpreter::Value::Map(m) => Arc::try_unwrap(m.map)
                     .map_or_else(|arc| arc.as_ref().clone(), |val| val)
                     .into_iter()
                     .map(|(k, v)| Ok((k.into(), PlanData(v))))
@@ -2177,7 +2187,8 @@ impl Evaluate<Vec<(IterableKey, PlanData)>> for IterablePlanValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[serde(untagged)]
 pub enum IterableKey {
     Int(i64),
     Uint(u64),
@@ -2288,7 +2299,7 @@ where
 {
     ctx.add_variable("locals", cel_interpreter::Value::Map(state.locals()))
         .unwrap();
-    ctx.add_variable_from_value(
+    ctx.add_variable(
         "steps",
         state
             .iter()
@@ -2307,10 +2318,10 @@ where
             })
             .collect::<HashMap<_, _>>(),
     );
-    ctx.add_variable_from_value("current", state.current().to_owned());
-    ctx.add_variable_from_value("for", state.run_for().to_owned());
-    ctx.add_variable_from_value("while", state.run_while().to_owned());
-    ctx.add_variable_from_value("count", state.run_count().to_owned());
+    ctx.add_variable("current", state.current());
+    ctx.add_variable("for", state.run_for());
+    ctx.add_variable("while", state.run_while());
+    ctx.add_variable("count", state.run_count());
     ctx.add_function("parse_url", cel_functions::url);
     ctx.add_function(
         "parse_form_urlencoded",

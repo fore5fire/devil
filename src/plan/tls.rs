@@ -3,22 +3,33 @@ use crate::bindings::Literal;
 use crate::{bindings, Error, Result, State};
 use anyhow::{anyhow, bail};
 use itertools::Itertools;
+use serde::Serialize;
 use std::str::FromStr;
 use std::sync::Arc;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", untagged)]
 pub enum TlsVersion {
-    SSL1,
-    SSL2,
-    SSL3,
-    TLS1_0,
-    TLS1_1,
-    TLS1_2,
-    TLS1_3,
-    DTLS1_0,
-    DTLS1_1,
-    DTLS1_2,
-    DTLS1_3,
+    Ssl1,
+    Ssl2,
+    Ssl3,
+    #[serde(rename = "tls1.0")]
+    Tls1_0,
+    #[serde(rename = "tls1.1")]
+    Tls1_1,
+    #[serde(rename = "tls1.2")]
+    Tls1_2,
+    #[serde(rename = "tls1.3")]
+    Tls1_3,
+    #[serde(rename = "dtls1.0")]
+    Dtls1_0,
+    #[serde(rename = "dtls1.1")]
+    Dtls1_1,
+    #[serde(rename = "dtls1.2")]
+    Dtls1_2,
+    #[serde(rename = "dtls1.3")]
+    Dtls1_3,
+    #[serde(untagged)]
     Other(u16),
 }
 
@@ -26,13 +37,17 @@ impl FromStr for TlsVersion {
     type Err = Error;
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         Ok(match s.into() {
-            "ssl1" => Self::SSL1,
-            "ssl2" => Self::SSL2,
-            "ssl3" => Self::SSL3,
-            "tls1.0" => Self::TLS1_0,
-            "tls1.1" => Self::TLS1_1,
-            "tls1.2" => Self::TLS1_2,
-            "tls1.3" => Self::TLS1_3,
+            "ssl1" => Self::Ssl1,
+            "ssl2" => Self::Ssl2,
+            "ssl3" => Self::Ssl3,
+            "tls1.0" => Self::Tls1_0,
+            "tls1.1" => Self::Tls1_1,
+            "tls1.2" => Self::Tls1_2,
+            "tls1.3" => Self::Tls1_3,
+            "dtls1.0" => Self::Dtls1_0,
+            "dtls1.1" => Self::Dtls1_1,
+            "dtls1.2" => Self::Dtls1_2,
+            "dtls1.3" => Self::Dtls1_3,
             _ => bail!("invalid tls version string {}", s),
         })
     }
@@ -41,17 +56,17 @@ impl FromStr for TlsVersion {
 impl From<&TlsVersion> for cel_interpreter::Value {
     fn from(value: &TlsVersion) -> Self {
         match value {
-            TlsVersion::SSL1 => cel_interpreter::Value::String(Arc::new("ssl1".to_owned())),
-            TlsVersion::SSL2 => cel_interpreter::Value::String(Arc::new("ssl2".to_owned())),
-            TlsVersion::SSL3 => cel_interpreter::Value::String(Arc::new("ssl3".to_owned())),
-            TlsVersion::TLS1_0 => cel_interpreter::Value::String(Arc::new("tls1.0".to_owned())),
-            TlsVersion::TLS1_1 => cel_interpreter::Value::String(Arc::new("tls1.1".to_owned())),
-            TlsVersion::TLS1_2 => cel_interpreter::Value::String(Arc::new("tls1.2".to_owned())),
-            TlsVersion::TLS1_3 => cel_interpreter::Value::String(Arc::new("tls1.3".to_owned())),
-            TlsVersion::DTLS1_0 => cel_interpreter::Value::String(Arc::new("dtls1.0".to_owned())),
-            TlsVersion::DTLS1_1 => cel_interpreter::Value::String(Arc::new("dtls1.1".to_owned())),
-            TlsVersion::DTLS1_2 => cel_interpreter::Value::String(Arc::new("dtls1.2".to_owned())),
-            TlsVersion::DTLS1_3 => cel_interpreter::Value::String(Arc::new("dtls1.3".to_owned())),
+            TlsVersion::Ssl1 => cel_interpreter::Value::String(Arc::new("ssl1".to_owned())),
+            TlsVersion::Ssl2 => cel_interpreter::Value::String(Arc::new("ssl2".to_owned())),
+            TlsVersion::Ssl3 => cel_interpreter::Value::String(Arc::new("ssl3".to_owned())),
+            TlsVersion::Tls1_0 => cel_interpreter::Value::String(Arc::new("tls1.0".to_owned())),
+            TlsVersion::Tls1_1 => cel_interpreter::Value::String(Arc::new("tls1.1".to_owned())),
+            TlsVersion::Tls1_2 => cel_interpreter::Value::String(Arc::new("tls1.2".to_owned())),
+            TlsVersion::Tls1_3 => cel_interpreter::Value::String(Arc::new("tls1.3".to_owned())),
+            TlsVersion::Dtls1_0 => cel_interpreter::Value::String(Arc::new("dtls1.0".to_owned())),
+            TlsVersion::Dtls1_1 => cel_interpreter::Value::String(Arc::new("dtls1.1".to_owned())),
+            TlsVersion::Dtls1_2 => cel_interpreter::Value::String(Arc::new("dtls1.2".to_owned())),
+            TlsVersion::Dtls1_3 => cel_interpreter::Value::String(Arc::new("dtls1.3".to_owned())),
             TlsVersion::Other(a) => cel_interpreter::Value::UInt(*a as u64),
         }
     }
@@ -64,13 +79,17 @@ impl TryFromPlanData for TlsVersion {
             bail!("TLS version must be a string");
         };
         match x.as_str() {
-            "ssl1" => Ok(Self::SSL1),
-            "ssl2" => Ok(Self::SSL2),
-            "ssl3" => Ok(Self::SSL3),
-            "tls1_0" => Ok(Self::TLS1_0),
-            "tls1_1" => Ok(Self::TLS1_1),
-            "tls1_2" => Ok(Self::TLS1_2),
-            "tls1_3" => Ok(Self::TLS1_3),
+            "ssl1" => Ok(Self::Ssl1),
+            "ssl2" => Ok(Self::Ssl2),
+            "ssl3" => Ok(Self::Ssl3),
+            "tls1.0" => Ok(Self::Tls1_0),
+            "tls1.1" => Ok(Self::Tls1_1),
+            "tls1.2" => Ok(Self::Tls1_2),
+            "tls1.3" => Ok(Self::Tls1_3),
+            "dtls1.0" => Ok(Self::Dtls1_0),
+            "dtls1.1" => Ok(Self::Dtls1_1),
+            "dtls1.2" => Ok(Self::Dtls1_2),
+            "dtls1.3" => Ok(Self::Dtls1_3),
             val => bail!("invalid TLS version {val:?}"),
         }
     }

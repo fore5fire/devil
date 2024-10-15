@@ -1,15 +1,14 @@
 use std::fmt::Display;
 use std::io;
-use std::{collections::HashMap, rc::Rc};
 
 use bitmask_enum::bitmask;
 use byteorder::{ByteOrder, NetworkEndian};
-use cel_interpreter::objects::Map;
-use cel_interpreter::Value;
-use chrono::Duration;
+use cel_interpreter::Duration;
+use serde::Serialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Http2FrameOutput {
     Data(Http2DataFrameOutput),
     Headers(Http2HeadersFrameOutput),
@@ -255,7 +254,8 @@ impl Http2FrameOutput {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Http2FrameType {
     Data,
     Headers,
@@ -326,6 +326,8 @@ impl Display for Http2FrameType {
 }
 
 #[bitmask(u8)]
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Http2FrameFlag {
     Ack = 0x01,
     EndStream = 0x01,
@@ -360,14 +362,8 @@ impl Http2FrameFlag {
     }
 }
 
-impl From<Http2FrameFlag> for Value {
-    #[inline]
-    fn from(value: Http2FrameFlag) -> Self {
-        u64::from(u8::from(value)).into()
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Http2SettingsParameterId {
     HeaderTableSize,
     EnablePush,
@@ -421,54 +417,7 @@ impl Display for Http2SettingsParameterId {
     }
 }
 
-impl From<Http2SettingsParameterId> for Value {
-    #[inline]
-    fn from(value: Http2SettingsParameterId) -> Self {
-        u64::from(value.value()).into()
-    }
-}
-
-impl From<Http2FrameOutput> for Value {
-    fn from(value: Http2FrameOutput) -> Self {
-        match value {
-            Http2FrameOutput::Data(x) => Value::Map(Map {
-                map: Rc::new(HashMap::from([("data".into(), x.into())])),
-            }),
-            Http2FrameOutput::Headers(x) => Value::Map(Map {
-                map: Rc::new(HashMap::from([("headers".into(), x.into())])),
-            }),
-            Http2FrameOutput::Priority(x) => Value::Map(Map {
-                map: Rc::new(HashMap::from([("priority".into(), x.into())])),
-            }),
-            Http2FrameOutput::RstStream(x) => Value::Map(Map {
-                map: Rc::new(HashMap::from([("rst_stream".into(), x.into())])),
-            }),
-            Http2FrameOutput::Settings(x) => Value::Map(Map {
-                map: Rc::new(HashMap::from([("settings".into(), x.into())])),
-            }),
-            Http2FrameOutput::PushPromise(x) => Value::Map(Map {
-                map: Rc::new(HashMap::from([("push_promise".into(), x.into())])),
-            }),
-            Http2FrameOutput::Ping(x) => Value::Map(Map {
-                map: Rc::new(HashMap::from([("ping".into(), x.into())])),
-            }),
-            Http2FrameOutput::Goaway(x) => Value::Map(Map {
-                map: Rc::new(HashMap::from([("goaway".into(), x.into())])),
-            }),
-            Http2FrameOutput::WindowUpdate(x) => Value::Map(Map {
-                map: Rc::new(HashMap::from([("window_update".into(), x.into())])),
-            }),
-            Http2FrameOutput::Continuation(x) => Value::Map(Map {
-                map: Rc::new(HashMap::from([("continuation".into(), x.into())])),
-            }),
-            Http2FrameOutput::Generic(x) => Value::Map(Map {
-                map: Rc::new(HashMap::from([("generic".into(), x.into())])),
-            }),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Http2DataFrameOutput {
     pub flags: Http2FrameFlag,
     pub end_stream: bool,
@@ -520,22 +469,7 @@ impl Http2DataFrameOutput {
     }
 }
 
-impl From<Http2DataFrameOutput> for Value {
-    fn from(value: Http2DataFrameOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("flags".into(), value.flags.into()),
-                ("end_stream".into(), value.end_stream.into()),
-                ("r".into(), value.r.into()),
-                ("stream_id".into(), u64::from(value.stream_id).into()),
-                ("data".into(), value.data.into()),
-                ("padding".into(), value.padding.into()),
-            ])),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Http2HeadersFrameOutput {
     pub flags: Http2FrameFlag,
     pub end_stream: bool,
@@ -595,49 +529,14 @@ impl Http2HeadersFrameOutput {
     }
 }
 
-impl From<Http2HeadersFrameOutput> for Value {
-    fn from(value: Http2HeadersFrameOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("flags".into(), value.flags.into()),
-                ("end_stream".into(), value.end_stream.into()),
-                ("end_headers".into(), value.end_headers.into()),
-                ("r".into(), value.r.into()),
-                ("stream_id".into(), u64::from(value.stream_id).into()),
-                ("priority".into(), value.priority.into()),
-                (
-                    "header_block_fragment".into(),
-                    value.header_block_fragment.into(),
-                ),
-                ("padding".into(), value.padding.into()),
-            ])),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Http2HeadersFramePriorityOutput {
     pub e: bool,
     pub stream_dependency: u32,
     pub weight: u8,
 }
 
-impl From<Http2HeadersFramePriorityOutput> for Value {
-    fn from(value: Http2HeadersFramePriorityOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("e".into(), value.e.into()),
-                (
-                    "stream_dependency".into(),
-                    u64::from(value.stream_dependency).into(),
-                ),
-                ("weight".into(), u64::from(value.weight).into()),
-            ])),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Http2PriorityFrameOutput {
     pub flags: Http2FrameFlag,
     pub r: bool,
@@ -669,25 +568,7 @@ impl Http2PriorityFrameOutput {
     }
 }
 
-impl From<Http2PriorityFrameOutput> for Value {
-    fn from(value: Http2PriorityFrameOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("flags".into(), value.flags.into()),
-                ("r".into(), value.r.into()),
-                ("stream_id".into(), u64::from(value.stream_id).into()),
-                ("e".into(), value.e.into()),
-                (
-                    "stream_dependency".into(),
-                    u64::from(value.stream_dependency).into(),
-                ),
-                ("weight".into(), u64::from(value.weight).into()),
-            ])),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Http2RstStreamFrameOutput {
     pub flags: Http2FrameFlag,
     pub r: bool,
@@ -714,20 +595,7 @@ impl Http2RstStreamFrameOutput {
     }
 }
 
-impl From<Http2RstStreamFrameOutput> for Value {
-    fn from(value: Http2RstStreamFrameOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("flags".into(), value.flags.into()),
-                ("r".into(), value.r.into()),
-                ("stream_id".into(), u64::from(value.stream_id).into()),
-                ("error_code".into(), u64::from(value.error_code).into()),
-            ])),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Http2SettingsFrameOutput {
     pub flags: Http2FrameFlag,
     pub ack: bool,
@@ -761,46 +629,13 @@ impl Http2SettingsFrameOutput {
     }
 }
 
-impl From<Http2SettingsFrameOutput> for Value {
-    fn from(value: Http2SettingsFrameOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("flags".into(), value.flags.into()),
-                ("ack".into(), value.ack.into()),
-                ("r".into(), value.r.into()),
-                ("stream_id".into(), u64::from(value.stream_id).into()),
-                (
-                    "parameters".into(),
-                    value
-                        .parameters
-                        .into_iter()
-                        .map(|p| p.into())
-                        .collect::<Vec<Http2SettingsParameterOutput>>()
-                        .into(),
-                ),
-            ])),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Http2SettingsParameterOutput {
     pub id: Http2SettingsParameterId,
     pub value: u32,
 }
 
-impl From<Http2SettingsParameterOutput> for Value {
-    fn from(value: Http2SettingsParameterOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("id".into(), value.id.into()),
-                ("value".into(), u64::from(value.value).into()),
-            ])),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Http2PushPromiseFrameOutput {
     pub flags: Http2FrameFlag,
     pub r: bool,
@@ -864,30 +699,7 @@ impl Http2PushPromiseFrameOutput {
     }
 }
 
-impl From<Http2PushPromiseFrameOutput> for Value {
-    fn from(value: Http2PushPromiseFrameOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("flags".into(), value.flags.into()),
-                ("end_headers".into(), value.end_headers().into()),
-                ("r".into(), value.r.into()),
-                ("stream_id".into(), u64::from(value.stream_id).into()),
-                ("promised_r".into(), value.promised_r.into()),
-                (
-                    "promised_stream_id".into(),
-                    u64::from(value.promised_stream_id).into(),
-                ),
-                (
-                    "header_block_fragment".into(),
-                    value.header_block_fragment.into(),
-                ),
-                ("padding".into(), value.padding.into()),
-            ])),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Http2PingFrameOutput {
     pub flags: Http2FrameFlag,
     pub ack: bool,
@@ -915,21 +727,7 @@ impl Http2PingFrameOutput {
     }
 }
 
-impl From<Http2PingFrameOutput> for Value {
-    fn from(value: Http2PingFrameOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("flags".into(), value.flags.into()),
-                ("ack".into(), value.ack.into()),
-                ("r".into(), value.r.into()),
-                ("stream_id".into(), u64::from(value.stream_id).into()),
-                ("data".into(), value.data.into()),
-            ])),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Http2GoawayFrameOutput {
     pub flags: Http2FrameFlag,
     pub r: bool,
@@ -963,26 +761,7 @@ impl Http2GoawayFrameOutput {
     }
 }
 
-impl From<Http2GoawayFrameOutput> for Value {
-    fn from(value: Http2GoawayFrameOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("flags".into(), value.flags.into()),
-                ("r".into(), value.r.into()),
-                ("stream_id".into(), u64::from(value.stream_id).into()),
-                ("last_r".into(), value.last_r.into()),
-                (
-                    "last_stream_id".into(),
-                    u64::from(value.last_stream_id).into(),
-                ),
-                ("error_code".into(), u64::from(value.error_code).into()),
-                ("debug_data".into(), value.debug_data.into()),
-            ])),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Http2WindowUpdateFrameOutput {
     pub flags: Http2FrameFlag,
     pub r: bool,
@@ -1012,24 +791,7 @@ impl Http2WindowUpdateFrameOutput {
     }
 }
 
-impl From<Http2WindowUpdateFrameOutput> for Value {
-    fn from(value: Http2WindowUpdateFrameOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("flags".into(), value.flags.into()),
-                ("r".into(), value.r.into()),
-                ("stream_id".into(), u64::from(value.stream_id).into()),
-                ("window_r".into(), value.window_r.into()),
-                (
-                    "window_size_increment".into(),
-                    u64::from(value.window_size_increment).into(),
-                ),
-            ])),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Http2ContinuationFrameOutput {
     pub flags: Http2FrameFlag,
     pub end_headers: bool,
@@ -1057,24 +819,7 @@ impl Http2ContinuationFrameOutput {
     }
 }
 
-impl From<Http2ContinuationFrameOutput> for Value {
-    fn from(value: Http2ContinuationFrameOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("flags".into(), value.flags.into()),
-                ("end_headers".into(), value.end_headers.into()),
-                ("r".into(), value.r.into()),
-                ("stream_id".into(), u64::from(value.stream_id).into()),
-                (
-                    "header_block_fragment".into(),
-                    value.header_block_fragment.into(),
-                ),
-            ])),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Http2GenericFrameOutput {
     pub r#type: Http2FrameType,
     pub flags: Http2FrameFlag,
@@ -1098,21 +843,7 @@ impl Http2GenericFrameOutput {
     }
 }
 
-impl From<Http2GenericFrameOutput> for Value {
-    fn from(value: Http2GenericFrameOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("type".into(), u64::from(value.r#type.value()).into()),
-                ("flags".into(), value.flags.into()),
-                ("r".into(), value.r.into()),
-                ("stream_id".into(), u64::from(value.stream_id).into()),
-                ("payload".into(), value.payload.into()),
-            ])),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RawHttp2Output {
     pub plan: RawHttp2PlanOutput,
     pub sent: Vec<Http2FrameOutput>,
@@ -1121,19 +852,7 @@ pub struct RawHttp2Output {
     pub duration: Duration,
 }
 
-impl From<RawHttp2Output> for Value {
-    fn from(value: RawHttp2Output) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("plan".into(), value.plan.into()),
-                ("errors".into(), value.errors.into()),
-                ("duration".into(), value.duration.into()),
-            ])),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RawHttp2PlanOutput {
     pub host: String,
     pub port: u16,
@@ -1141,33 +860,10 @@ pub struct RawHttp2PlanOutput {
     pub frames: Vec<Http2FrameOutput>,
 }
 
-impl From<RawHttp2PlanOutput> for Value {
-    fn from(value: RawHttp2PlanOutput) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("host".into(), value.host.to_string().into()),
-                ("port".into(), u64::from(value.port).into()),
-                //("preamble".into(), value.preamble.into()),
-            ])),
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RawHttp2Error {
     pub kind: String,
     pub message: String,
-}
-
-impl From<RawHttp2Error> for Value {
-    fn from(value: RawHttp2Error) -> Self {
-        Value::Map(Map {
-            map: Rc::new(HashMap::from([
-                ("kind".into(), value.kind.into()),
-                ("message".into(), value.message.into()),
-            ])),
-        })
-    }
 }
 
 fn to_u31(r: bool, val: u32) -> u32 {

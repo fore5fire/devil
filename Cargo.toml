@@ -12,9 +12,9 @@ tokio = { version = "1", features = ["full"] }
 bytes = "1"
 futures = "0.3.26"
 toml = { version = "0.8.6", features = ["preserve_order", "indexmap"] }
-serde = { version = "1.0.190", features = ["serde_derive"] }
+serde = { version = "1.0.190", features = ["rc", "serde_derive"] }
 indexmap = { version = "2.1.0", features = ["serde"] }
-cel-interpreter = "0.8.1"
+cel-interpreter = { git = "https://github.com/fore5fire/cel-rust", branch = "serde-datetime" }
 frunk = { version = "0.4.2", features = ["serde"] }
 frunk_core = "0.4.2"
 serde_json = { version = "1.0.108", features = ["indexmap", "arbitrary_precision", "preserve_order", "unbounded_depth"] }
@@ -22,7 +22,7 @@ rustls = "0.22.1"
 tokio-rustls = "0.25.0"
 webpki-roots = "=0.26.0"
 clap = { version = "4.4.8", features = ["derive"] }
-chrono = { git = "https://github.com/chronotope/chrono", features = ["serde"] } 
+chrono = "0.4.31" 
 url = { version = "2.4.1", features = ["serde"] }
 go-parse-duration = "0.1.1"
 base64 = "0.21.5"
