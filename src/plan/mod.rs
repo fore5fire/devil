@@ -1562,198 +1562,171 @@ where
     }
 }
 
-impl TryFrom<bindings::Value> for PlanValue<String> {
-    type Error = Error;
-    fn try_from(binding: bindings::Value) -> Result<Self> {
-        match binding {
-            bindings::Value::Literal(Literal::String(x)) => Ok(Self::Literal(x)),
-            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
+impl<T> TryFrom<bindings::Value> for PlanValue<T, <T as TryFromPlanData>::Error> where 
+    T: TryFrom<Literal, Error = crate::Error> + TryFromPlanData + Clone {
+    type Error = crate::Error;
+    fn try_from(value: bindings::Value) -> std::result::Result<Self, Self::Error> {
+        match value {
+            bindings::Value::Literal(l) => Ok(PlanValue::Literal(T::try_from(l)?)),
+            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic { 
                 cel,
                 vars: vars.unwrap_or_default().into_iter().collect(),
             }),
+            bindings::Value::ExpressionVars { .. } => bail!("missing cel field"),
+            bindings::Value::Unset { .. } => bail!("missing cel field"),
+        }
+    }
+}
+
+impl TryFrom<Literal> for String {
+    type Error = Error;
+    fn try_from(binding: Literal) -> Result<Self> {
+        match binding {
+            Literal::String(x) => Ok(x),
             _ => bail!(format!("invalid type {binding:?} for string field")),
         }
     }
 }
-impl TryFrom<bindings::Value> for PlanValue<u8> {
+impl TryFrom<Literal> for u8 {
     type Error = Error;
-    fn try_from(binding: bindings::Value) -> Result<Self> {
+    fn try_from(binding: Literal) -> Result<Self> {
         match binding {
-            bindings::Value::Literal(Literal::Int(x)) => {
-                Ok(Self::Literal(x.try_into().map_err(|_| {
+            Literal::Int(x) => {
+                Ok(x.try_into().map_err(|_| {
                     anyhow!("out-of-bounds unsigned 8 bit integer literal")
-                })?))
+                })?)
             }
-            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
-                cel,
-                vars: vars.unwrap_or_default().into_iter().collect(),
-            }),
             _ => bail!("invalid type {binding:?} for unsigned 8 bit integer field"),
         }
     }
 }
-impl TryFrom<bindings::Value> for PlanValue<u16> {
+impl TryFrom<Literal> for u16 {
     type Error = Error;
-    fn try_from(binding: bindings::Value) -> Result<Self> {
+    fn try_from(binding: Literal) -> Result<Self> {
         match binding {
-            bindings::Value::Literal(Literal::Int(x)) => {
-                Ok(Self::Literal(x.try_into().map_err(|_| {
+            Literal::Int(x) => {
+                Ok(x.try_into().map_err(|_| {
                     anyhow!("out-of-bounds unsigned 16 bit integer literal")
-                })?))
+                })?)
             }
-            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
-                cel,
-                vars: vars.unwrap_or_default().into_iter().collect(),
-            }),
             _ => bail!("invalid type {binding:?} for unsigned 16 bit integer field"),
         }
     }
 }
-impl TryFrom<bindings::Value> for PlanValue<u32> {
+impl TryFrom<Literal> for u32 {
     type Error = Error;
-    fn try_from(binding: bindings::Value) -> Result<Self> {
+    fn try_from(binding: Literal) -> Result<Self> {
         match binding {
-            bindings::Value::Literal(Literal::Int(x)) => {
-                Ok(Self::Literal(x.try_into().map_err(|_| {
+            Literal::Int(x) => {
+                Ok(x.try_into().map_err(|_| {
                     anyhow!("out-of-bounds unsigned 32 bit integer literal")
-                })?))
+                })?)
             }
-            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
-                cel,
-                vars: vars.unwrap_or_default().into_iter().collect(),
-            }),
             _ => bail!("invalid type {binding:?} for unsigned 32 bit integer field"),
         }
     }
 }
-impl TryFrom<bindings::Value> for PlanValue<u64> {
+impl TryFrom<Literal> for u64 {
     type Error = Error;
-    fn try_from(binding: bindings::Value) -> Result<Self> {
+    fn try_from(binding: Literal) -> Result<Self> {
         match binding {
-            bindings::Value::Literal(Literal::Int(x)) => {
-                Ok(Self::Literal(x.try_into().map_err(|_| {
+            Literal::Int(x) => {
+                Ok(x.try_into().map_err(|_| {
                     anyhow!("out-of-bounds unsigned 64 bit integer literal")
-                })?))
+                })?)
             }
-            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
-                cel,
-                vars: vars.unwrap_or_default().into_iter().collect(),
-            }),
             _ => bail!("invalid type {binding:?} for unsigned 64 bit integer field"),
         }
     }
 }
-impl TryFrom<bindings::Value> for PlanValue<i64> {
+impl TryFrom<Literal> for i64 {
     type Error = Error;
-    fn try_from(binding: bindings::Value) -> Result<Self> {
+    fn try_from(binding: Literal) -> Result<Self> {
         match binding {
-            bindings::Value::Literal(Literal::Int(x)) => {
-                Ok(Self::Literal(x.try_into().map_err(|_| {
+            Literal::Int(x) => {
+                Ok(x.try_into().map_err(|_| {
                     anyhow!("out-of-bounds signed 64 bit integer literal".to_owned())
-                })?))
+                })?)
             }
-            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
-                cel,
-                vars: vars.unwrap_or_default().into_iter().collect(),
-            }),
             _ => bail!("invalid type {binding:?} for signed 64 bit integer field"),
         }
     }
 }
-impl TryFrom<bindings::Value> for PlanValue<usize> {
+impl TryFrom<Literal> for usize {
     type Error = Error;
-    fn try_from(binding: bindings::Value) -> Result<Self> {
+    fn try_from(binding: Literal) -> Result<Self> {
         match binding {
-            bindings::Value::Literal(Literal::Int(x)) => {
-                Ok(Self::Literal(x.try_into().map_err(|_| {
+            Literal::Int(x) => {
+                Ok(x.try_into().map_err(|_| {
                     anyhow!("out-of-bounds unsigned 64 bit integer literal")
-                })?))
+                })?)
             }
-            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
-                cel,
-                vars: vars.unwrap_or_default().into_iter().collect(),
-            }),
             _ => bail!("invalid type {binding:?} for unsigned 64 bit integer field"),
         }
     }
 }
-impl TryFrom<bindings::Value> for PlanValue<bool> {
+impl TryFrom<Literal> for bool {
     type Error = Error;
-    fn try_from(binding: bindings::Value) -> Result<Self> {
+    fn try_from(binding: Literal) -> Result<Self> {
         match binding {
-            bindings::Value::Literal(Literal::Bool(x)) => Ok(Self::Literal(x)),
-            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
-                cel,
-                vars: vars.unwrap_or_default().into_iter().collect(),
-            }),
+            Literal::Bool(x) => Ok(x),
             _ => bail!("invalid type {binding:?} for boolean field"),
         }
     }
 }
-impl TryFrom<bindings::Value> for PlanValue<Vec<u8>> {
+impl TryFrom<Literal> for Vec<u8> {
     type Error = Error;
-    fn try_from(binding: bindings::Value) -> Result<Self> {
+    fn try_from(binding: Literal) -> Result<Self> {
         match binding {
-            bindings::Value::Literal(Literal::String(x)) => Ok(PlanValue::Literal(x.into_bytes())),
-            bindings::Value::Literal(Literal::Base64 { base64: data }) => Ok(Self::Literal(
+            Literal::String(x) => Ok(x.into_bytes()),
+            Literal::Base64 { base64: data } => Ok(
                 base64::prelude::BASE64_STANDARD_NO_PAD
                     .decode(data)
                     .map_err(|e| anyhow!("base64 decode: {e}"))?,
-            )),
-            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
-                cel,
-                vars: vars.unwrap_or_default().into_iter().collect(),
-            }),
+            ),
             _ => bail!("invalid type {binding:?} for bytes field"),
         }
     }
 }
-impl TryFrom<bindings::Value> for PlanValue<Duration> {
+impl TryFrom<Literal> for Duration {
     type Error = Error;
-    fn try_from(binding: bindings::Value) -> Result<Self> {
+    fn try_from(binding: Literal) -> Result<Self> {
         match binding {
-            bindings::Value::Literal(Literal::String(x)) => Ok(Self::Literal(
+            Literal::String(x) => Ok(
                 parse_duration(x.as_str())
-                    .map(Duration::nanoseconds)
+                    .map(TimeDelta::nanoseconds)
+                    .map(Duration)
                     .map_err(|e| anyhow!("invalid duration string: {e:?}"))?,
-            )),
-            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
-                cel,
-                vars: vars.unwrap_or_default().into_iter().collect(),
-            }),
+            ),
             _ => bail!("invalid type {binding:?} for duration field"),
         }
     }
 }
 
-impl TryFrom<bindings::Value> for PlanValue<Regex> {
+impl TryFrom<Literal> for Regex {
     type Error = Error;
-    fn try_from(binding: bindings::Value) -> Result<Self> {
+    fn try_from(binding: Literal) -> Result<Self> {
         match binding {
-            bindings::Value::Literal(Literal::String(x)) => Ok(Self::Literal(
+            Literal::String(x) => Ok(
                 Regex::new(x)?,
-            )),
-            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
-                cel,
-                vars: vars.unwrap_or_default().into_iter().collect(),
-            }),
+            ),
             _ => bail!("invalid type {binding:?} for regex"),
         }
     }
 }
 
-impl TryFrom<bindings::Value> for PlanValue<TcpSegmentOptionOutput> {
+impl TryFrom<Literal> for TcpSegmentOptionOutput {
     type Error = Error;
-    fn try_from(binding: bindings::Value) -> Result<Self> {
+    fn try_from(binding: Literal) -> Result<Self> {
         match binding {
-            bindings::Value::Literal(Literal::Enum { kind, mut fields }) => match kind {
+            Literal::Enum { kind, mut fields } => match kind {
                 EnumKind::Named(kind) if kind.as_str() == TcpSegmentOptionOutput::NOP_KIND => {
-                    Ok(PlanValue::Literal(TcpSegmentOptionOutput::Nop))
+                    Ok(TcpSegmentOptionOutput::Nop)
                 }
                 EnumKind::Named(kind)
                     if kind.as_str() == TcpSegmentOptionOutput::TIMESTAMPS_KIND =>
                 {
-                    Ok(PlanValue::Literal(TcpSegmentOptionOutput::Timestamps {
+                    Ok(TcpSegmentOptionOutput::Timestamps {
                         tsval: fields
                             .remove(TcpSegmentOptionOutput::TSVAL_KEY)
                             .map(|val| {
@@ -1781,10 +1754,10 @@ impl TryFrom<bindings::Value> for PlanValue<TcpSegmentOptionOutput> {
                                     "tsecr is required for tcp segment option 'timestamps'"
                                 )
                             )??,
-                    }))
+                    })
                 }
                 EnumKind::Named(kind) if kind.as_str() == TcpSegmentOptionOutput::MSS_KIND => {
-                    Ok(PlanValue::Literal(TcpSegmentOptionOutput::Mss(fields
+                    Ok(TcpSegmentOptionOutput::Mss(fields
                         .remove(TcpSegmentOptionOutput::VALUE_KEY)
                         .map(|val| {
                             let ValueOrArray::Value(Literal::Int(i)) = val else {
@@ -1796,10 +1769,10 @@ impl TryFrom<bindings::Value> for PlanValue<TcpSegmentOptionOutput> {
                             anyhow!(
                                 "value is required for tcp segment option 'mss'"
                             )
-                        )??)))
+                        )??))
                 }
                 EnumKind::Named(kind) if kind.as_str() == TcpSegmentOptionOutput::WSCALE_KIND => {
-                    Ok(PlanValue::Literal(TcpSegmentOptionOutput::Wscale(fields
+                    Ok(TcpSegmentOptionOutput::Wscale(fields
                         .remove(TcpSegmentOptionOutput::VALUE_KEY)
                         .map(|val| {
                             let ValueOrArray::Value(Literal::Int(i)) = val else {
@@ -1811,15 +1784,15 @@ impl TryFrom<bindings::Value> for PlanValue<TcpSegmentOptionOutput> {
                             anyhow!(
                                 "value is required for tcp segment option 'wscale'"
                             )
-                        )??)))
+                        )??))
                 }
                 EnumKind::Named(kind)
                     if kind.as_str() == TcpSegmentOptionOutput::SACK_PERMITTED_KIND =>
                 {
-                    Ok(PlanValue::Literal(TcpSegmentOptionOutput::SackPermitted))
+                    Ok(TcpSegmentOptionOutput::SackPermitted)
                 }
                 EnumKind::Named(kind) if kind.as_str() == TcpSegmentOptionOutput::SACK_KIND => {
-                    Ok(PlanValue::Literal(TcpSegmentOptionOutput::Sack(fields
+                    Ok(TcpSegmentOptionOutput::Sack(fields
                         .remove(TcpSegmentOptionOutput::VALUE_KEY)
                         .map(|val| {
                             let ValueOrArray::Array(array) = val else {
@@ -1836,9 +1809,9 @@ impl TryFrom<bindings::Value> for PlanValue<TcpSegmentOptionOutput> {
                             anyhow!(
                                 "value is required for tcp segment option 'sack'"
                             )
-                        )???)))
+                        )???))
                 }
-                EnumKind::Numeric(kind) => Ok(PlanValue::Literal(TcpSegmentOptionOutput::Generic {
+                EnumKind::Numeric(kind) => Ok(TcpSegmentOptionOutput::Generic {
                     kind: u8::try_from(kind)?,
                     value: fields
                         .remove(TcpSegmentOptionOutput::VALUE_KEY)
@@ -1856,16 +1829,24 @@ impl TryFrom<bindings::Value> for PlanValue<TcpSegmentOptionOutput> {
                                 "value is required for raw tcp segment option"
                             )
                         })??,
-                })),
+                }),
                 _ => bail!(
                     "invalid kind '{:?}' for tcp segment option",
                     kind
                 ),
             },
-            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
-                cel,
-                vars: vars.unwrap_or_default().into_iter().collect(),
-            }),
+            _ => bail!(
+                "invalid value {binding:?} for tcp segment option field"
+            ),
+        }
+    }
+}
+
+impl TryFrom<Literal> for ProtocolField {
+    type Error = Error;
+    fn try_from(binding: Literal) -> Result<Self> {
+        match binding {
+            Literal::String(x) => Ok(x.parse()?),
             _ => bail!(
                 "invalid value {binding:?} for tls version field"
             ),
@@ -1873,42 +1854,22 @@ impl TryFrom<bindings::Value> for PlanValue<TcpSegmentOptionOutput> {
     }
 }
 
-impl TryFrom<bindings::Value> for PlanValue<ProtocolField> {
+impl TryFrom<Literal> for Parallelism {
     type Error = Error;
-    fn try_from(binding: bindings::Value) -> Result<Self> {
+    fn try_from(binding: Literal) -> Result<Self> {
         match binding {
-            bindings::Value::Literal(Literal::String(x)) => Ok(Self::Literal(x.parse()?)),
-            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
-                cel,
-                vars: vars.unwrap_or_default().into_iter().collect(),
-            }),
-            _ => bail!(
-                "invalid value {binding:?} for tls version field"
-            ),
-        }
-    }
-}
-
-impl TryFrom<bindings::Value> for PlanValue<Parallelism> {
-    type Error = Error;
-    fn try_from(binding: bindings::Value) -> Result<Self> {
-        match binding {
-            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
-                cel,
-                vars: vars.unwrap_or_default().into_iter().collect(),
-            }),
-            bindings::Value::Literal(Literal::String(x)) => Ok(Self::Literal(x.parse()?)),
-            bindings::Value::Literal(Literal::Bool(b)) if b => {
-                Ok(Self::Literal(Parallelism::Parallel(Semaphore::MAX_PERMITS)))
+            Literal::String(x) => Ok(x.parse()?),
+            Literal::Bool(b) if b => {
+                Ok(Parallelism::Parallel(Semaphore::MAX_PERMITS))
             }
-            bindings::Value::Literal(Literal::Bool(_)) => Ok(Self::Literal(Parallelism::Serial)),
-            bindings::Value::Literal(Literal::Int(i)) => Ok(Self::Literal(Parallelism::Parallel(
+            Literal::Bool(_) => Ok(Parallelism::Serial),
+            Literal::Int(i) => Ok(Parallelism::Parallel(
                 i.try_into().map_err(|_| {
                     anyhow!(
                         "parallelism value {i} must fit in platform word size"
                     )
                 })?,
-            ))),
+            )),
             val => bail!(
                 "invalid value {val:?} for field run.parallel"
             ),
@@ -1916,43 +1877,35 @@ impl TryFrom<bindings::Value> for PlanValue<Parallelism> {
     }
 }
 
-impl TryFrom<bindings::Value> for PlanValue<Url> {
+impl TryFrom<Literal> for Url {
     type Error = Error;
-    fn try_from(binding: bindings::Value) -> Result<Self> {
+    fn try_from(binding: Literal) -> Result<Self> {
         match binding {
-            bindings::Value::Literal(Literal::String(x)) => Ok(Self::Literal(
+            Literal::String(x) => Ok(
                 Url::parse(&x)?,
-            )),
-            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
-                cel,
-                vars: vars.unwrap_or_default().into_iter().collect(),
-            }),
+            ),
             _ => bail!("invalid value {binding:?} for url field"),
         }
     }
 }
 
-impl TryFrom<bindings::Value> for PlanValue<serde_json::Value> {
+impl TryFrom<Literal> for serde_json::Value {
     type Error = Error;
-    fn try_from(binding: bindings::Value) -> Result<Self> {
+    fn try_from(binding: Literal) -> Result<Self> {
         match binding {
-            bindings::Value::Literal(Literal::String(x)) => Ok(Self::Literal(x.into())),
-            bindings::Value::Literal(Literal::Int(x)) => Ok(Self::Literal(x.into())),
-            bindings::Value::Literal(Literal::Float(x)) => Ok(Self::Literal(x.into())),
-            bindings::Value::Literal(Literal::Bool(x)) => Ok(Self::Literal(x.into())),
-            bindings::Value::Literal(Literal::Toml { literal: x }) => Ok(Self::Literal(
+            Literal::String(x) => Ok(x.into()),
+            Literal::Int(x) => Ok(x.into()),
+            Literal::Float(x) => Ok(x.into()),
+            Literal::Bool(x) => Ok(x.into()),
+            Literal::Toml { literal: x } => Ok(
                 serde_json::to_value(x)?,
-            )),
-            bindings::Value::Literal(Literal::Base64 { base64 }) => Ok(Self::Literal(
+            ),
+            Literal::Base64 { base64 } => Ok(
                 base64::prelude::BASE64_STANDARD_NO_PAD
                     .decode(base64)
                     .map_err(|e| anyhow!("base64 decode: {}", e))?
                     .into(),
-            )),
-            bindings::Value::ExpressionCel { cel, vars } => Ok(Self::Dynamic {
-                cel,
-                vars: vars.unwrap_or_default().into_iter().collect(),
-            }),
+            ),
             _ => bail!("invalid value {binding:?} for json field"),
         }
     }
