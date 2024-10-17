@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BinaryHeap},
+    collections::{BinaryHeap, HashMap},
     mem,
     sync::Arc,
     time::Duration,
@@ -14,7 +14,7 @@ use tokio::{
     task::AbortHandle,
 };
 
-use crate::{output, LocationOutput, PauseValueOutput, SignalKind, SignalValueOutput, SyncOutput};
+use crate::{output, LocationOutput, PauseValueOutput, SignalOp, SignalValueOutput, SyncOutput};
 
 #[derive(Debug)]
 pub(super) struct StepLocations {
@@ -34,19 +34,10 @@ impl StepLocations {
             .into_iter()
             .map(|(name, sync)| (name, Some(Synchronizer::new(sync))))
             .collect_vec();
-        let mut grouped = BTreeMap::<LocationOutput, Vec<Action>>::new();
-        let signals = signals.into_iter().map(|(name, mut signal)| {
-            (
-                mem::replace(
-                    &mut signal.location,
-                    LocationOutput::Before {
-                        id: String::new(),
-                        offset_bytes: 0,
-                    },
-                ),
-                Action::with_signal(name, signal, &syncs),
-            )
-        });
+        let mut grouped = HashMap::<LocationOutput, Vec<Action>>::new();
+        let signals = signals
+            .into_iter()
+            .map(|(name, signal)| (signal.location, Action::with_signal(name, signal, &syncs)));
         let pauses = pauses.into_iter().map(|(name, pause)| {
             let a = Action::with_pause(name, &pause, &syncs);
             (pause.location, a)
@@ -58,6 +49,7 @@ impl StepLocations {
             .into_iter()
             .map(|(location, actions)| StepLocation { location, actions })
             .partition(|step_loc| matches!(step_loc.location, LocationOutput::Before { .. }));
+        // TODO: sort locations.
         Self {
             syncs,
             send_locations,
@@ -75,7 +67,7 @@ struct StepLocation {
 #[derive(Debug)]
 enum ActionKind {
     Signal {
-        kind: SignalKind,
+        op: SignalOp,
         target: usize,
     },
     Pause {
@@ -99,7 +91,7 @@ impl Action {
         Self {
             name,
             kind: ActionKind::Signal {
-                kind: out.kind,
+                op: out.op,
                 target: syncs
                     .iter()
                     .position(|(name, _)| name == out.target.as_str())
@@ -118,6 +110,7 @@ impl Action {
             kind: ActionKind::Pause {
                 duration: out
                     .duration
+                    .0
                     .to_std()
                     .expect("pause duration should be non-negative"),
                 target: out.r#await.as_ref().map(|target| {
@@ -191,37 +184,36 @@ impl Action {
                     pause.await;
                 }
             }
-            ActionKind::Signal { kind, target: i } => {
+            ActionKind::Signal { op, target: i } => {
                 let target =
                     mem::take(&mut syncs[*i].1).expect("sync should be replaced between actions");
-                syncs[*i].1 = Some(match (target, kind) {
-                    (Synchronizer::Mutex(s, Some(_)), SignalKind::Unlock) => {
+                syncs[*i].1 = Some(match (target, op) {
+                    (Synchronizer::Mutex(s, Some(_)), SignalOp::Unlock) => {
                         Synchronizer::Mutex(s, None)
                     }
-                    (Synchronizer::Semaphore(s, Some(_)), SignalKind::Release) => {
+                    (Synchronizer::Semaphore(s, Some(_)), SignalOp::Release) => {
                         Synchronizer::Semaphore(s, None)
                     }
                     (
                         Synchronizer::PriorityMutex(s, PriorityState::Unregistered),
-                        SignalKind::Register { priority },
+                        SignalOp::Register { priority },
                     ) => {
                         let r = s.register(*priority);
                         Synchronizer::PriorityMutex(s, PriorityState::Registered(r))
                     }
-                    (
-                        Synchronizer::PriorityMutex(s, PriorityState::Held(_)),
-                        SignalKind::Unlock,
-                    ) => Synchronizer::PriorityMutex(s, PriorityState::Unregistered),
+                    (Synchronizer::PriorityMutex(s, PriorityState::Held(_)), SignalOp::Unlock) => {
+                        Synchronizer::PriorityMutex(s, PriorityState::Unregistered)
+                    }
                     (
                         Synchronizer::PrioritySemaphore(s, PriorityState::Unregistered),
-                        SignalKind::Register { priority },
+                        SignalOp::Register { priority },
                     ) => {
                         let r = s.register(*priority);
                         Synchronizer::PrioritySemaphore(s, PriorityState::Registered(r))
                     }
                     (
                         Synchronizer::PrioritySemaphore(s, PriorityState::Held(_)),
-                        SignalKind::Release,
+                        SignalOp::Release,
                     ) => Synchronizer::PrioritySemaphore(s, PriorityState::Unregistered),
                     (target, kind) => {
                         bail!(

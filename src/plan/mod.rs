@@ -9,14 +9,15 @@ mod tcp;
 mod raw_tcp;
 mod udp;
 mod quic;
+pub mod location;
 
 pub use graphql::*;
 pub use http::*;
 pub use http1::*;
+use location::{HttpLocation, Side};
 pub use raw_http2::*;
 pub use http2::*;
 pub use http3::*;
-use serde::Serialize;
 pub use tls::*;
 pub use udp::*;
 pub use quic::*;
@@ -25,7 +26,7 @@ pub use raw_tcp::*;
 
 use crate::bindings::{EnumKind, Literal, ValueOrArray};
 use crate::{
-    bindings, cel_functions, Error, LocationOutput, Regex, Result, State, StepPlanOutput, TcpSegmentOptionOutput, 
+    bindings, cel_functions, Error, LocationOutput, LocationValueOutput, Regex, Result, SignalOp, State, StepPlanOutput, TcpSegmentOptionOutput 
 };
 use anyhow::{anyhow, bail};
 use base64::Engine;
@@ -34,6 +35,7 @@ use chrono::{NaiveDateTime, TimeDelta, TimeZone};
 use go_parse_duration::parse_duration;
 use indexmap::IndexMap;
 use itertools::Itertools;
+use serde::Serialize;
 use std::convert::Infallible;
 use std::fmt::Display;
 use std::str::FromStr;
@@ -97,11 +99,68 @@ pub enum HttpVersion {
 }
 
 #[derive(Debug, Clone)]
+pub struct LocationValue {
+    id: PlanValue<location::Location>,
+    offset_bytes: PlanValue<Option<usize>>,
+}
+
+impl TryFrom<bindings::LocationValue> for LocationValue {
+    type Error = Error;
+    fn try_from(binding: bindings::LocationValue) -> Result<Self> {
+        Ok(Self {
+            id: binding.id.map(PlanValue::try_from).ok_or_else(|| anyhow!("location id is required"))??,
+            offset_bytes: binding.offset_bytes.try_into()?,
+        })
+    }
+}
+
+
+impl Evaluate<LocationValueOutput> for LocationValue {
+fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<LocationValueOutput>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O> {
+    Ok(LocationValueOutput {
+        id: self.id.evaluate(state)?,
+        offset_bytes: self.offset_bytes.evaluate(state)?.unwrap_or_default(),
+    })
+}
+}
+
+#[derive(Debug, Clone)]
+pub enum Location {
+    Before(LocationValue),
+    After(LocationValue),
+}
+
+impl Location {
+    fn from_bindings(before: Option<bindings::LocationValue>, after: Option<bindings::LocationValue>) -> Result<Self> {
+        match (before, after) {
+            (Some(loc), None) => Ok(Self::Before(loc.try_into()?)),
+            (None, Some(loc)) => Ok(Self::After(loc.try_into()?)),
+            _ => bail!("exactly one of before or after is required")
+        }
+    }
+}
+
+impl Evaluate<LocationOutput> for Location {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<LocationOutput>
+        where
+            S: State<'a, O, I>,
+            O: Into<&'a str>,
+            I: IntoIterator<Item = O> {
+                match self {
+                    Self::Before(loc) => Ok(LocationOutput::Before(loc.evaluate(state)?)),
+                    Self::After(loc) => Ok(LocationOutput::After(loc.evaluate(state)?)),
+                }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct PauseValue {
-    pub before: PlanValue<Option<String>>,
-    pub after: PlanValue<Option<String>>,
+    pub location: Location,
     pub duration: PlanValue<Option<Duration>>,
-    pub offset_bytes: PlanValue<Option<i64>>,
     pub r#await: PlanValue<Option<String>>,
 }
 
@@ -109,10 +168,8 @@ impl TryFrom<bindings::PauseValue> for PauseValue {
     type Error = Error;
     fn try_from(binding: bindings::PauseValue) -> Result<Self> {
         Ok(Self {
-            before: binding.before.try_into()?,
-            after: binding.after.try_into()?,
+            location: Location::from_bindings(binding.before, binding.after)?,
             duration: binding.duration.try_into()?,
-            offset_bytes: binding.offset_bytes.try_into()?,
             r#await: binding.r#await.try_into()?,
         })
     }
@@ -125,30 +182,18 @@ impl Evaluate<crate::PauseValueOutput> for PauseValue {
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
-        let before = self.before.evaluate(state)?;
-        let after = self.after.evaluate(state)?;
-        if before.is_some() && after.is_some() {
-            bail!("only one of pause.before and pause.after may be set");
-        }
-        let location = match (before, after) {
-            (None, None) => bail!("one of pause.before and pause.after is required"),
-            (Some(b), None) => LocationOutput::Before(b),
-            (None, Some(a)) => LocationOutput::After(a),
-            (Some(_), Some(_)) => bail!("one of pause.before and pause.after is required"),
-        };
         let out = crate::PauseValueOutput {
-            location,
+            location: self.location.evaluate(state)?,
             duration: self.duration.evaluate(state)?.unwrap_or_default(),
-            offset_bytes: self.offset_bytes.evaluate(state)?.unwrap_or_default(),
             r#await: self.r#await.evaluate(state)?,
         };
-        match out.location.id() {
-            "response_headers.end" if out.offset_bytes == 0  => {
+        match out.location.value().id {
+            location::Location::Http(HttpLocation::ResponseHeaders, Side::End) if out.location.value().offset_bytes < 0 => {
                 bail!(
                     "http.pause.response_headers.end with negative offset is not supported"
                 );
             }
-            "resp.response_body" if out.offset_bytes == 0 => {
+            location::Location::Http(HttpLocation::ResponseHeaders, Side::Start) if out.location.value().offset_bytes < 0 => {
                 bail!(
                     "http.pause.response_headers.start with negative offset is not supported"
                 );
@@ -160,20 +205,18 @@ impl Evaluate<crate::PauseValueOutput> for PauseValue {
 
 #[derive(Debug, Clone)]
 pub struct SignalValue {
-    pub before: PlanValue<Option<String>>,
-    pub after: PlanValue<Option<String>>,
-    pub target: PlanValue<Option<String>>,
-    pub offset_bytes: PlanValue<Option<String>>,
+    pub target: PlanValue<String>,
+    pub op: PlanValue<SignalOp>,
+    pub location: Location,
 }
 
 impl TryFrom<bindings::SignalValue> for SignalValue {
     type Error = Error;
     fn try_from(binding: bindings::SignalValue) -> Result<Self> {
         Ok(Self {
-            before: binding.before.try_into()?,
-            after: binding.after.try_into()?,
-            target: binding.target.try_into()?,
-            offset_bytes: binding.offset_bytes.try_into()?,
+            target: binding.target.map(PlanValue::try_from).ok_or_else(|| anyhow!("signal target is required"))??,
+            op: binding.op.map(PlanValue::try_from).ok_or_else(|| anyhow!("signal op is required"))??,
+            location: Location::from_bindings(binding.before, binding.after)?,
         })
     }
 }
@@ -185,29 +228,18 @@ impl Evaluate<crate::SignalValueOutput> for SignalValue {
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
-        let before = self.before.evaluate(state)?;
-        let after = self.after.evaluate(state)?;
-        if before.is_some() && after.is_some() {
-            bail!("only one of pause.before and pause.after may be set");
-        }
-        let location = match (before, after) {
-            (None, None) => bail!("one of pause.before and pause.after is required"),
-            (Some(b), None) => LocationOutput::Before(b),
-            (None, Some(a)) => LocationOutput::After(a),
-            (Some(_), Some(_)) => bail!("one of pause.before and pause.after is required"),
-        };
         let out = crate::SignalValueOutput {
-            location,
-            target: self.target.evaluate(state)?.unwrap_or_default(),
-            offset_bytes: self.offset_bytes.evaluate(state)?.unwrap_or_default(),
+            target: self.target.evaluate(state)?,
+            op: self.op.evaluate(state)?,
+            location: self.location.evaluate(state)?,
         };
-        match out.location.id() {
-            "response_headers.end" if out.offset_bytes == 0  => {
+        match out.location.value().id {
+            location::Location::Http(HttpLocation::ResponseHeaders, Side::End) if out.location.value().offset_bytes < 0 => {
                 bail!(
                     "http.pause.response_headers.end with negative offset is not supported"
                 );
             }
-            "resp.response_body" if out.offset_bytes == 0 => {
+            location::Location::Http(HttpLocation::ResponseHeaders, Side::Start) if out.location.value().offset_bytes < 0 => {
                 bail!(
                     "http.pause.response_headers.start with negative offset is not supported"
                 );
@@ -399,6 +431,30 @@ impl TryFromPlanData for Regex {
             cel_interpreter::Value::String(x) => Ok(Regex::new(x)?),
             val => bail!(
                 "{val:?} has invalid type for duration value",
+            ),
+        }
+    }
+}
+
+impl TryFromPlanData for location::Location {
+    type Error = Error;
+    fn try_from_plan_data(value: PlanData) -> Result<Self> {
+        match value.0 {
+            cel_interpreter::Value::String(x) => Ok(Self::from_str(&x)?),
+            val => bail!(
+                "{val:?} has invalid type for location value",
+            ),
+        }
+    }
+}
+
+impl TryFromPlanData for SignalOp {
+    type Error = Error;
+    fn try_from_plan_data(value: PlanData) -> Result<Self> {
+        match value.0 {
+            cel_interpreter::Value::String(x) => Ok(Self::try_from_str(&x)?),
+            val => bail!(
+                "{val:?} has invalid type for location value",
             ),
         }
     }
@@ -883,6 +939,7 @@ impl Step {
             protocols,
             sync: binding.sync.into_iter().map(|(k, v)| Ok::<_, crate::Error>((k, <Synchronizer>::try_from(v)?))).try_collect()?,
             pause: binding.pause.into_iter().map(|(k, v)| Ok::<_, crate::Error>((k, <PauseValue>::try_from(v)?))).try_collect()?,
+            signal: binding.signal.into_iter().map(|(k, v)| Ok::<_, crate::Error>((k, <SignalValue>::try_from(v)?))).try_collect()?,
             run: binding
                 .run
                 .map(|run| {
@@ -1709,6 +1766,30 @@ impl TryFrom<Literal> for Regex {
         match binding {
             Literal::String(x) => Ok(
                 Regex::new(x)?,
+            ),
+            _ => bail!("invalid type {binding:?} for regex"),
+        }
+    }
+}
+
+impl TryFrom<Literal> for location::Location {
+    type Error = Error;
+    fn try_from(binding: Literal) -> Result<Self> {
+        match binding {
+            Literal::String(x) => Ok(
+                Self::from_str(&x)?,
+            ),
+            _ => bail!("invalid type {binding:?} for regex"),
+        }
+    }
+}
+
+impl TryFrom<Literal> for SignalOp {
+    type Error = Error;
+    fn try_from(binding: Literal) -> Result<Self> {
+        match binding {
+            Literal::String(x) => Ok(
+                Self::try_from_str(&x)?,
             ),
             _ => bail!("invalid type {binding:?} for regex"),
         }

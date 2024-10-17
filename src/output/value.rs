@@ -55,7 +55,7 @@ impl TryFrom<Value> for OutValue {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct OutMap {
-    pub map: HashMap<Key, OutValue>,
+    pub map: HashMap<OutKey, OutValue>,
 }
 
 impl TryFrom<Map> for OutMap {
@@ -64,8 +64,38 @@ impl TryFrom<Map> for OutMap {
         Ok(Self {
             map: Arc::unwrap_or_clone(value.map)
                 .into_iter()
-                .map(|(k, v)| Ok::<_, crate::Error>((k, OutValue::try_from(v)?)))
+                .map(|(k, v)| Ok::<_, crate::Error>((k.into(), v.try_into()?)))
                 .try_collect()?,
         })
+    }
+}
+
+#[derive(Debug, Eq, PartialEq, Hash, Ord, Clone, PartialOrd, Serialize)]
+pub enum OutKey {
+    Int(i64),
+    Uint(u64),
+    Bool(bool),
+    String(Arc<String>),
+}
+
+impl From<Key> for OutKey {
+    fn from(value: Key) -> Self {
+        match value {
+            Key::Int(i) => Self::Int(i),
+            Key::Uint(u) => Self::Uint(u),
+            Key::Bool(b) => Self::Bool(b),
+            Key::String(s) => Self::String(s),
+        }
+    }
+}
+
+impl From<OutKey> for Key {
+    fn from(value: OutKey) -> Self {
+        match value {
+            OutKey::Int(i) => Self::Int(i),
+            OutKey::Uint(u) => Self::Uint(u),
+            OutKey::Bool(b) => Self::Bool(b),
+            OutKey::String(s) => Self::String(s),
+        }
     }
 }

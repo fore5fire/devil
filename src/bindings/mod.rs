@@ -5,12 +5,10 @@ use indexmap::IndexMap;
 use itertools::{Either, Itertools};
 use serde::{Deserialize, Serialize};
 
-mod location;
 mod pause;
 mod raw_http2;
 mod signal;
 
-pub use location::*;
 pub use pause::*;
 pub use raw_http2::*;
 pub use signal::*;
@@ -170,6 +168,7 @@ pub struct Step {
     pub run: Option<Run>,
     pub sync: IndexMap<String, Sync>,
     pub pause: IndexMap<String, PauseValue>,
+    pub signal: IndexMap<String, SignalValue>,
 }
 
 impl Step {
@@ -191,6 +190,7 @@ impl Step {
             protocols: self.protocols.apply_defaults(proto_defaults),
             sync: self.sync,
             pause: self.pause,
+            signal: self.signal,
             unrecognized: toml::Table::new(),
         }
     }
@@ -1339,6 +1339,46 @@ impl Udp {
         if !self.unrecognized.is_empty() {
             bail!(
                 "unrecognized field{} {}",
+                if self.unrecognized.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                self.unrecognized.keys().join(", "),
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LocationValue {
+    pub id: Option<Value>,
+    pub offset_bytes: Option<Value>,
+    unrecognized: toml::Table,
+}
+
+impl Merge for LocationValue {
+    fn merge(first: Option<Self>, second: Option<Self>) -> Option<Self> {
+        let Some(first) = first else {
+            return second;
+        };
+        let Some(second) = second else {
+            return Some(first);
+        };
+        Some(Self {
+            id: first.id.or(second.id),
+            offset_bytes: first.offset_bytes.or(second.offset_bytes),
+            unrecognized: toml::Table::new(),
+        })
+    }
+}
+
+impl Validate for LocationValue {
+    fn validate(&self) -> crate::Result<()> {
+        if !self.unrecognized.is_empty() {
+            bail!(
+                "unrecognized location field {} {}",
                 if self.unrecognized.len() == 1 {
                     ""
                 } else {

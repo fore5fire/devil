@@ -1,11 +1,12 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use anyhow::bail;
 use cel_interpreter::{Duration, Value};
 use indexmap::IndexMap;
 use serde::Serialize;
 
-use crate::{Parallelism, ProtocolField};
+use crate::{location, Parallelism, ProtocolField};
 
 mod graphql;
 mod http;
@@ -81,6 +82,11 @@ impl<T: Debug + Clone> PlanWrapper<T> {
     }
 }
 
+#[derive(Debug, Default, Serialize)]
+pub struct PlanOutput {
+    pub steps: IndexMap<String, StepOutput>,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct StepOutput {
     pub graphql: Option<GraphQlOutput>,
@@ -147,7 +153,6 @@ impl From<Regex> for Value {
 pub struct PauseValueOutput {
     pub location: LocationOutput,
     pub duration: Duration,
-    pub offset_bytes: i64,
     pub r#await: Option<String>,
 }
 
@@ -155,14 +160,25 @@ pub struct PauseValueOutput {
 pub struct SignalValueOutput {
     pub location: LocationOutput,
     pub target: String,
-    pub kind: SignalKind,
+    pub op: SignalOp,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
-pub enum SignalKind {
+pub enum SignalOp {
     Register { priority: usize },
     Release,
     Unlock,
+}
+
+impl SignalOp {
+    pub fn try_from_str(raw: &str) -> anyhow::Result<Self> {
+        Ok(match raw {
+            "register" => Self::Register { priority: 0 },
+            "release" => Self::Release,
+            "unlock" => Self::Unlock,
+            raw => bail!("invalid value {raw} for signal op"),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -174,31 +190,30 @@ pub enum SyncOutput {
     PrioritySemaphore { permits: usize },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+pub struct LocationValueOutput {
+    pub id: location::Location,
+    pub offset_bytes: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum LocationOutput {
-    Before { id: String, offset_bytes: usize },
-    After { id: String, offset_bytes: usize },
+    Before(LocationValueOutput),
+    After(LocationValueOutput),
 }
 
 impl LocationOutput {
     #[inline]
-    pub fn id(&self) -> &str {
+    pub fn value(&self) -> &LocationValueOutput {
         match self {
-            Self::Before { id, .. } | Self::After { id, .. } => id,
+            Self::Before(loc) | Self::After(loc) => &loc,
         }
     }
 
     #[inline]
-    pub fn into_id(self) -> String {
+    pub fn into_value(self) -> LocationValueOutput {
         match self {
-            Self::Before { id, .. } | Self::After { id, .. } => id,
-        }
-    }
-
-    #[inline]
-    pub fn offset_bytes(&self) -> usize {
-        match self {
-            Self::Before { offset_bytes, .. } | Self::After { offset_bytes, .. } => *offset_bytes,
+            Self::Before(loc) | Self::After(loc) => loc,
         }
     }
 }

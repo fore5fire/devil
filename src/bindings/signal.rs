@@ -2,15 +2,14 @@ use anyhow::bail;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
-use super::{Merge, Validate};
+use super::{LocationValue, Merge, Validate};
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct SignalValue {
     pub target: Option<super::Value>,
     pub op: Option<super::Value>,
-    pub before: Option<super::Value>,
-    pub after: Option<super::Value>,
-    pub offset_bytes: Option<super::Value>,
+    pub before: Option<LocationValue>,
+    pub after: Option<LocationValue>,
     #[serde(flatten)]
     pub unrecognized: toml::Table,
 }
@@ -42,9 +41,8 @@ impl Merge for SignalValue {
         Some(Self {
             target: super::Value::merge(first.target, second.target),
             op: super::Value::merge(first.op, second.op),
-            before: first.before.or(second.before),
-            after: first.after.or(second.after),
-            offset_bytes: super::Value::merge(first.offset_bytes, second.offset_bytes),
+            before: LocationValue::merge(first.before, second.before),
+            after: LocationValue::merge(first.after, second.after),
             unrecognized: toml::Table::new(),
         })
     }

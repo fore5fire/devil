@@ -1,6 +1,7 @@
+use cel_interpreter::to_value;
 use clap::{Parser, ValueEnum};
 use devil::exec::Executor;
-use devil::{Http2FrameOutput, Plan, StepOutput};
+use devil::{Http2FrameOutput, Plan, PlanOutput, StepOutput};
 use tracing_subscriber::EnvFilter;
 
 // Simple program to greet a person
@@ -10,6 +11,10 @@ struct Args {
     /// Print more details.
     #[arg(short, long)]
     debug: bool,
+
+    /// Print requests and responses in the specified format.
+    #[arg(short, long, value_enum, default_value_t)]
+    format: OutputFormat,
 
     /// Print responses at a lower level protocol.
     #[arg(short, long, value_enum, value_delimiter = ',')]
@@ -43,6 +48,15 @@ enum Protocol {
     None,
 }
 
+#[derive(ValueEnum, Debug, Clone, PartialEq, Eq, Default)]
+#[clap(rename_all = "lower")]
+enum OutputFormat {
+    #[default]
+    Level,
+    Toml,
+    Json,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -52,23 +66,42 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let buffer = std::fs::read(&args.file)?;
     let text = String::from_utf8(buffer)?;
-    {
-        let plan = Plan::parse(&text)?;
-        if args.debug {
-            println!("query plan: {:#?}", plan);
-        }
-        if args.dry_run {
-            return Ok(());
-        }
+    let plan = Plan::parse(&text)?;
+    if args.debug {
+        println!("query plan: {:#?}", plan);
+    }
+    if args.dry_run {
+        return Ok(());
+    }
 
-        let mut executor = Executor::new(&plan)?;
-        for (name, _) in plan.steps.iter() {
-            println!("------- executing {name} --------");
-            let output = executor.next().await?;
-            for (key, out) in output.iter() {
-                println!("---- step {key} ----");
-                print_proto(&args, &out);
+    let mut executor = Executor::new(&plan)?;
+    match args.format {
+        OutputFormat::Level => {
+            for (name, _) in plan.steps.iter() {
+                println!("------- executing {name} --------");
+                let output = executor.next().await?;
+                for (key, out) in output.iter() {
+                    println!("---- step {key} ----");
+                    print_proto(&args, &out);
+                }
             }
+        }
+        OutputFormat::Toml => {
+            let out = PlanOutput::default();
+            for (name, _) in plan.steps.iter() {
+                out.steps.insert(name, executor.next().await?);
+            }
+            // Convert to cel to fix Durations and Timestamps.
+            let json = to_value(out)?.json()?;
+            println!(toml::ser::to_string_pretty(json));
+        }
+        OutputFormat::Json => {
+            let out = PlanOutput::default();
+            for (name, _) in plan.steps.iter() {
+                out.steps.insert(name, executor.next().await?);
+            }
+            // Convert to cel to fix Durations and Timestamps.
+            print!(to_value(out)?.json()?);
         }
     }
     Ok(())

@@ -1,9 +1,10 @@
 use std::str::FromStr;
 
 use anyhow::bail;
+use serde::Serialize;
 use strum::EnumString;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum Location {
     Udp(UdpLocation, Side),
     Quic(QuicLocation, Side),
@@ -45,7 +46,7 @@ impl FromStr for Location {
     }
 }
 
-#[derive(Debug, Clone, EnumString)]
+#[derive(Debug, Clone, Copy, EnumString, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[strum(serialize_all = "snake_case")]
 pub enum Side {
     Start,
@@ -55,7 +56,7 @@ pub enum Side {
     //Invalid(String),
 }
 
-#[derive(Debug, Clone, EnumString)]
+#[derive(Debug, Clone, Copy, EnumString, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[strum(serialize_all = "snake_case")]
 pub enum GraphQlLocation {
     Handshake,
@@ -63,7 +64,7 @@ pub enum GraphQlLocation {
     ReceiveBody,
 }
 
-#[derive(Debug, Clone, EnumString)]
+#[derive(Debug, Clone, Copy, EnumString, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[strum(serialize_all = "snake_case")]
 pub enum HttpLocation {
     Open,
@@ -73,7 +74,7 @@ pub enum HttpLocation {
     ResponseBody,
 }
 
-#[derive(Debug, Clone, EnumString)]
+#[derive(Debug, Clone, Copy, EnumString, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[strum(serialize_all = "snake_case")]
 pub enum Http1Location {
     Open,
@@ -83,13 +84,13 @@ pub enum Http1Location {
     ResponseBody,
 }
 
-#[derive(Debug, Clone, EnumString)]
+#[derive(Debug, Clone, Copy, EnumString, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[strum(serialize_all = "snake_case")]
 pub enum RawHttp2Location {
     Handshake,
 }
 
-#[derive(Debug, Clone, EnumString)]
+#[derive(Debug, Clone, Copy, EnumString, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[strum(serialize_all = "snake_case")]
 pub enum Http2Location {
     Open,
@@ -99,7 +100,7 @@ pub enum Http2Location {
     ResponseBody,
 }
 
-#[derive(Debug, Clone, EnumString)]
+#[derive(Debug, Clone, Copy, EnumString, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[strum(serialize_all = "snake_case")]
 pub enum Http3Location {
     Open,
@@ -109,7 +110,7 @@ pub enum Http3Location {
     ResponseBody,
 }
 
-#[derive(Debug, Clone, EnumString)]
+#[derive(Debug, Clone, Copy, EnumString, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[strum(serialize_all = "snake_case")]
 pub enum TlsLocation {
     Handshake,
@@ -117,7 +118,7 @@ pub enum TlsLocation {
     ReceiveBody,
 }
 
-#[derive(Debug, Clone, EnumString)]
+#[derive(Debug, Clone, Copy, EnumString, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[strum(serialize_all = "snake_case")]
 pub enum TcpLocation {
     Handshake,
@@ -125,19 +126,19 @@ pub enum TcpLocation {
     ReceiveBody,
 }
 
-#[derive(Debug, Clone, EnumString)]
+#[derive(Debug, Clone, Copy, EnumString, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[strum(serialize_all = "snake_case")]
 pub enum RawTcpLocation {
     Handshake,
 }
 
-#[derive(Debug, Clone, EnumString)]
+#[derive(Debug, Clone, Copy, EnumString, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[strum(serialize_all = "snake_case")]
 pub enum QuicLocation {
     Handshake,
 }
 
-#[derive(Debug, Clone, EnumString)]
+#[derive(Debug, Clone, Copy, EnumString, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[strum(serialize_all = "snake_case")]
 pub enum UdpLocation {
     SendBody,
