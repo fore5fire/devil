@@ -9,7 +9,7 @@ devil.version = 0
     url = "http://example.com/test"
 
 # HTTPS GET with headers
-    [get_with_headers.http]
+[get_with_headers.http]
     url = "https://example.com/test"
     [get_with_headers.http.headers]
     Content-Type = "application/json"
@@ -79,11 +79,11 @@ devil.version = 0
 
 # Force HTTP/1
 [http1_example.h1]
-url = "https://example.com/test"
+    url = "https://example.com/test"
 
 # Force HTTP/1 without TLS
 [h1c_example.h1c]
-url = "http://example.com/test"
+    url = "http://example.com/test"
 
 # Force HTTP/2
 [http2_example.h2]

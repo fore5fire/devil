@@ -23,16 +23,16 @@ devil.version = 0
     [get.h1c]
     method = "GET"
 
-[query_string.graphql]
-    url = "https://swapi-graphql.netlify.app/.netlify/functions/index"
-    query = '''{
-        allFilms {
-            films {
-            title
-            }
-        }
-    }'''
-    use_query_string = true
-    [query_string.http]
-    method = "GET"
-    headers = { Content-Type = { unset = true } }
+#[query_string.graphql]
+#    url = "https://swapi-graphql.netlify.app/.netlify/functions/index"
+#    query = '''{
+#        allFilms {
+#            films {
+#            title
+#            }
+#        }
+#    }'''
+#    use_query_string = true
+#    [query_string.http]
+#    method = "GET"
+#    headers = { Content-Type = { unset = true } }

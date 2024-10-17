@@ -1,7 +1,7 @@
 devil.version = 0
 
 [[devil.defaults]]
-selector = ["graphql", "graphqlh1c", "graphqlh1", "graphqlh2", "graphqlh2c", "graphqlh3"]
+selector = ["graphql", "graphql_h1c", "graphql_h1", "graphql_h2", "graphql_h2c", "graphql_h3"]
     [devil.defaults.http]
     url.cel = "current.graphql.plan.url"
     method = "POST"
@@ -36,50 +36,50 @@ selector = ["graphql", "graphqlh1c", "graphqlh1", "graphqlh2", "graphqlh2c", "gr
     headers.Host.cel = "current.graphql.plan.url.parse_url().host"
 
 [[devil.defaults]]
-selector = ["h1c", "graphqlh1c"]
+selector = ["h1c", "graphql_h1c"]
     [devil.defaults.tcp]
     host.cel = "current.h1c.plan.url.parse_url().host"
     port.cel = "current.h1c.plan.url.parse_url().port_or_default"
 
 [[devil.defaults]]
-selector = ["h1", "graphqlh1"]
+selector = ["h1", "graphql_h1"]
     [devil.defaults.tls]
     host.cel = "current.h1.plan.url.parse_url().host"
     port.cel = "current.h1.plan.url.parse_url().port_or_default"
 
 [[devil.defaults]]
-selector = ["h2c", "graphqlh2c"]
+selector = ["h2c", "graphql_h2c"]
     [devil.defaults.raw_h2c]
     host.cel = "current.h2c.plan.url.parse_url().host"
     port.cel = "current.h2c.plan.url.parse_url().port_or_default"
 
 [[devil.defaults]]
-selector = ["raw_h2c", "h2c", "graphqlh2c"]
+selector = ["raw_h2c", "h2c", "graphql_h2c"]
     [devil.defaults.tcp]
     host.cel = "current.raw_h2c.plan.host"
     port.cel = "current.raw_h2c.plan.port"
 
 [[devil.defaults]]
-selector = ["h2", "graphqlh2"]
+selector = ["h2", "graphql_h2"]
     [devil.defaults.raw_h2]
     host.cel = "current.h2.plan.url.parse_url().host"
     port.cel = "current.h2.plan.url.parse_url().port_or_default"
 
 [[devil.defaults]]
-selector = ["raw_h2", "h2", "graphqlh2"]
+selector = ["raw_h2", "h2", "graphql_h2"]
     [devil.defaults.tls]
     host.cel = "current.raw_h2.plan.host"
     port.cel = "current.raw_h2.plan.port"
     alpn = "h2"
 
 [[devil.defaults]]
-selector = ["tls", "h1", "raw_h2", "h2", "graphqlh1", "graphqlh2"]
+selector = ["tls", "h1", "raw_h2", "h2", "graphql_h1", "graphql_h2"]
     [devil.defaults.tcp]
     host.cel = "current.tls.plan.host"
     port.cel = "current.tls.plan.port"
 
 [[devil.defaults]]
-selector = ["tcp", "tls", "h1", "h1c", "raw_h2", "h2", "raw_h2c", "h2c", "graphqlh1", "graphqlh1c", "graphqlh2", "graphqlh2c"]
+selector = ["tcp", "tls", "h1", "h1c", "raw_h2", "h2", "raw_h2c", "h2c", "graphql_h1", "graphql_h1c", "graphql_h2", "graphql_h2c"]
     [devil.defaults.raw_tcp]
     dest_host.cel = "current.tcp.plan.host"
     dest_port.cel = "current.tcp.plan.port"

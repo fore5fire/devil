@@ -1623,7 +1623,7 @@ where
 
 impl<T, E> TryFrom<Option<bindings::Value>> for PlanValue<Option<T>, E>
 where
-    T: TryFromPlanData<Error = E> + Clone,
+    T: TryFromPlanData<Error = E>  + Clone,
     E: Into<anyhow::Error>,
     PlanValue<T, E>: TryFrom<bindings::Value, Error = Error>,
 {
@@ -1631,7 +1631,10 @@ where
     fn try_from(value: Option<bindings::Value>) -> std::result::Result<Self, Self::Error> {
         match value {
             Some(bindings::Value::Unset { .. }) | None => Ok(PlanValue::Literal(None)),
-            value => Ok(value.try_into()?),
+            Some(val) => Ok(match PlanValue::<T, E>::try_from(val)? {
+                PlanValue::Literal(l) => PlanValue::Literal(Some(l)),
+                PlanValue::Dynamic{cel, vars} => PlanValue::Dynamic{cel, vars},
+            }),
         }
     }
 }

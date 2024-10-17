@@ -166,8 +166,11 @@ pub struct Step {
     #[serde(flatten)]
     pub protocols: StepProtocols,
     pub run: Option<Run>,
+    #[serde(default)]
     pub sync: IndexMap<String, Sync>,
+    #[serde(default)]
     pub pause: IndexMap<String, PauseValue>,
+    #[serde(default)]
     pub signal: IndexMap<String, SignalValue>,
 }
 
