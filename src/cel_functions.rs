@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt, rc::Rc, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use cel_interpreter::extractors::This;
 use cel_interpreter::{FunctionContext, ResolveResult, Value};
@@ -16,7 +16,7 @@ pub fn url(ftx: &FunctionContext, This(url): This<Arc<String>>) -> ResolveResult
 
 fn url_to_cel(url: Url) -> cel_interpreter::Value {
     cel_interpreter::Value::Map(cel_interpreter::objects::Map {
-        map: Rc::new(HashMap::from([
+        map: Arc::new(HashMap::from([
             ("scheme".into(), url.scheme().into()),
             ("username".into(), url.username().into()),
             ("password".into(), url.password().into()),
@@ -43,7 +43,7 @@ pub fn form_urlencoded_parts(This(query): This<Arc<String>>) -> Arc<Vec<Value>> 
             .into_owned()
             .map(|(k, v)| {
                 cel_interpreter::Value::Map(cel_interpreter::objects::Map {
-                    map: Rc::new(HashMap::from([
+                    map: Arc::new(HashMap::from([
                         ("key".into(), k.into()),
                         ("value".into(), v.into()),
                     ])),

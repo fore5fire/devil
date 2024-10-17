@@ -4,16 +4,14 @@ use std::time::Instant;
 use std::{mem, pin::pin};
 
 use anyhow::{anyhow, bail};
+use cel_interpreter::Duration;
 use chrono::TimeDelta;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
 use tokio::io::{ReadHalf, WriteHalf};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::spawn;
 
-use crate::{
-    TcpError, TcpOutput, TcpPauseOutput, TcpPlanOutput, TcpReceivedOutput, TcpSentOutput,
-    WithPlannedCapacity,
-};
+use crate::{TcpError, TcpOutput, TcpPlanOutput, TcpReceivedOutput, TcpSentOutput};
 
 use super::pause::{PauseReader, PauseSpec, PauseWriter};
 use super::raw_tcp::RawTcpRunner;
@@ -32,9 +30,7 @@ pub(super) struct TcpRunner {
 
 #[derive(Debug)]
 pub enum State {
-    Pending {
-        pause: TcpPauseOutput,
-    },
+    Pending,
     Open {
         start: Instant,
         writer: PauseWriter<BufWriter<TeeWriter<TimingWriter<WriteHalf<TcpStream>>>>>,
@@ -48,18 +44,15 @@ pub enum State {
 impl TcpRunner {
     pub(super) fn new(ctx: Arc<Context>, plan: TcpPlanOutput) -> TcpRunner {
         TcpRunner {
-            state: State::Pending {
-                pause: plan.pause.clone(),
-            },
+            state: State::Pending,
             reader: None,
             out: TcpOutput {
                 sent: None,
-                pause: TcpPauseOutput::with_planned_capacity(&plan.pause),
                 plan,
                 received: None,
                 //close: TcpCloseOutput::default(),
                 errors: Vec::new(),
-                duration: TimeDelta::zero(),
+                duration: TimeDelta::zero().into(),
                 handshake_duration: None,
             },
             ctx,
@@ -77,7 +70,7 @@ impl TcpRunner {
     }
 
     pub async fn start(&mut self, raw: RawTcpRunner) -> anyhow::Result<()> {
-        let State::Pending { pause } = mem::replace(&mut self.state, State::Invalid) else {
+        let State::Pending = mem::replace(&mut self.state, State::Invalid) else {
             panic!("invalid state to start tcp {:?}", self.state)
         };
 
@@ -137,36 +130,36 @@ impl TcpRunner {
             writer: PauseWriter::new(
                 self.ctx.clone(),
                 BufWriter::new(TeeWriter::new(TimingWriter::new(writer))),
-                if let Some(size) = self.size_hint {
-                    vec![
-                        PauseSpec {
-                            group_offset: 0,
-                            plan: pause.send_body.start,
-                        },
-                        PauseSpec {
-                            group_offset: size.try_into().unwrap(),
-                            plan: pause.send_body.end,
-                        },
-                    ]
-                } else {
-                    if !pause.send_body.end.is_empty() {
-                        bail!("tcp.pause.send_body.end is unsupported in this request");
-                    }
-                    vec![PauseSpec {
-                        group_offset: 0,
-                        plan: pause.send_body.start,
-                    }]
-                },
+                vec![], //if let Some(size) = self.size_hint {
+                        //    vec![
+                        //        PauseSpec {
+                        //            group_offset: 0,
+                        //            plan: pause.send_body.start,
+                        //        },
+                        //        PauseSpec {
+                        //            group_offset: size.try_into().unwrap(),
+                        //            plan: pause.send_body.end,
+                        //        },
+                        //    ]
+                        //} else {
+                        //    if !pause.send_body.end.is_empty() {
+                        //        bail!("tcp.pause.send_body.end is unsupported in this request");
+                        //    }
+                        //    vec![PauseSpec {
+                        //        group_offset: 0,
+                        //        plan: pause.send_body.start,
+                        //    }]
+                        //},
             ),
         };
         self.reader = Some(TcpRunnerReader::new(PauseReader::new(
             self.ctx.clone(),
             tee_reader,
             // TODO: implement read size hints.
-            vec![PauseSpec {
+            vec![/*PauseSpec {
                 group_offset: 0,
                 plan: pause.receive_body.start,
-            }],
+            }*/],
         )));
 
         Ok(())
@@ -267,11 +260,11 @@ impl TcpRunner {
         let end_time = writer.shutdown_end().unwrap_or(end_time);
 
         let mut receive_pause = receive_pause.into_iter();
-        self.out.pause.receive_body.start = receive_pause.next().unwrap_or_default();
-        self.out.pause.receive_body.end = receive_pause.next().unwrap_or_default();
+        //self.out.pause.receive_body.start = receive_pause.next().unwrap_or_default();
+        //self.out.pause.receive_body.end = receive_pause.next().unwrap_or_default();
         let mut send_pause = send_pause.into_iter();
-        self.out.pause.send_body.start = send_pause.next().unwrap_or_default();
-        self.out.pause.send_body.end = send_pause.next().unwrap_or_default();
+        //self.out.pause.send_body.start = send_pause.next().unwrap_or_default();
+        //self.out.pause.send_body.end = send_pause.next().unwrap_or_default();
 
         //self.out.close = TcpCloseOutput {
         //    timed_out: read_timed_out,
@@ -281,10 +274,12 @@ impl TcpRunner {
 
         if let Some(sent) = &mut self.out.sent {
             if let Some(first_write) = writer.first_write() {
-                sent.time_to_first_byte = Some(TimeDelta::from_std(first_write - start).unwrap());
+                sent.time_to_first_byte =
+                    Some(TimeDelta::from_std(first_write - start).unwrap().into());
             }
             if let Some(last_write) = writer.last_write() {
-                sent.time_to_last_byte = Some(TimeDelta::from_std(last_write - start).unwrap());
+                sent.time_to_last_byte =
+                    Some(TimeDelta::from_std(last_write - start).unwrap().into());
             }
             sent.body = writes;
         }
@@ -296,16 +291,18 @@ impl TcpRunner {
                     .map(|first_read| first_read - start)
                     .map(TimeDelta::from_std)
                     .transpose()
-                    .unwrap(),
+                    .unwrap()
+                    .map(Duration),
                 time_to_last_byte: reader
                     .last_read()
                     .map(|last_read| last_read - start)
                     .map(TimeDelta::from_std)
                     .transpose()
-                    .unwrap(),
+                    .unwrap()
+                    .map(Duration),
             });
         }
-        self.out.duration = TimeDelta::from_std(end_time - start).unwrap();
+        self.out.duration = TimeDelta::from_std(end_time - start).unwrap().into();
         self.state = State::Completed;
         (self.out, raw)
     }

@@ -7,39 +7,37 @@ use std::{
 
 use anyhow::bail;
 use derivative::Derivative;
-use itertools::Itertools;
 use tokio::{
     select,
     sync::{self, mpsc, oneshot, Notify, OwnedSemaphorePermit},
     task::AbortHandle,
 };
 
-use crate::{output, LocationOutput, PauseValueOutput, SignalOp, SignalValueOutput, SyncOutput};
+use crate::{location, output, LocationOutput, PauseValueOutput, SignalOp, SignalValueOutput};
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(super) struct StepLocations {
-    syncs: Vec<(String, Option<Synchronizer>)>,
+    syncs: Vec<(Arc<String>, Option<Synchronizer>)>,
     send_locations: Vec<StepLocation>,
     recv_locations: Vec<StepLocation>,
 }
 
 impl StepLocations {
-    fn new<'a, Syncs, Signals, Pauses>(syncs: Syncs, signals: Signals, pauses: Pauses) -> Self
-    where
-        Syncs: IntoIterator<Item = (String, SyncOutput)> + Sized,
-        Signals: IntoIterator<Item = (String, &'a SignalValueOutput)> + Sized,
-        Pauses: IntoIterator<Item = (String, &'a PauseValueOutput)> + Sized,
-    {
-        let syncs = syncs
-            .into_iter()
-            .map(|(name, sync)| (name, Some(Synchronizer::new(sync))))
-            .collect_vec();
+    pub(super) fn new(
+        syncs: Vec<(Arc<String>, Option<Synchronizer>)>,
+        signals: &[(Arc<String>, SignalValueOutput)],
+        pauses: &[(Arc<String>, PauseValueOutput)],
+    ) -> Self
+where {
         let mut grouped = HashMap::<LocationOutput, Vec<Action>>::new();
-        let signals = signals
-            .into_iter()
-            .map(|(name, signal)| (signal.location, Action::with_signal(name, signal, &syncs)));
+        let signals = signals.into_iter().map(|(name, signal)| {
+            (
+                signal.location,
+                Action::with_signal(name.clone(), signal, &syncs),
+            )
+        });
         let pauses = pauses.into_iter().map(|(name, pause)| {
-            let a = Action::with_pause(name, &pause, &syncs);
+            let a = Action::with_pause(name.clone(), &pause, &syncs);
             (pause.location, a)
         });
         for (loc, action) in signals.chain(pauses) {
@@ -56,12 +54,19 @@ impl StepLocations {
             recv_locations,
         }
     }
+
+    pub(super) fn set_range(
+        stream: location::Location,
+        after: Option<location::Location>,
+        size: usize,
+    ) {
+    }
 }
 
 #[derive(Debug)]
-struct StepLocation {
-    location: LocationOutput,
-    actions: Vec<Action>,
+pub(super) struct StepLocation {
+    pub location: LocationOutput,
+    pub actions: Vec<Action>,
 }
 
 #[derive(Debug)]
@@ -78,15 +83,15 @@ enum ActionKind {
 
 #[derive(Debug)]
 struct Action {
-    name: String,
+    name: Arc<String>,
     kind: ActionKind,
 }
 
 impl Action {
     fn with_signal(
-        name: String,
+        name: Arc<String>,
         out: &SignalValueOutput,
-        syncs: &[(String, Option<Synchronizer>)],
+        syncs: &[(Arc<String>, Option<Synchronizer>)],
     ) -> Self {
         Self {
             name,
@@ -94,16 +99,16 @@ impl Action {
                 op: out.op,
                 target: syncs
                     .iter()
-                    .position(|(name, _)| name == out.target.as_str())
+                    .position(|(name, _)| name.as_str() == out.target.as_str())
                     .expect("signal target should refer to a sync"),
             },
         }
     }
 
     fn with_pause(
-        name: String,
+        name: Arc<String>,
         out: &PauseValueOutput,
-        syncs: &[(String, Option<Synchronizer>)],
+        syncs: &[(Arc<String>, Option<Synchronizer>)],
     ) -> Self {
         Self {
             name,
@@ -116,7 +121,7 @@ impl Action {
                 target: out.r#await.as_ref().map(|target| {
                     syncs
                         .iter()
-                        .position(|(name, _)| name == target.as_str())
+                        .position(|(name, _)| name.as_str() == target.as_str())
                         .expect("signal target should refer to a sync")
                 }),
             },
@@ -230,7 +235,7 @@ impl Action {
 }
 
 #[derive(Debug)]
-enum Synchronizer {
+pub(super) enum Synchronizer {
     Barrier(Arc<sync::Barrier>),
     Mutex(Mutex, Option<Guard<NotifyPermit>>),
     Semaphore(Semaphore, Option<Guard<OwnedSemaphorePermit>>),
@@ -239,8 +244,8 @@ enum Synchronizer {
 }
 
 impl Synchronizer {
-    fn new(sync: output::SyncOutput) -> Self {
-        match sync {
+    pub(super) fn new(sync: &output::SyncOutput) -> Self {
+        match *sync {
             output::SyncOutput::Barrier { count } => {
                 Self::Barrier(Arc::new(sync::Barrier::new(count)))
             }
@@ -281,6 +286,22 @@ impl Synchronizer {
             Self::PrioritySemaphore(_, PriorityState::Unregistered) => "Unregistered",
             Self::PrioritySemaphore(_, PriorityState::Registered(..)) => "Registered",
             Self::PrioritySemaphore(_, PriorityState::Held(..)) => "Held",
+        }
+    }
+}
+
+impl Clone for Synchronizer {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Barrier(b) => Self::Barrier(b.clone()),
+            Self::Mutex(m, _) => Self::Mutex(m.clone(), None),
+            Self::Semaphore(s, _) => Self::Semaphore(s.clone(), None),
+            Self::PriorityMutex(m, _) => {
+                Self::PriorityMutex(m.clone(), PriorityState::Unregistered)
+            }
+            Self::PrioritySemaphore(s, _) => {
+                Self::PrioritySemaphore(s.clone(), PriorityState::Unregistered)
+            }
         }
     }
 }

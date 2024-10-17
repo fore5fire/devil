@@ -6,7 +6,7 @@ use cel_interpreter::{Duration, Value};
 use indexmap::IndexMap;
 use serde::Serialize;
 
-use crate::{location, Parallelism, ProtocolField};
+use crate::{location, IterableKey, Parallelism, ProtocolField};
 
 mod graphql;
 mod http;
@@ -84,7 +84,7 @@ impl<T: Debug + Clone> PlanWrapper<T> {
 
 #[derive(Debug, Default, Serialize)]
 pub struct PlanOutput {
-    pub steps: IndexMap<String, StepOutput>,
+    pub steps: IndexMap<String, IndexMap<IterableKey, StepOutput>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -216,10 +216,6 @@ impl LocationOutput {
             Self::Before(loc) | Self::After(loc) => loc,
         }
     }
-}
-
-pub trait WithPlannedCapacity {
-    fn with_planned_capacity(planned: &Self) -> Self;
 }
 
 #[derive(Debug, Clone)]

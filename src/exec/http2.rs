@@ -8,7 +8,8 @@ use std::{
 
 use anyhow::bail;
 use bytes::Bytes;
-use chrono::Duration;
+use cel_interpreter::Duration;
+use chrono::TimeDelta;
 use futures::FutureExt;
 use h2::{client::SendRequest, Reason, RecvStream, SendStream};
 use http::{response::Parts, HeaderMap, HeaderName, HeaderValue, Request, Uri};
@@ -19,10 +20,7 @@ use tokio::{
     task::JoinHandle,
 };
 
-use crate::{
-    AddContentLength, Http2Error, Http2Output, Http2PauseOutput, Http2PlanOutput,
-    Http2RequestOutput,
-};
+use crate::{AddContentLength, Http2Error, Http2Output, Http2PlanOutput, Http2RequestOutput};
 
 use super::{
     pause::{PauseReader, PauseSpec, PauseWriter},
@@ -100,7 +98,7 @@ impl Http2Runner {
                     method: plan.method.clone(),
                     headers: plan.headers.clone(),
                     body: plan.body.clone(),
-                    duration: chrono::Duration::zero(),
+                    duration: TimeDelta::zero().into(),
                     headers_duration: None,
                     body_duration: None,
                     time_to_first_byte: None,
@@ -112,8 +110,7 @@ impl Http2Runner {
                 request: None,
                 response: None,
                 errors: Vec::new(),
-                duration: Duration::zero(),
-                pause: Http2PauseOutput::default(),
+                duration: TimeDelta::zero().into(),
             },
             transport: None,
             start_time: None,
@@ -232,7 +229,7 @@ impl Http2Runner {
                 stream: PauseWriter::new(
                     self.ctx.clone(),
                     SendTransport::new(send_stream, self.size_hint),
-                    [
+                    [/*
                         PauseSpec {
                             group_offset: 0,
                             plan: self.out.plan.pause.request_body.start.clone(),
@@ -253,15 +250,16 @@ impl Http2Runner {
                                     plan: Vec::new(),
                                 }
                             }),
-                    ],
+                    */],
                 ),
             }
         } else {
             WriteState::Completed { stream: None }
         };
         request_out.headers_duration = Some(
-            chrono::Duration::from_std(Instant::now().duration_since(start))
-                .expect("durations should be positive"),
+            TimeDelta::from_std(Instant::now().duration_since(start))
+                .expect("durations should be positive")
+                .into(),
         );
         self.read_state = ReadState::Headers {
             response: tokio::task::spawn(response).fuse(),
@@ -364,8 +362,8 @@ impl Http2Runner {
             ReadState::Body { body, head, .. } => {
                 let (body, pauses) = body.finish();
                 let mut pauses = pauses.into_iter();
-                self.out.plan.pause.response_body.start = pauses.next().unwrap_or_default();
-                self.out.plan.pause.response_body.end = pauses.next().unwrap_or_default();
+                //self.out.plan.pause.response_body.start = pauses.next().unwrap_or_default();
+                //self.out.plan.pause.response_body.end = pauses.next().unwrap_or_default();
                 let (_, body) = body.into_parts();
                 (head, Some(body))
             }
@@ -415,28 +413,29 @@ impl Http2Runner {
                     })
                     .collect()
             }),
-            duration: chrono::Duration::from_std(
+            duration: TimeDelta::from_std(
                 end_time
                     - self
                         .start_time
                         .expect("start time should be set in current state"),
             )
-            .expect("duration should fit in std::time::Duration"),
+            .expect("duration should fit in std::time::Duration")
+            .into(),
             header_duration: self
                 .header_receive_end
                 .zip(self.header_receive_start)
-                .map(|(header_end, header_start)| {
-                    chrono::Duration::from_std(header_end - header_start)
-                })
+                .map(|(header_end, header_start)| TimeDelta::from_std(header_end - header_start))
                 .transpose()
-                .expect("duration should fit in std duration"),
+                .expect("duration should fit in std duration")
+                .map(Duration),
             time_to_first_byte: self
                 .start_time
                 .zip(self.first_read)
                 .map(|(start, first_read)| first_read - start)
-                .map(chrono::Duration::from_std)
+                .map(TimeDelta::from_std)
                 .transpose()
-                .expect("duration should fit into std duration"),
+                .expect("duration should fit into std duration")
+                .map(Duration),
         });
 
         self.read_state = ReadState::Completed;
@@ -444,8 +443,8 @@ impl Http2Runner {
             WriteState::Body { stream, .. } => {
                 let (stream, pauses) = stream.finish();
                 let mut pauses = pauses.into_iter();
-                self.out.pause.request_body.start = pauses.next().unwrap_or_default();
-                self.out.pause.request_body.end = pauses.next().unwrap_or_default();
+                //self.out.pause.request_body.start = pauses.next().unwrap_or_default();
+                //self.out.pause.request_body.end = pauses.next().unwrap_or_default();
                 WriteState::Completed {
                     stream: Some(stream),
                 }
@@ -492,7 +491,7 @@ impl AsyncRead for Http2Runner {
                     body: PauseReader::new(
                         self.ctx.clone(),
                         RecvTransport::new(body),
-                        [
+                        [/*
                             PauseSpec {
                                 group_offset: 0,
                                 plan: self.out.plan.pause.response_body.start.clone(),
@@ -513,7 +512,7 @@ impl AsyncRead for Http2Runner {
                                         plan: Vec::new(),
                                     }
                                 }),
-                        ],
+                        */],
                     ),
                 };
             }

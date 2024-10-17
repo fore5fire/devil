@@ -11,8 +11,8 @@ use super::tcp::TcpRunner;
 use super::tls::TlsRunner;
 use super::{http1::Http1Runner, Context};
 use crate::{
-    HttpOutput, HttpPauseOutput, HttpPlanOutput, HttpRequestOutput, HttpResponse, RawTcpPlanOutput,
-    TcpPlanOutput, TlsPlanOutput,
+    HttpOutput, HttpPlanOutput, HttpRequestOutput, HttpResponse, RawTcpPlanOutput, TcpPlanOutput,
+    TlsPlanOutput,
 };
 
 #[derive(Debug)]
@@ -104,7 +104,6 @@ impl HttpRunner {
                 // Only used when RawTcp is executor.
                 segments: Vec::new(),
                 //close: TcpPlanCloseOutput::default(),
-                pause: crate::RawTcpPauseOutput::default(),
             },
         ))));
         transports.push(Runner::Tcp(Box::new(TcpRunner::new(
@@ -121,7 +120,6 @@ impl HttpRunner {
                     .ok_or_else(|| anyhow!("url is missing port"))?,
                 body: Vec::new(),
                 //close: TcpPlanCloseOutput::default(),
-                pause: crate::TcpPauseOutput::default(),
             },
         ))));
 
@@ -140,7 +138,6 @@ impl HttpRunner {
                         .ok_or_else(|| anyhow!("url is missing port"))?,
                     alpn: vec![b"http/1.1".to_vec() /*, b"h2".to_vec()*/],
                     body: Vec::new(),
-                    pause: crate::TlsPauseOutput::default(),
                 },
             ))))
         }
@@ -156,13 +153,6 @@ impl HttpRunner {
                     add_content_length: plan.add_content_length,
                     headers: plan.headers,
                     body: plan.body,
-                    pause: crate::Http1PauseOutput {
-                        open: plan.pause.open,
-                        request_headers: plan.pause.request_headers,
-                        request_body: plan.pause.request_body,
-                        response_headers: plan.pause.response_headers,
-                        response_body: plan.pause.response_body,
-                    },
                 },
             )),
         })
@@ -223,13 +213,6 @@ impl HttpRunner {
                             add_content_length: out.plan.add_content_length,
                             headers: out.plan.headers,
                             body: out.plan.body,
-                            pause: HttpPauseOutput {
-                                open: out.plan.pause.open,
-                                request_headers: out.plan.pause.request_headers,
-                                request_body: out.plan.pause.request_body,
-                                response_headers: out.plan.pause.response_headers,
-                                response_body: out.plan.pause.response_body,
-                            },
                         },
                         request: out.request.map(|req| HttpRequestOutput {
                             url: req.url,
@@ -259,13 +242,6 @@ impl HttpRunner {
                             .collect(),
                         protocol: Some("HTTP/1.1".to_string()),
                         duration: out.duration,
-                        pause: HttpPauseOutput {
-                            open: out.pause.open,
-                            request_headers: out.pause.request_headers,
-                            request_body: out.pause.request_body,
-                            response_headers: out.pause.response_headers,
-                            response_body: out.pause.response_body,
-                        },
                     },
                     inner,
                 )

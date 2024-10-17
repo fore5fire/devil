@@ -7,17 +7,14 @@ use std::{mem, sync::Arc};
 use anyhow::{anyhow, bail};
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::Bytes;
-use chrono::Duration;
+use chrono::TimeDelta;
 use h2::client::{handshake, SendRequest};
 use tokio::io::{split, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::join;
 use tokio::task::JoinHandle;
-use tracing::{debug, debug_span, info, instrument, Instrument};
+use tracing::{debug, debug_span, Instrument};
 
-use crate::{
-    Http2FrameOutput, Http2FrameType, RawHttp2Error, RawHttp2Output, RawHttp2PauseOutput,
-    RawHttp2PlanOutput, WithPlannedCapacity,
-};
+use crate::{Http2FrameOutput, Http2FrameType, RawHttp2Error, RawHttp2Output, RawHttp2PlanOutput};
 
 use super::extract;
 use super::{runner::Runner, Context};
@@ -59,8 +56,7 @@ impl RawHttp2Runner {
             send_preface: plan.preamble.clone().unwrap_or_default(),
             out: RawHttp2Output {
                 errors: Vec::new(),
-                duration: Duration::zero(),
-                pause: RawHttp2PauseOutput::with_planned_capacity(&plan.pause),
+                duration: TimeDelta::zero().into(),
                 received: Vec::new(),
                 sent: plan.frames.clone(),
                 plan,
@@ -177,8 +173,9 @@ impl RawHttp2Runner {
     async fn complete(&mut self) {
         let end_time = Instant::now();
         if let Some(start) = self.start_time {
-            self.out.duration = chrono::Duration::from_std(end_time.duration_since(start))
-                .expect("durations should fit in chrono");
+            self.out.duration = TimeDelta::from_std(end_time.duration_since(start))
+                .expect("durations should fit in chrono")
+                .into();
         }
         let state = std::mem::replace(&mut self.state, State::Invalid);
         match state {

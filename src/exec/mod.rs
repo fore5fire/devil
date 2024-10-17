@@ -15,19 +15,17 @@ mod timing;
 pub mod tls;
 
 use std::collections::{HashMap, VecDeque};
-use std::num::TryFromIntError;
 use std::sync::Arc;
 
 use anyhow::bail;
 use futures::future::try_join_all;
 use indexmap::IndexMap;
 use itertools::{Either, Itertools, Position};
-use tokio::sync::Barrier;
 use tokio_task_pool::Pool;
 use tracing::debug;
 
 use crate::{
-    Evaluate, IterableKey, Parallelism, Plan, PlanWrapper, Protocol, ProtocolField, Step,
+    location, Evaluate, IterableKey, Parallelism, Plan, PlanWrapper, Protocol, ProtocolField, Step,
     StepOutput, StepPlanOutput, StepPlanOutputs,
 };
 
@@ -125,16 +123,29 @@ impl<'a> Executor<'a> {
         // Create the runners for the shared stack in advance.
         let shared_runners =
             Self::prepare_runners(&Arc::new(Context::default()), &shared_stack, &mut inputs)?;
+        let syncs = step
+            .sync
+            .iter()
+            .map(|(k, v)| Ok::<_, anyhow::Error>((Arc::new(k.to_owned()), v.evaluate(&inputs)?)))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(|(name, sync)| (name, Some(Synchronizer::new(&sync))))
+            .collect_vec();
+        let signals: Vec<_> = step
+            .signal
+            .iter()
+            .map(|(k, v)| Ok::<_, anyhow::Error>((Arc::new(k.to_owned()), v.evaluate(&inputs)?)))
+            .try_collect()?;
+        let pauses: Vec<_> = step
+            .pause
+            .iter()
+            .map(|(k, v)| Ok::<_, anyhow::Error>((Arc::new(k.to_owned()), v.evaluate(&inputs)?)))
+            .try_collect()?;
 
         match parallel {
             Parallelism::Parallel(max_parallel) => {
                 let ctx = Arc::new(Context {
-                    pause_barriers: step
-                        .sync
-                        .iter()
-                        .flat_map(Protocol::joins)
-                        .map(|key| Ok((key.to_owned(), Arc::new(Barrier::new(count.try_into()?)))))
-                        .collect::<Result<HashMap<_, _>, TryFromIntError>>()?,
+                    sync_locations: StepLocations::new(syncs, &signals, &pauses),
                 });
 
                 let states: Vec<_> = (0..count)
@@ -147,7 +158,7 @@ impl<'a> Executor<'a> {
                         );
                             inputs.run_for = Some(crate::RunForOutput {
                                 key: k.clone(),
-                                value: v.into(),
+                                value: v.0.try_into()?,
                             });
                             key = Some(k.clone());
                         }
@@ -237,7 +248,7 @@ impl<'a> Executor<'a> {
                         );
                         inputs.run_for = Some(crate::RunForOutput {
                             key: k.clone(),
-                            value: v.into(),
+                            value: v.0.try_into()?,
                         });
                         key = Some(k.clone());
                     }
@@ -428,11 +439,12 @@ pub enum Error {
 
 #[derive(Debug, Default)]
 pub(super) struct Context {
-    pause_barriers: HashMap<String, Arc<Barrier>>,
+    sync_locations: sync::StepLocations,
 }
 
 impl Context {
-    pub(super) fn pause_barrier(&self, tag: &str) -> Arc<Barrier> {
-        self.pause_barriers[tag].clone()
+    pub(super) fn next_sync_location(&self, loc: location::Location) -> Option<StepLocation> {
+        // TODO: implement
+        None
     }
 }

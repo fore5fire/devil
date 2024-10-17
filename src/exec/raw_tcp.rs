@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use std::{io, net::IpAddr, pin::Pin, sync::Arc, time::Instant};
 
 use anyhow::{anyhow, bail};
+use cel_interpreter::Duration;
 use chrono::TimeDelta;
 use futures::Future;
 use itertools::Itertools;
@@ -45,9 +46,7 @@ type OwnedBoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
 #[derive(Debug)]
 enum State {
-    Pending {
-        pause: RawTcpPauseOutput,
-    },
+    Pending,
     Open(OpenState),
     Passive {
         writes: JoinHandle<(Vec<TcpSegmentOutput>, Option<io::Error>)>,
@@ -80,12 +79,10 @@ struct OpenState {
 }
 
 impl RawTcpRunner {
-    pub fn new(ctx: Arc<Context>, plan: RawTcpPlanOutput, sync: SyncData) -> Self {
+    pub fn new(ctx: Arc<Context>, plan: RawTcpPlanOutput) -> Self {
         Self {
             ctx,
-            state: State::Pending {
-                pause: plan.pause.clone(),
-            },
+            state: State::Pending,
             start_time: None,
             remote_ip: None,
             local_ip: None,
@@ -97,9 +94,8 @@ impl RawTcpRunner {
                 src_port: 0,
                 received: Vec::new(),
                 errors: Vec::new(),
-                duration: TimeDelta::zero(),
+                duration: TimeDelta::zero().into(),
                 handshake_duration: None,
-                pause: RawTcpPauseOutput::with_planned_capacity(&plan.pause),
                 plan,
             },
         }
@@ -107,7 +103,7 @@ impl RawTcpRunner {
 
     pub async fn start(&mut self) -> anyhow::Result<()> {
         let state = std::mem::replace(&mut self.state, State::Invalid);
-        let State::Pending { pause } = state else {
+        let State::Pending = state else {
             bail!("attempt to start TcpRunner from unexpected state: {state:?}");
         };
 
@@ -397,7 +393,8 @@ impl RawTcpRunner {
             .map(TimeDelta::from_std)
             .transpose()
             .expect("durations should fit in chrono")
-            .unwrap_or_else(|| TimeDelta::zero());
+            .unwrap_or_else(|| TimeDelta::zero())
+            .into();
     }
 
     fn data_offset(options: &Vec<TcpSegmentOptionOutput>) -> u8 {
@@ -562,7 +559,7 @@ pub fn reader(
 
 fn packet_to_output(packet: TcpPacket, start: Instant) -> TcpSegmentOutput {
     TcpSegmentOutput {
-        received: TimeDelta::from_std(start.elapsed()).ok(),
+        received: TimeDelta::from_std(start.elapsed()).ok().map(Duration),
         sent: None,
         sequence_number: packet.get_sequence(),
         flags: packet.get_flags(),

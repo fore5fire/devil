@@ -22,22 +22,30 @@ pub struct Pause(JoinHandle<PauseValueOutput>);
 impl Pause {
     pub(crate) fn new(ctx: &super::Context, planned: &PauseValueOutput) -> Self {
         let start = tokio::time::Instant::now();
-        let duration = planned
-            .duration
-            .to_std()
-            .expect("pause durations should fit in both std and chrono");
-        let sleep = tokio::time::sleep_until(start + duration);
-        let barriers: Vec<_> = planned.join.iter().map(|j| ctx.pause_barrier(j)).collect();
-        let join_tags = planned.join.clone();
-        let offset_bytes = planned.offset_bytes;
+        //let duration = planned
+        //    .duration
+        //    .to_std()
+        //    .expect("pause durations should fit in both std and chrono");
+        //let sleep = tokio::time::sleep_until(start + duration);
+        //let barriers: Vec<_> = planned.join.iter().map(|j| ctx.pause_barrier(j)).collect();
+        //let join_tags = planned.join.clone();
+        //let offset_bytes = planned.offset_bytes;
         Pause(tokio::spawn(async move {
-            sleep.await;
-            join_all(barriers.iter().map(|b| b.wait())).await;
+            //sleep.await;
+            //join_all(barriers.iter().map(|b| b.wait())).await;
             PauseValueOutput {
                 duration: chrono::Duration::from_std(start.elapsed())
-                    .expect("pause durations should fit in both std and chrono"),
-                offset_bytes,
-                join: join_tags,
+                    .expect("pause durations should fit in both std and chrono")
+                    .into(),
+                r#await: None,
+                location: crate::LocationOutput::Before(crate::LocationValueOutput {
+                    id: crate::location::Location::Udp(
+                        crate::location::UdpLocation::SendBody,
+                        crate::location::Side::Start,
+                    ),
+                    offset_bytes: 0,
+                }), //offset_bytes,
+                    //join: join_tags,
             }
         }))
     }
@@ -134,7 +142,7 @@ where
                     self.out.push(Vec::with_capacity(spec.plan.len()));
                     let current_offset = spec.group_offset + self.bytes_read;
                     spec.plan.into_iter().map(move |p| AbsolutePlan {
-                        absolute_offset: current_offset + p.offset_bytes,
+                        absolute_offset: current_offset + /*p.offset_bytes*/0,
                         plan: p,
                         output_index,
                     })
@@ -290,7 +298,7 @@ impl<T: AsyncWrite + std::fmt::Debug> PauseWriter<T> {
                     self.out.push(Vec::with_capacity(spec.plan.len()));
                     let current_offset = spec.group_offset + self.bytes_written;
                     spec.plan.into_iter().map(move |p| AbsolutePlan {
-                        absolute_offset: current_offset + p.offset_bytes,
+                        absolute_offset: current_offset + /*p.offset_bytes*/0,
                         plan: p,
                         output_index,
                     })

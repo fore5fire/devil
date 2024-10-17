@@ -5,7 +5,7 @@ use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::{runner::Runner, Context};
-use crate::{GraphQlError, GraphQlOutput, GraphQlPlanOutput, WithPlannedCapacity};
+use crate::{GraphQlError, GraphQlOutput, GraphQlPlanOutput};
 
 #[derive(Debug)]
 pub(super) struct GraphQlRunner {
@@ -50,8 +50,7 @@ impl GraphQlRunner {
                 request: None,
                 response: None,
                 errors: Vec::new(),
-                duration: Duration::zero(),
-                pause: crate::GraphQlPauseOutput::with_planned_capacity(&plan.pause),
+                duration: Duration::zero().into(),
                 plan,
             },
             ctx,
@@ -152,9 +151,12 @@ impl<'a> GraphQlRunner {
                         .resp_start_time
                         .expect("response start time should be set before header is processed"),
             )
-            .unwrap();
+            .unwrap()
+            .into();
         }
-        self.out.duration = chrono::Duration::from_std(end_time - start_time).unwrap();
+        self.out.duration = chrono::Duration::from_std(end_time - start_time)
+            .unwrap()
+            .into();
 
         (self.out, Some(transport))
     }

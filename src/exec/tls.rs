@@ -36,7 +36,6 @@ enum State {
         #[derivative(Debug = "ignore")]
         connector: TlsConnector,
         domain: Box<String>,
-        pause: TlsPauseOutput,
     },
     Open {
         start: Instant,
@@ -62,14 +61,11 @@ impl TlsRunner {
         tls_config.alpn_protocols = plan.alpn.clone();
         let connector = tokio_rustls::TlsConnector::from(Arc::new(tls_config));
 
-        let pause = TlsPauseOutput::with_planned_capacity(&plan.pause);
-
         TlsRunner {
             ctx,
             state: State::Pending {
                 connector,
                 domain: Box::new(plan.host.clone()),
-                pause: plan.pause.clone(),
             },
             out: TlsOutput {
                 request: Some(TlsRequestOutput {
@@ -83,9 +79,8 @@ impl TlsRunner {
                 response: None,
                 errors: Vec::new(),
                 version: None,
-                duration: Duration::zero(),
+                duration: Duration::zero().into(),
                 handshake_duration: None,
-                pause,
             },
             size_hint: None,
         }
@@ -100,12 +95,7 @@ impl TlsRunner {
 
     pub async fn start(&mut self, transport: Runner) -> anyhow::Result<()> {
         let state = std::mem::replace(&mut self.state, State::Invalid);
-        let State::Pending {
-            connector,
-            domain,
-            pause,
-        } = state
-        else {
+        let State::Pending { connector, domain } = state else {
             bail!("attempt to start TlsRunner from unexpected state");
         };
 
@@ -125,22 +115,22 @@ impl TlsRunner {
         };
 
         let start = Instant::now();
-        self.out
-            .pause
-            .handshake
-            .start
-            .reserve_exact(self.out.plan.pause.handshake.start.len());
-        for p in &self.out.plan.pause.handshake.start {
-            if p.offset_bytes != 0 {
-                bail!("pause offset not yet supported for tls handshake");
-            }
-            println!("pausing before tls handshake for {:?}", p.duration);
-            self.out
-                .pause
-                .handshake
-                .start
-                .push(Pause::new(&self.ctx, p).await?);
-        }
+        //self.out
+        //    .pause
+        //    .handshake
+        //    .start
+        //    .reserve_exact(self.out.plan.pause.handshake.start.len());
+        //for p in &self.out.plan.pause.handshake.start {
+        //    if p.offset_bytes != 0 {
+        //        bail!("pause offset not yet supported for tls handshake");
+        //    }
+        //    println!("pausing before tls handshake for {:?}", p.duration);
+        //    self.out
+        //        .pause
+        //        .handshake
+        //        .start
+        //        .push(Pause::new(&self.ctx, p).await?);
+        //}
         // Perform the TLS handshake.
         let connection = match connector.connect(domain, transport).await {
             Ok(conn) => conn,
@@ -149,51 +139,52 @@ impl TlsRunner {
             }
         };
         let handshake_duration = start.elapsed();
-        for p in &self.out.plan.pause.handshake.end {
-            if p.offset_bytes != 0 {
-                bail!("pause offset not yet supported for tls handshake");
-            }
-            println!("pausing after tls handshake for {:?}", p.duration);
-            self.out
-                .pause
-                .handshake
-                .end
-                .push(Pause::new(&self.ctx, p).await?);
-        }
-        self.out.handshake_duration = Some(Duration::from_std(handshake_duration).unwrap());
-        if !pause.receive_body.end.is_empty() {
-            bail!("tls.pause.receive_body.end is unsupported in this request");
-        }
+        //for p in &self.out.plan.pause.handshake.end {
+        //    if p.offset_bytes != 0 {
+        //        bail!("pause offset not yet supported for tls handshake");
+        //    }
+        //    println!("pausing after tls handshake for {:?}", p.duration);
+        //    self.out
+        //        .pause
+        //        .handshake
+        //        .end
+        //        .push(Pause::new(&self.ctx, p).await?);
+        //}
+        self.out.handshake_duration = Some(Duration::from_std(handshake_duration).unwrap().into());
+        //if !pause.receive_body.end.is_empty() {
+        //    bail!("tls.pause.receive_body.end is unsupported in this request");
+        //}
         self.state = State::Open {
             start,
             transport: pause::new_stream(
                 self.ctx.clone(),
                 Tee::new(Timing::new(connection)),
                 // TODO: Implement read size hints.
-                vec![PauseSpec {
+                vec![/*PauseSpec {
                     group_offset: 0,
                     plan: pause.receive_body.start,
-                }],
-                if let Some(size) = self.size_hint {
-                    vec![
-                        PauseSpec {
-                            group_offset: 0,
-                            plan: pause.send_body.start,
-                        },
-                        PauseSpec {
-                            group_offset: size.try_into().unwrap(),
-                            plan: pause.send_body.end,
-                        },
-                    ]
-                } else {
-                    if !pause.send_body.end.is_empty() {
-                        bail!("tls.pause.send_body.end is unsupported in this request");
-                    }
-                    vec![PauseSpec {
-                        group_offset: 0,
-                        plan: pause.send_body.start,
-                    }]
-                },
+                }*/],
+                vec![],
+                //if let Some(size) = self.size_hint {
+                //    vec![
+                //        PauseSpec {
+                //            group_offset: 0,
+                //            plan: pause.send_body.start,
+                //        },
+                //        PauseSpec {
+                //            group_offset: size.try_into().unwrap(),
+                //            plan: pause.send_body.end,
+                //        },
+                //    ]
+                //} else {
+                //    if !pause.send_body.end.is_empty() {
+                //        bail!("tls.pause.send_body.end is unsupported in this request");
+                //    }
+                //    vec![PauseSpec {
+                //        group_offset: 0,
+                //        plan: pause.send_body.start,
+                //    }]
+                //},
             ),
         };
         Ok(())
@@ -280,19 +271,19 @@ impl TlsRunner {
         let end_time = stream.shutdown_end().unwrap_or(end_time);
 
         let mut receive_pause = receive_pause.into_iter();
-        self.out.pause.receive_body.start = receive_pause.next().unwrap_or_default();
-        self.out.pause.receive_body.end = receive_pause.next().unwrap_or_default();
+        //self.out.pause.receive_body.start = receive_pause.next().unwrap_or_default();
+        //self.out.pause.receive_body.end = receive_pause.next().unwrap_or_default();
         let mut send_pause = send_pause.into_iter();
-        self.out.pause.send_body.start = send_pause.next().unwrap_or_default();
-        self.out.pause.send_body.end = send_pause.next().unwrap_or_default();
+        //self.out.pause.send_body.start = send_pause.next().unwrap_or_default();
+        //self.out.pause.send_body.end = send_pause.next().unwrap_or_default();
 
         if let Some(req) = &mut self.out.request {
             req.time_to_first_byte = stream
                 .first_write()
-                .map(|first_write| Duration::from_std(first_write - start).unwrap());
+                .map(|first_write| Duration::from_std(first_write - start).unwrap().into());
             req.time_to_last_byte = stream
                 .last_write()
-                .map(|last_write| Duration::from_std(last_write - start).unwrap());
+                .map(|last_write| Duration::from_std(last_write - start).unwrap().into());
             req.body = writes;
         }
         if !reads.is_empty() {
@@ -300,13 +291,13 @@ impl TlsRunner {
                 body: reads,
                 time_to_first_byte: stream
                     .first_read()
-                    .map(|first_read| Duration::from_std(first_read - start).unwrap()),
+                    .map(|first_read| Duration::from_std(first_read - start).unwrap().into()),
                 time_to_last_byte: stream
                     .last_read()
-                    .map(|last_read| Duration::from_std(last_read - start).unwrap()),
+                    .map(|last_read| Duration::from_std(last_read - start).unwrap().into()),
             });
         }
-        self.out.duration = Duration::from_std(end_time - start).unwrap();
+        self.out.duration = Duration::from_std(end_time - start).unwrap().into();
 
         let (inner, conn) = stream.into_inner().into_inner();
 

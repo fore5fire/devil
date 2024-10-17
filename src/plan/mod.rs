@@ -26,7 +26,7 @@ pub use raw_tcp::*;
 
 use crate::bindings::{EnumKind, Literal, ValueOrArray};
 use crate::{
-    bindings, cel_functions, Error, LocationOutput, LocationValueOutput, Regex, Result, SignalOp, State, StepPlanOutput, TcpSegmentOptionOutput 
+    bindings, cel_functions, Error, LocationOutput, LocationValueOutput, Regex, Result, SignalOp, State, StepPlanOutput, SyncOutput, TcpSegmentOptionOutput 
 };
 use anyhow::{anyhow, bail};
 use base64::Engine;
@@ -1002,6 +1002,23 @@ impl TryFrom<bindings::Sync> for Synchronizer {
             bindings::Sync::Semaphore{ permits } => Ok(Self::Semaphore { permits: permits.try_into()? }),
             bindings::Sync::PrioritySemaphore{ permits } => Ok(Self::PrioritySemaphore { permits: permits.try_into()? }),
         }
+    }
+}
+
+impl Evaluate<SyncOutput> for Synchronizer{
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<SyncOutput>
+    where
+        S: State<'a, O, I>,
+        O: Into<&'a str>,
+        I: IntoIterator<Item = O>,
+    {
+        Ok(match self {
+            Self::Barrier { count } => SyncOutput::Barrier { count: count.evaluate(state)? },
+            Self::Mutex => SyncOutput::Mutex,
+            Self::PriorityMutex => SyncOutput::PriorityMutex,
+            Self::Semaphore { permits } => SyncOutput::Semaphore { permits: permits.evaluate(state)? },
+            Self::PrioritySemaphore { permits } => SyncOutput::PrioritySemaphore { permits: permits.evaluate(state)? },
+        })
     }
 }
 

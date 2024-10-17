@@ -94,7 +94,7 @@ pub struct Defaults {
     #[serde(default)]
     pub sync: IndexMap<String, Sync>,
     #[serde(default)]
-    pub pause: IndexMap<String, Pause>,
+    pub pause: IndexMap<String, PauseValue>,
 }
 
 impl Defaults {

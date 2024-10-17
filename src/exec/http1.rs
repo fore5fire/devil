@@ -9,8 +9,8 @@ use anyhow::bail;
 use bytes::Buf;
 use bytes::BufMut;
 use bytes::BytesMut;
-use chrono::Duration;
-use pnet::transport;
+use cel_interpreter::Duration;
+use chrono::TimeDelta;
 use tokio::io::ReadBuf;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -23,8 +23,6 @@ use crate::AddContentLength;
 use crate::Http1Error;
 use crate::Http1PlanOutput;
 use crate::Http1RequestOutput;
-use crate::StepOutput;
-use crate::WithPlannedCapacity;
 use crate::{Http1Output, Http1Response};
 
 #[derive(Debug)]
@@ -82,38 +80,38 @@ impl AsyncRead for Http1Runner {
                 self.state = match &poll {
                     Poll::Ready(Ok(())) => {
                         // Schedule planned pauses for the response body.
-                        transport.add_reads([
-                            PauseSpec {
-                                group_offset: 0,
-                                plan: self.out.plan.pause.response_headers.end.clone(),
-                            },
-                            PauseSpec {
-                                plan: self.out.plan.pause.response_body.start.clone(),
-                                group_offset: 0,
-                            },
-                        ]);
-                        if let Some(content_length) =
-                            self.out.response.as_ref().and_then(|r| r.content_length)
-                        {
-                            transport.add_reads([PauseSpec {
-                                plan: self.out.plan.pause.response_body.end.clone(),
-                                group_offset: content_length.try_into().unwrap(),
-                            }]);
-                        } else if self
-                            .out
-                            .plan
-                            .pause
-                            .response_body
-                            .end
-                            .iter()
-                            .any(|p| p.offset_bytes < 0)
-                        {
-                            self.out.errors.push(Http1Error {
-                                    kind: "unsupported pause".to_owned(),
-                                    message:
-                                        "response must include Content-Length header to use http1.plan.pause.response_body.end with a negative offset".to_owned(),
-                                });
-                        }
+                        //transport.add_reads([
+                        //    PauseSpec {
+                        //        group_offset: 0,
+                        //        plan: self.out.plan.pause.response_headers.end.clone(),
+                        //    },
+                        //    PauseSpec {
+                        //        plan: self.out.plan.pause.response_body.start.clone(),
+                        //        group_offset: 0,
+                        //    },
+                        //]);
+                        //if let Some(content_length) =
+                        //    self.out.response.as_ref().and_then(|r| r.content_length)
+                        //{
+                        //    transport.add_reads([PauseSpec {
+                        //        plan: self.out.plan.pause.response_body.end.clone(),
+                        //        group_offset: content_length.try_into().unwrap(),
+                        //    }]);
+                        //} else if self
+                        //    .out
+                        //    .plan
+                        //    .pause
+                        //    .response_body
+                        //    .end
+                        //    .iter()
+                        //    .any(|p| p.offset_bytes < 0)
+                        //{
+                        //    self.out.errors.push(Http1Error {
+                        //            kind: "unsupported pause".to_owned(),
+                        //            message:
+                        //                "response must include Content-Length header to use http1.plan.pause.response_body.end with a negative offset".to_owned(),
+                        //        });
+                        //}
 
                         State::ReceivingBody { transport }
                     }
@@ -203,8 +201,8 @@ impl Http1Runner {
                 request: None,
                 response: None,
                 errors: Vec::new(),
-                duration: Duration::zero(),
-                pause: crate::Http1PauseOutput::with_planned_capacity(&plan.pause),
+                duration: TimeDelta::zero().into(),
+                //pause: crate::Http1PauseOutput::with_planned_capacity(&plan.pause),
                 plan,
             },
             start_time: None,
@@ -339,7 +337,7 @@ impl Http1Runner {
                     }),
                     status_reason: resp.reason.map(Vec::from),
                     body: None,
-                    duration: Duration::zero(),
+                    duration: TimeDelta::zero().into(),
                     header_duration: None,
                     time_to_first_byte: self
                         .first_read
@@ -348,16 +346,18 @@ impl Http1Runner {
                                 .map(|start| first_read - start)
                                 .unwrap_or_default()
                         })
-                        .map(Duration::from_std)
+                        .map(TimeDelta::from_std)
                         .transpose()
-                        .expect("durations should fit in std"),
+                        .expect("durations should fit in std")
+                        .map(Duration),
                 });
                 match result {
                     httparse::Status::Partial => Poll::Pending,
                     httparse::Status::Complete(body_start) => {
                         self.out.response.as_mut().unwrap().header_duration = Some(
-                            Duration::from_std(header_complete_time - self.start_time.unwrap())
-                                .unwrap(),
+                            TimeDelta::from_std(header_complete_time - self.start_time.unwrap())
+                                .unwrap()
+                                .into(),
                         );
                         // Return the bytes we didn't read.
                         self.resp_header_buf.advance(body_start);
@@ -421,11 +421,11 @@ impl Http1Runner {
         let mut transport = pause::new_stream(
             ctx,
             transport,
-            [PauseSpec {
+            [/*PauseSpec {
                 group_offset: 0,
                 plan: self.out.plan.pause.response_headers.start.clone(),
-            }],
-            [
+            }*/],
+            [/*
                 PauseSpec {
                     plan: self.out.plan.pause.request_headers.start.clone(),
                     group_offset: 0,
@@ -438,28 +438,28 @@ impl Http1Runner {
                     plan: self.out.plan.pause.request_body.start.clone(),
                     group_offset: header_len,
                 },
-            ],
+            */],
         );
-        if let Some(size_hint) = self.size_hint {
-            transport.add_writes([PauseSpec {
-                plan: self.out.plan.pause.request_body.end.clone(),
-                group_offset: i64::try_from(size_hint).unwrap() + header_len,
-            }]);
-        } else {
-            if self
-                .out
-                .plan
-                .pause
-                .request_body
-                .end
-                .iter()
-                .any(|p| p.offset_bytes < 0)
-            {
-                bail!(
-                    "http1.pause.request_body.end with negative offset is unsupported in this request"
-                );
-            }
-        }
+        //if let Some(size_hint) = self.size_hint {
+        //    transport.add_writes([PauseSpec {
+        //        plan: self.out.plan.pause.request_body.end.clone(),
+        //        group_offset: i64::try_from(size_hint).unwrap() + header_len,
+        //    }]);
+        //} else {
+        //    if self
+        //        .out
+        //        .plan
+        //        .pause
+        //        .request_body
+        //        .end
+        //        .iter()
+        //        .any(|p| p.offset_bytes < 0)
+        //    {
+        //        bail!(
+        //            "http1.pause.request_body.end with negative offset is unsupported in this request"
+        //        );
+        //    }
+        //}
 
         self.start_time = Some(Instant::now());
         self.state = State::SendingHeader { transport };
@@ -480,7 +480,7 @@ impl Http1Runner {
             method: self.out.plan.method.clone(),
             version_string: self.out.plan.version_string.clone(),
             body: Vec::new(),
-            duration: Duration::zero(),
+            duration: TimeDelta::zero().into(),
             body_duration: None,
             time_to_first_byte: None,
         });
@@ -557,48 +557,52 @@ impl Http1Runner {
         };
 
         let (inner, write_pause, read_pause) = transport.finish_stream();
-        let mut write_pause = write_pause.into_iter();
-        self.out.pause.request_headers.start = write_pause.next().unwrap_or_default();
-        self.out.pause.request_headers.end = write_pause.next().unwrap_or_default();
-        self.out.pause.request_body.start = write_pause.next().unwrap_or_default();
-        self.out.pause.request_body.end = write_pause.next().unwrap_or_default();
-        assert!(write_pause.next().is_none(), "leftover write pause output");
-        let mut read_pause = read_pause.into_iter();
-        self.out.pause.response_headers.start = read_pause.next().unwrap_or_default();
-        self.out.pause.response_headers.end = read_pause.next().unwrap_or_default();
-        self.out.pause.response_body.start = read_pause.next().unwrap_or_default();
-        self.out.pause.response_body.end = read_pause.next().unwrap_or_default();
-        assert!(read_pause.next().is_none(), "leftover read pause output");
+        //let mut write_pause = write_pause.into_iter();
+        //self.out.pause.request_headers.start = write_pause.next().unwrap_or_default();
+        //self.out.pause.request_headers.end = write_pause.next().unwrap_or_default();
+        //self.out.pause.request_body.start = write_pause.next().unwrap_or_default();
+        //self.out.pause.request_body.end = write_pause.next().unwrap_or_default();
+        //assert!(write_pause.next().is_none(), "leftover write pause output");
+        //let mut read_pause = read_pause.into_iter();
+        //self.out.pause.response_headers.start = read_pause.next().unwrap_or_default();
+        //self.out.pause.response_headers.end = read_pause.next().unwrap_or_default();
+        //self.out.pause.response_body.start = read_pause.next().unwrap_or_default();
+        //self.out.pause.response_body.end = read_pause.next().unwrap_or_default();
+        //assert!(read_pause.next().is_none(), "leftover read pause output");
 
         let start_time = self.start_time.unwrap();
 
         if let Some(req) = &mut self.out.request {
-            req.duration =
-                Duration::from_std(self.req_end_time.unwrap_or(end_time) - start_time).unwrap();
+            req.duration = TimeDelta::from_std(self.req_end_time.unwrap_or(end_time) - start_time)
+                .unwrap()
+                .into();
             req.body_duration = self
                 .req_body_start_time
                 .map(|start| self.resp_start_time.unwrap_or(end_time) - start)
-                .map(Duration::from_std)
+                .map(TimeDelta::from_std)
                 .transpose()
-                .unwrap();
+                .unwrap()
+                .map(Duration);
             req.time_to_first_byte = self
                 .req_header_start_time
                 .map(|header_start| header_start - start_time)
-                .map(Duration::from_std)
+                .map(TimeDelta::from_std)
                 .transpose()
-                .unwrap();
+                .unwrap()
+                .map(Duration);
             req.body = self.req_body_buf.to_vec();
         }
 
         // The response should be set if the header has been read.
         if let Some(resp) = &mut self.out.response {
             resp.body = Some(self.resp_body_buf.to_vec());
-            resp.duration = Duration::from_std(
+            resp.duration = TimeDelta::from_std(
                 self.resp_start_time
                     .map(|start| end_time - start)
                     .unwrap_or_default(),
             )
-            .unwrap();
+            .unwrap()
+            .into();
             resp.header_duration = self
                 .resp_header_end_time
                 .map(|end| {
@@ -606,14 +610,15 @@ impl Http1Runner {
                         .map(|start| end - start)
                         .unwrap_or_default()
                 })
-                .map(Duration::from_std)
+                .map(TimeDelta::from_std)
                 .transpose()
-                .unwrap();
+                .unwrap()
+                .map(Duration);
         }
 
         self.state = State::Complete {
             transport: Some(inner),
         };
-        self.out.duration = Duration::from_std(end_time - start_time).unwrap();
+        self.out.duration = TimeDelta::from_std(end_time - start_time).unwrap().into();
     }
 }
