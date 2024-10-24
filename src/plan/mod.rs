@@ -101,7 +101,7 @@ pub enum HttpVersion {
 #[derive(Debug, Clone)]
 pub struct LocationValue {
     id: PlanValue<location::Location>,
-    offset_bytes: PlanValue<Option<usize>>,
+    offset_bytes: PlanValue<Option<i64>>,
 }
 
 impl TryFrom<bindings::LocationValue> for LocationValue {
@@ -252,7 +252,7 @@ impl Evaluate<crate::SignalValueOutput> for SignalValue {
 #[derive(Debug, Clone)]
 pub struct PlanData(pub cel_interpreter::Value);
 
-trait TryFromPlanData: Sized {
+pub trait TryFromPlanData: Sized {
     type Error;
     fn try_from_plan_data(value: PlanData) -> std::result::Result<Self, Self::Error>;
 }
@@ -466,7 +466,7 @@ impl TryFromPlanData for TcpSegmentOptionOutput {
         match value.0 {
             cel_interpreter::Value::Map(x) => match x.get(&Self::KIND_KEY.into()) {
                 Some(cel_interpreter::Value::String(kind)) if kind.as_str() == Self::NOP_KIND => {
-                    Ok(Self::Nop)
+                    Ok(Self::Nop(true))
                 }
                 Some(cel_interpreter::Value::String(kind)) if kind.as_str() == Self::TIMESTAMPS_KIND => {
                     Ok(Self::Timestamps {
@@ -517,7 +517,7 @@ impl TryFromPlanData for TcpSegmentOptionOutput {
                             ))??))
                 }
                 Some(cel_interpreter::Value::String(kind)) if kind.as_str() == Self::SACK_PERMITTED_KIND => {
-                    Ok(Self::SackPermitted)
+                    Ok(Self::SackPermitted(true))
                 }
                 Some(cel_interpreter::Value::String(kind)) if kind.as_str() == Self::SACK_KIND => {
                     Ok(Self::Sack(x.get(&Self::VALUE_KEY.into())
@@ -562,8 +562,8 @@ impl TryFromPlanData for TcpSegmentOptionOutput {
                 ),
             },
             cel_interpreter::Value::String(x) => match x.as_str() {
-                "nop" => Ok(Self::Nop),
-                "sack_permitted" => Ok(Self::SackPermitted),
+                "nop" => Ok(Self::Nop(true)),
+                "sack_permitted" => Ok(Self::SackPermitted(true)),
                 val => bail!("invalid TLS version {val:?}"),
             },
             _ => bail!(
@@ -1822,7 +1822,7 @@ impl TryFrom<Literal> for TcpSegmentOptionOutput {
         match binding {
             Literal::Enum { kind, mut fields } => match kind {
                 EnumKind::Named(kind) if kind.as_str() == TcpSegmentOptionOutput::NOP_KIND => {
-                    Ok(TcpSegmentOptionOutput::Nop)
+                    Ok(TcpSegmentOptionOutput::Nop(true))
                 }
                 EnumKind::Named(kind)
                     if kind.as_str() == TcpSegmentOptionOutput::TIMESTAMPS_KIND =>
@@ -1890,7 +1890,7 @@ impl TryFrom<Literal> for TcpSegmentOptionOutput {
                 EnumKind::Named(kind)
                     if kind.as_str() == TcpSegmentOptionOutput::SACK_PERMITTED_KIND =>
                 {
-                    Ok(TcpSegmentOptionOutput::SackPermitted)
+                    Ok(TcpSegmentOptionOutput::SackPermitted(true))
                 }
                 EnumKind::Named(kind) if kind.as_str() == TcpSegmentOptionOutput::SACK_KIND => {
                     Ok(TcpSegmentOptionOutput::Sack(fields
@@ -2366,16 +2366,17 @@ where
                         .get(name)
                         .unwrap()
                         .to_owned()
+                        .jobs
                         .into_iter()
                         .collect::<HashMap<_, _>>(),
                 )
             })
             .collect::<HashMap<_, _>>(),
-    );
-    ctx.add_variable("current", state.current());
-    ctx.add_variable("for", state.run_for());
-    ctx.add_variable("while", state.run_while());
-    ctx.add_variable("count", state.run_count());
+    ).unwrap();
+    ctx.add_variable("current", state.current()).unwrap();
+    ctx.add_variable("for", state.run_for()).unwrap();
+    ctx.add_variable("while", state.run_while()).unwrap();
+    ctx.add_variable("count", state.run_count()).unwrap();
     ctx.add_function("parse_url", cel_functions::url);
     ctx.add_function(
         "parse_form_urlencoded",

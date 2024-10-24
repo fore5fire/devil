@@ -440,13 +440,13 @@ impl RawTcpRunner {
                 .options
                 .iter()
                 .map(|opt| match opt {
-                    TcpSegmentOptionOutput::Nop => TcpOption::nop(),
+                    TcpSegmentOptionOutput::Nop(_) => TcpOption::nop(),
                     TcpSegmentOptionOutput::Timestamps { tsval, tsecr } => {
                         TcpOption::timestamp(*tsval, *tsecr)
                     }
                     TcpSegmentOptionOutput::Mss(val) => TcpOption::mss(*val),
                     TcpSegmentOptionOutput::Wscale(val) => TcpOption::wscale(*val),
-                    TcpSegmentOptionOutput::SackPermitted => TcpOption::sack_perm(),
+                    TcpSegmentOptionOutput::SackPermitted(_) => TcpOption::sack_perm(),
                     TcpSegmentOptionOutput::Sack(acks) => TcpOption::selective_ack(acks),
                     TcpSegmentOptionOutput::Generic { .. } => {
                         panic!("sending generic tcp segment options is not yet supported")
@@ -574,7 +574,9 @@ fn packet_to_output(packet: TcpPacket, start: Instant) -> TcpSegmentOutput {
         options: packet
             .get_options_iter()
             .map(|opts| match opts.get_number() {
-                TcpOptionNumbers::NOP if opts.payload().len() == 0 => TcpSegmentOptionOutput::Nop,
+                TcpOptionNumbers::NOP if opts.payload().len() == 0 => {
+                    TcpSegmentOptionOutput::Nop(true)
+                }
                 TcpOptionNumbers::TIMESTAMPS if opts.payload().len() == 8 => {
                     TcpSegmentOptionOutput::Timestamps {
                         tsval: u32::from_be_bytes(opts.payload()[..4].try_into().unwrap()),
@@ -590,7 +592,7 @@ fn packet_to_output(packet: TcpPacket, start: Instant) -> TcpSegmentOutput {
                     ))
                 }
                 TcpOptionNumbers::SACK_PERMITTED if opts.payload().len() == 0 => {
-                    TcpSegmentOptionOutput::SackPermitted
+                    TcpSegmentOptionOutput::SackPermitted(true)
                 }
                 _ => TcpSegmentOptionOutput::Generic {
                     kind: opts.get_number().0,

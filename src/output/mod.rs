@@ -4,6 +4,7 @@ use std::sync::Arc;
 use anyhow::bail;
 use cel_interpreter::{Duration, Value};
 use indexmap::IndexMap;
+use prost::Message;
 use serde::Serialize;
 
 use crate::{location, IterableKey, Parallelism, ProtocolField};
@@ -29,7 +30,7 @@ pub use tls::*;
 pub use value::*;
 
 pub trait State<'a, O: Into<&'a str>, I: IntoIterator<Item = O>> {
-    fn get(&self, name: &'a str) -> Option<&IndexMap<crate::IterableKey, StepOutput>>;
+    fn get(&self, name: &'a str) -> Option<&StepOutput>;
     fn current(&self) -> &StepPlanOutputs;
     fn run_for(&self) -> &Option<RunForOutput>;
     fn run_while(&self) -> &Option<RunWhileOutput>;
@@ -84,11 +85,18 @@ impl<T: Debug + Clone> PlanWrapper<T> {
 
 #[derive(Debug, Default, Serialize)]
 pub struct PlanOutput {
-    pub steps: IndexMap<String, IndexMap<IterableKey, StepOutput>>,
+    pub steps: IndexMap<String, StepOutput>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct StepOutput {
+    pub name: String,
+    pub jobs: IndexMap<IterableKey, JobOutput>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct JobOutput {
+    pub name: String,
     pub graphql: Option<GraphQlOutput>,
     pub http: Option<HttpOutput>,
     pub h1c: Option<Http1Output>,
@@ -103,7 +111,7 @@ pub struct StepOutput {
     pub raw_tcp: Option<RawTcpOutput>,
 }
 
-impl StepOutput {
+impl JobOutput {
     pub fn http1(&self) -> Option<&Http1Output> {
         self.h1.as_ref().or_else(|| self.h1c.as_ref())
     }
@@ -193,7 +201,7 @@ pub enum SyncOutput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub struct LocationValueOutput {
     pub id: location::Location,
-    pub offset_bytes: usize,
+    pub offset_bytes: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]

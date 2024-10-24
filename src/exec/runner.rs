@@ -6,7 +6,7 @@ use tracing::info;
 
 use super::raw_http2::RawHttp2Runner;
 use super::{http2::Http2Runner, raw_tcp::RawTcpRunner};
-use crate::{ProtocolField, StepOutput, StepPlanOutput};
+use crate::{JobOutput, ProtocolField, StepPlanOutput};
 
 use super::{
     graphql::GraphQlRunner, http::HttpRunner, http1::Http1Runner, tcp::TcpRunner, tls::TlsRunner,
@@ -174,7 +174,7 @@ impl Runner {
         }
     }
 
-    pub async fn finish(self: Self, output: &mut StepOutput) -> Option<Runner> {
+    pub async fn finish(self: Self, output: &mut JobOutput) -> Option<Runner> {
         match self {
             Self::RawTcp(r) => {
                 output.raw_tcp = Some(r.finish().await);

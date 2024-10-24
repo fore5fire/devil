@@ -254,8 +254,7 @@ impl Http2FrameOutput {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy)]
 pub enum Http2FrameType {
     Data,
     Headers,
@@ -306,6 +305,15 @@ impl Http2FrameType {
     }
 }
 
+impl Serialize for Http2FrameType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_u8(self.value())
+    }
+}
+
 impl Display for Http2FrameType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Reparse the Http2FrameType to correctly print generic with a recognized type.
@@ -327,7 +335,6 @@ impl Display for Http2FrameType {
 
 #[bitmask(u8)]
 #[derive(Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum Http2FrameFlag {
     Ack = 0x01,
     EndStream = 0x01,
@@ -362,8 +369,7 @@ impl Http2FrameFlag {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy)]
 pub enum Http2SettingsParameterId {
     HeaderTableSize,
     EnablePush,
@@ -399,6 +405,15 @@ impl Http2SettingsParameterId {
             Self::MaxHeaderListSize => 6,
             Self::Generic(val) => val,
         }
+    }
+}
+
+impl Serialize for Http2SettingsParameterId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_u16(self.value())
     }
 }
 

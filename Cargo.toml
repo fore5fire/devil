@@ -14,7 +14,7 @@ futures = "0.3.26"
 toml = { version = "0.8.6", features = ["preserve_order", "indexmap"] }
 serde = { version = "1.0.190", features = ["rc", "serde_derive"] }
 indexmap = { version = "2.1.0", features = ["serde"] }
-cel-interpreter = { git = "https://github.com/fore5fire/cel-rust", branch = "serde-datetime", features = ["json"] }
+cel-interpreter = { git = "https://github.com/fore5fire/cel-rust", branch = "serde-datetime", features = ["json", "chrono"] }
 frunk = { version = "0.4.2", features = ["serde"] }
 frunk_core = "0.4.2"
 serde_json = { version = "1.0.129", features = ["indexmap", "arbitrary_precision", "preserve_order", "unbounded_depth"] }
@@ -52,3 +52,6 @@ tracing = { version = "0.1.40", features = ["async-await", "log"] }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 strum = { version = "0.26.3", features = ["derive"] }
 serde-transcode = "1.1.1"
+gcp-bigquery-client = "0.23.0"
+prost = "0.13.3"
+serde-hashkey = "0.4.5"

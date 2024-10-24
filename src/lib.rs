@@ -4,6 +4,7 @@ mod error;
 pub mod exec;
 mod output;
 mod plan;
+pub mod record;
 
 pub use output::*;
 pub use plan::*;

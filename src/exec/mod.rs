@@ -19,14 +19,13 @@ use std::sync::Arc;
 
 use anyhow::bail;
 use futures::future::try_join_all;
-use indexmap::IndexMap;
 use itertools::{Either, Itertools, Position};
 use tokio_task_pool::Pool;
 use tracing::debug;
 
 use crate::{
-    location, Evaluate, IterableKey, Parallelism, Plan, PlanWrapper, Protocol, ProtocolField, Step,
-    StepOutput, StepPlanOutput, StepPlanOutputs,
+    location, Evaluate, IterableKey, JobOutput, Parallelism, Plan, PlanWrapper, Protocol,
+    ProtocolField, Step, StepOutput, StepPlanOutput, StepPlanOutputs,
 };
 
 use self::runner::Runner;
@@ -35,7 +34,7 @@ use sync::*;
 pub struct Executor<'a> {
     locals: HashMap<cel_interpreter::objects::Key, cel_interpreter::Value>,
     steps: VecDeque<(&'a str, Step)>,
-    outputs: HashMap<&'a str, IndexMap<IterableKey, StepOutput>>,
+    outputs: HashMap<&'a str, StepOutput>,
 }
 
 impl<'a> Executor<'a> {
@@ -65,7 +64,7 @@ impl<'a> Executor<'a> {
         })
     }
 
-    pub async fn next(&mut self) -> anyhow::Result<IndexMap<IterableKey, StepOutput>> {
+    pub async fn next(&mut self) -> anyhow::Result<StepOutput> {
         let Some((name, step)) = self.steps.pop_front() else {
             bail!(Error::Done);
         };
@@ -80,7 +79,7 @@ impl<'a> Executor<'a> {
 
         // Check the if condition only before the first iteration.
         if !step.run.run_if.evaluate(&inputs)? {
-            return Ok(IndexMap::new());
+            return Ok(StepOutput::default());
         }
 
         let parallel = step.run.parallel.evaluate(&inputs)?;
@@ -98,9 +97,9 @@ impl<'a> Executor<'a> {
         let count_usize: usize = count.try_into()?;
 
         // Preallocate space when able.
-        let mut output = IndexMap::new();
+        let mut output = StepOutput::default();
         if step.run.run_while.is_none() {
-            output.try_reserve(count_usize)?;
+            output.jobs.try_reserve(count_usize)?;
         }
 
         let mut for_iterator = for_pairs.map(|pairs| pairs.into_iter());
@@ -223,7 +222,7 @@ impl<'a> Executor<'a> {
                     ops.push(op);
                 }
 
-                output.extend(
+                output.jobs.extend(
                     try_join_all(ops)
                         .await?
                         .into_iter()
@@ -260,7 +259,7 @@ impl<'a> Executor<'a> {
                         if !w.evaluate(&inputs)? {
                             break;
                         }
-                        output.try_reserve(1)?;
+                        output.jobs.try_reserve(1)?;
                     }
 
                     inputs.run_count = Some(crate::RunCountOutput { index: i });
@@ -273,7 +272,7 @@ impl<'a> Executor<'a> {
                         shared,
                     )
                     .await?;
-                    output.insert(key, out);
+                    output.jobs.insert(key, out);
                 }
             }
             Parallelism::Pipelined => {
@@ -366,9 +365,9 @@ impl<'a> Executor<'a> {
     async fn iteration(
         mut runner: Runner,
         shared: Option<ProtocolField>,
-    ) -> anyhow::Result<(StepOutput, Option<Runner>)> {
+    ) -> anyhow::Result<(JobOutput, Option<Runner>)> {
         runner.execute().await;
-        let mut output = StepOutput::default();
+        let mut output = JobOutput::default();
         let mut current = Some(runner);
         while let Some(r) = current {
             if let Some(shared) = shared {
@@ -386,7 +385,7 @@ impl<'a> Executor<'a> {
 
 #[derive(Debug, Clone)]
 struct State<'a> {
-    data: &'a HashMap<&'a str, IndexMap<crate::IterableKey, StepOutput>>,
+    data: &'a HashMap<&'a str, StepOutput>,
     current: StepPlanOutputs,
     run_while: Option<crate::RunWhileOutput>,
     run_for: Option<crate::RunForOutput>,
@@ -395,7 +394,7 @@ struct State<'a> {
 }
 
 impl<'a> crate::State<'a, &'a str, StateIterator<'a>> for State<'a> {
-    fn get(&self, name: &'a str) -> Option<&IndexMap<IterableKey, StepOutput>> {
+    fn get(&self, name: &'a str) -> Option<&StepOutput> {
         self.data.get(name)
     }
     fn current(&self) -> &StepPlanOutputs {

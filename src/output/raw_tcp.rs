@@ -47,10 +47,12 @@ pub struct TcpSegmentOutput {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TcpSegmentOptionOutput {
-    Nop,
+    // bool value is unused, but required to support serialization to parquet.
+    Nop(bool),
     Mss(u16),
     Wscale(u8),
-    SackPermitted,
+    // bool value is unused, but required to support serialization to parquet.
+    SackPermitted(bool),
     Sack(Vec<u32>),
     Timestamps { tsval: u32, tsecr: u32 },
     Generic { kind: u8, value: Vec<u8> },
@@ -73,10 +75,10 @@ impl TcpSegmentOptionOutput {
     // https://www.iana.org/assignments/tcp-parameters/tcp-parameters.xhtml
     pub fn size(&self) -> usize {
         match self {
-            Self::Nop => 1,
+            Self::Nop(_) => 1,
             Self::Mss(_) => 4,
             Self::Wscale(_) => 3,
-            Self::SackPermitted => 2,
+            Self::SackPermitted(_) => 2,
             Self::Sack(vals) => vals
                 .len()
                 .checked_mul(4)
