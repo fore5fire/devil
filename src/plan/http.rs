@@ -1,6 +1,6 @@
 use super::{Evaluate, PlanData, PlanValue, PlanValueTable, TryFromPlanData};
 use crate::bindings::Literal;
-use crate::{bindings, Error, Result, State};
+use crate::{bindings, Error, MaybeUtf8, Result, State};
 use anyhow::{anyhow, bail};
 use serde::Serialize;
 use std::str::FromStr;
@@ -63,10 +63,10 @@ impl TryFrom<bindings::Value> for PlanValue<AddContentLength> {
 #[derive(Debug, Clone)]
 pub struct HttpRequest {
     pub url: PlanValue<Url>,
-    pub method: PlanValue<Option<Vec<u8>>>,
-    pub headers: PlanValueTable<Vec<u8>, Vec<u8>>,
+    pub method: PlanValue<Option<MaybeUtf8>>,
+    pub headers: PlanValueTable<MaybeUtf8, MaybeUtf8>,
     pub add_content_length: PlanValue<AddContentLength>,
-    pub body: PlanValue<Option<Vec<u8>>>,
+    pub body: PlanValue<Option<MaybeUtf8>>,
 }
 
 impl TryFrom<bindings::Http> for HttpRequest {

@@ -1,16 +1,16 @@
 use super::{AddContentLength, Evaluate, PlanValue, PlanValueTable};
-use crate::{bindings, Error, Result, State};
+use crate::{bindings, Error, MaybeUtf8, Result, State};
 use anyhow::anyhow;
 use url::Url;
 
 #[derive(Debug, Clone)]
 pub struct Http1Request {
     pub url: PlanValue<Url>,
-    pub method: PlanValue<Option<Vec<u8>>>,
-    pub version_string: PlanValue<Option<Vec<u8>>>,
+    pub method: PlanValue<Option<MaybeUtf8>>,
+    pub version_string: PlanValue<Option<MaybeUtf8>>,
     pub add_content_length: PlanValue<AddContentLength>,
-    pub headers: PlanValueTable<Vec<u8>, Vec<u8>>,
-    pub body: PlanValue<Option<Vec<u8>>>,
+    pub headers: PlanValueTable<MaybeUtf8, MaybeUtf8>,
+    pub body: PlanValue<Option<MaybeUtf8>>,
 }
 
 impl Evaluate<crate::Http1PlanOutput> for Http1Request {
@@ -38,7 +38,7 @@ impl TryFrom<bindings::Http1> for Http1Request {
             url: binding
                 .common
                 .url
-                .map(PlanValue::<Url>::try_from)
+                .map(PlanValue::try_from)
                 .ok_or_else(|| anyhow!("http1.url is required"))??,
             version_string: binding.version_string.try_into()?,
             method: binding.common.method.try_into()?,

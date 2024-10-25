@@ -1,6 +1,8 @@
 use cel_interpreter::Duration;
 use serde::Serialize;
 
+use super::MaybeUtf8;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct TcpOutput {
     pub plan: TcpPlanOutput,
@@ -23,7 +25,7 @@ pub struct TcpOutput {
 pub struct TcpPlanOutput {
     pub host: String,
     pub port: u16,
-    pub body: Vec<u8>,
+    pub body: MaybeUtf8,
     //pub close: TcpPlanCloseOutput,
 }
 
@@ -39,14 +41,14 @@ pub struct TcpPlanOutput {
 pub struct TcpSentOutput {
     pub dest_ip: String,
     pub dest_port: u16,
-    pub body: Vec<u8>,
+    pub body: MaybeUtf8,
     pub time_to_first_byte: Option<Duration>,
     pub time_to_last_byte: Option<Duration>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TcpReceivedOutput {
-    pub body: Vec<u8>,
+    pub body: MaybeUtf8,
     pub time_to_first_byte: Option<Duration>,
     pub time_to_last_byte: Option<Duration>,
 }

@@ -11,6 +11,7 @@ mod udp;
 mod quic;
 pub mod location;
 
+use bytes::Bytes;
 pub use graphql::*;
 pub use http::*;
 pub use http1::*;
@@ -26,7 +27,7 @@ pub use raw_tcp::*;
 
 use crate::bindings::{EnumKind, Literal, ValueOrArray};
 use crate::{
-    bindings, cel_functions, Error, LocationOutput, LocationValueOutput, Regex, Result, SignalOp, State, StepPlanOutput, SyncOutput, TcpSegmentOptionOutput 
+    bindings, cel_functions, BytesOutput, Error, LocationOutput, LocationValueOutput, MaybeUtf8, Regex, Result, SignalOp, State, StepPlanOutput, SyncOutput, TcpSegmentOptionOutput 
 };
 use anyhow::{anyhow, bail};
 use base64::Engine;
@@ -448,6 +449,24 @@ impl TryFromPlanData for location::Location {
     }
 }
 
+impl TryFromPlanData for BytesOutput {
+    type Error = Error;
+    fn try_from_plan_data(value: PlanData) -> std::result::Result<Self, Self::Error> {
+        match value.0 {
+            cel_interpreter::Value::String(s) => Ok(s.into()),
+            cel_interpreter::Value::Bytes(b) => Ok(b.into()),
+            val => bail!("unsupported value {val:?} for bytes field"),
+        }
+    }
+}
+
+impl TryFromPlanData for MaybeUtf8 {
+    type Error = Error;
+    fn try_from_plan_data(value: PlanData) -> std::result::Result<Self, Self::Error> {
+        Ok(MaybeUtf8(BytesOutput::try_from_plan_data(value)?))
+    }
+}
+
 impl TryFromPlanData for SignalOp {
     type Error = Error;
     fn try_from_plan_data(value: PlanData) -> Result<Self> {
@@ -537,8 +556,8 @@ impl TryFromPlanData for TcpSegmentOptionOutput {
                     Ok(Self::Generic{ kind: u8::try_from(*kind)?,
                         value: x.get(&Self::VALUE_KEY.into())
                             .map(|x| match x {
-                                cel_interpreter::Value::Bytes(data) => Ok(data.as_ref().to_owned()),
-                                cel_interpreter::Value::String(data) => Ok(data.as_bytes().to_vec()),
+                                cel_interpreter::Value::Bytes(data) => Ok(data.clone().into()),
+                                cel_interpreter::Value::String(data) => Ok(data.clone().into()),
                                 _ => bail!("tcp segment option sack value must be convertible to list of 32 bit unsigned int"),
                             })
                             .ok_or_else(|| anyhow!(
@@ -549,8 +568,8 @@ impl TryFromPlanData for TcpSegmentOptionOutput {
                     Ok(Self::Generic{ kind: u8::try_from(*kind)?,
                         value: x.get(&Self::VALUE_KEY.into())
                             .map(|x| match x {
-                                cel_interpreter::Value::Bytes(data) => Ok(data.as_ref().to_owned()),
-                                cel_interpreter::Value::String(data) => Ok(data.as_bytes().to_vec()),
+                                cel_interpreter::Value::Bytes(data) => Ok(data.clone().into()),
+                                cel_interpreter::Value::String(data) => Ok(data.clone().into()),
                                 _ => bail!("tcp segment option sack value must be convertible to list of 32 bit unsigned int"),
                             })
                             .ok_or_else(|| anyhow!(
@@ -1600,6 +1619,16 @@ impl From<String> for PlanValue<Vec<u8>> {
         Self::Literal(value.into_bytes())
     }
 }
+impl From<String> for PlanValue<BytesOutput> {
+    fn from(value: String) -> Self {
+        Self::Literal(Arc::new(value).into())
+    }
+}
+impl From<String> for PlanValue<MaybeUtf8> {
+    fn from(value: String) -> Self {
+        Self::Literal(MaybeUtf8(BytesOutput::from(value)))
+    }
+}
 impl From<String> for PlanValue<PlanData, Infallible> {
     fn from(value: String) -> Self {
         Self::Literal(value.into())
@@ -1742,6 +1771,7 @@ impl TryFrom<Literal> for usize {
         }
     }
 }
+
 impl TryFrom<Literal> for bool {
     type Error = Error;
     fn try_from(binding: Literal) -> Result<Self> {
@@ -1751,6 +1781,7 @@ impl TryFrom<Literal> for bool {
         }
     }
 }
+
 impl TryFrom<Literal> for Vec<u8> {
     type Error = Error;
     fn try_from(binding: Literal) -> Result<Self> {
@@ -1765,6 +1796,29 @@ impl TryFrom<Literal> for Vec<u8> {
         }
     }
 }
+
+impl TryFrom<Literal> for BytesOutput {
+    type Error = Error;
+    fn try_from(binding: Literal) -> Result<Self> {
+        match binding {
+            Literal::String(x) => Ok(BytesOutput::String(Arc::new(x))),
+            Literal::Base64 { base64: data } => Ok(
+                BytesOutput::Bytes(Bytes::from(base64::prelude::BASE64_STANDARD_NO_PAD
+                    .decode(data)
+                    .map_err(|e| anyhow!("base64 decode: {e}"))?)),
+            ),
+            _ => bail!("invalid type {binding:?} for bytes field"),
+        }
+    }
+}
+
+impl TryFrom<Literal> for MaybeUtf8 {
+    type Error = Error;
+    fn try_from(binding: Literal) -> Result<Self> {
+        Ok(MaybeUtf8(BytesOutput::try_from(binding)?))
+    }
+}
+
 impl TryFrom<Literal> for Duration {
     type Error = Error;
     fn try_from(binding: Literal) -> Result<Self> {
@@ -1917,11 +1971,11 @@ impl TryFrom<Literal> for TcpSegmentOptionOutput {
                     value: fields
                         .remove(TcpSegmentOptionOutput::VALUE_KEY)
                         .map(|val| match val {
-                            ValueOrArray::Value(Literal::String(s)) => Ok(s.into_bytes()),
+                            ValueOrArray::Value(Literal::String(s)) => Ok(s.into()),
                             ValueOrArray::Value(Literal::Base64 { base64 }) => {
                                 Ok(base64::prelude::BASE64_STANDARD_NO_PAD
                                     .decode(base64)
-                                    .map_err(|e| anyhow!("base64 decode: {}", e))?)
+                                    .map_err(|e| anyhow!("base64 decode: {}", e))?.into())
                             }
                             _ => bail!("invalid type for raw value (expect either a string literal or '{{ base64: \"...\" }}')"),
                         })

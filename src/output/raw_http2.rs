@@ -3,9 +3,12 @@ use std::io;
 
 use bitmask_enum::bitmask;
 use byteorder::{ByteOrder, NetworkEndian};
+use bytes::{Buf, Bytes};
 use cel_interpreter::Duration;
 use serde::Serialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
+
+use super::{BytesOutput, MaybeUtf8};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -108,7 +111,7 @@ impl Http2FrameOutput {
         flags: Http2FrameFlag,
         r: bool,
         stream_id: u32,
-        mut payload: &[u8],
+        mut payload: Bytes,
     ) -> Self {
         match kind {
             Http2FrameType::Data if payload.len() >= Http2FrameFlag::Padded.min_bytes(flags) => {
@@ -116,15 +119,15 @@ impl Http2FrameOutput {
                 let mut pad_len = 0;
                 if padded {
                     pad_len = usize::from(payload[0]);
-                    payload = &payload[1..];
+                    payload.advance(1);
                 }
                 Self::Data(Http2DataFrameOutput {
                     flags: flags.into(),
                     end_stream: flags.contains(Http2FrameFlag::EndStream),
                     r,
                     stream_id,
-                    data: payload[..payload.len() - pad_len].to_vec(),
-                    padding: padded.then(|| payload[payload.len() - pad_len..].to_vec()),
+                    data: payload.split_to(payload.len() - pad_len).into(),
+                    padding: padded.then(|| payload.into()),
                 })
             }
             Http2FrameType::Headers
@@ -136,18 +139,16 @@ impl Http2FrameOutput {
                 let mut pad_len = 0;
                 if padded {
                     pad_len = usize::from(payload[0]);
-                    payload = &payload[1..];
+                    payload.advance(1);
                 }
                 let priority = flags.contains(Http2FrameFlag::Priority).then(|| {
                     Http2HeadersFramePriorityOutput {
                         e: payload[0] & 1 << 7 != 0,
-                        stream_dependency: NetworkEndian::read_u32(payload) & !(1 << 31),
-                        weight: payload[4],
+                        stream_dependency: NetworkEndian::read_u32(&payload.split_to(4))
+                            & !(1 << 31),
+                        weight: payload.split_to(1)[0],
                     }
                 });
-                if priority.is_some() {
-                    payload = &payload[5..];
-                }
                 Self::Headers(Http2HeadersFrameOutput {
                     flags: flags.into(),
                     end_stream: flags.contains(Http2FrameFlag::EndStream),
@@ -155,8 +156,8 @@ impl Http2FrameOutput {
                     r,
                     stream_id,
                     priority,
-                    header_block_fragment: payload[..payload.len() - pad_len].to_vec(),
-                    padding: padded.then(|| payload[payload.len() - pad_len..].to_vec()),
+                    header_block_fragment: payload.split_to(payload.len() - pad_len).into(),
+                    padding: padded.then(|| payload.into()),
                 })
             }
             Http2FrameType::Priority if payload.len() == 5 => {
@@ -165,8 +166,8 @@ impl Http2FrameOutput {
                     r,
                     stream_id,
                     e: payload[0] & 1 << 7 != 0,
-                    stream_dependency: NetworkEndian::read_u32(payload) & !(1 << 31),
-                    weight: payload[4],
+                    stream_dependency: NetworkEndian::read_u32(&payload.split_to(4)) & !(1 << 31),
+                    weight: payload[0],
                 })
             }
             Http2FrameType::RstStream if payload.len() == 4 => {
@@ -174,7 +175,7 @@ impl Http2FrameOutput {
                     flags: flags.into(),
                     r,
                     stream_id,
-                    error_code: NetworkEndian::read_u32(payload),
+                    error_code: NetworkEndian::read_u32(&payload),
                 })
             }
             Http2FrameType::Settings if payload.len() % 6 == 0 => {
@@ -198,17 +199,16 @@ impl Http2FrameOutput {
                 let padded = flags.contains(Http2FrameFlag::Padded);
                 let mut pad_len = 0;
                 if padded {
-                    pad_len = usize::from(payload[0]);
-                    payload = &payload[1..];
+                    pad_len = usize::from(payload.split_to(1)[0]);
                 }
                 Self::PushPromise(Http2PushPromiseFrameOutput {
                     flags: flags.into(),
                     r,
                     stream_id,
                     promised_r: payload[0] & 1 << 7 != 0,
-                    promised_stream_id: NetworkEndian::read_u32(payload) & !(1 << 31),
-                    header_block_fragment: payload[4..payload.len() - pad_len].to_vec(),
-                    padding: padded.then(|| payload[payload.len() - pad_len..].to_vec()),
+                    promised_stream_id: NetworkEndian::read_u32(&payload.split_to(4)) & !(1 << 31),
+                    header_block_fragment: payload.split_to(payload.len() - pad_len).into(),
+                    padding: padded.then(|| payload.into()),
                 })
             }
             Http2FrameType::Ping => Self::Ping(Http2PingFrameOutput {
@@ -216,16 +216,16 @@ impl Http2FrameOutput {
                 ack: flags.contains(Http2FrameFlag::Ack),
                 r,
                 stream_id,
-                data: payload.to_vec(),
+                data: payload.into(),
             }),
             Http2FrameType::Goaway if payload.len() >= 8 => Self::Goaway(Http2GoawayFrameOutput {
                 flags: flags.into(),
                 r,
                 stream_id,
                 last_r: payload[0] & 1 << 7 != 0,
-                last_stream_id: NetworkEndian::read_u32(payload) & !(1 << 31),
-                error_code: NetworkEndian::read_u32(&payload[4..]),
-                debug_data: payload[8..].to_vec(),
+                last_stream_id: NetworkEndian::read_u32(&payload.split_off(4)) & !(1 << 31),
+                error_code: NetworkEndian::read_u32(&payload.split_off(4)),
+                debug_data: MaybeUtf8(payload.into()),
             }),
             Http2FrameType::WindowUpdate if payload.len() == 4 => {
                 Self::WindowUpdate(Http2WindowUpdateFrameOutput {
@@ -233,7 +233,7 @@ impl Http2FrameOutput {
                     r,
                     stream_id,
                     window_r: payload[0] & 1 << 7 != 0,
-                    window_size_increment: NetworkEndian::read_u32(payload) & !(1 << 31),
+                    window_size_increment: NetworkEndian::read_u32(&payload) & !(1 << 31),
                 })
             }
             Http2FrameType::Continuation => Self::Continuation(Http2ContinuationFrameOutput {
@@ -241,14 +241,14 @@ impl Http2FrameOutput {
                 end_headers: flags.contains(Http2FrameFlag::EndHeaders),
                 r,
                 stream_id,
-                header_block_fragment: payload.to_vec(),
+                header_block_fragment: payload.into(),
             }),
             _ => Self::Generic(Http2GenericFrameOutput {
                 r#type: kind,
                 flags: flags.into(),
                 r,
                 stream_id,
-                payload: payload.to_vec(),
+                payload: payload.into(),
             }),
         }
     }
@@ -438,8 +438,8 @@ pub struct Http2DataFrameOutput {
     pub end_stream: bool,
     pub r: bool,
     pub stream_id: u32,
-    pub data: Vec<u8>,
-    pub padding: Option<Vec<u8>>,
+    pub data: BytesOutput,
+    pub padding: Option<BytesOutput>,
 }
 
 impl Http2DataFrameOutput {
@@ -492,8 +492,8 @@ pub struct Http2HeadersFrameOutput {
     pub r: bool,
     pub stream_id: u32,
     pub priority: Option<Http2HeadersFramePriorityOutput>,
-    pub header_block_fragment: Vec<u8>,
-    pub padding: Option<Vec<u8>>,
+    pub header_block_fragment: BytesOutput,
+    pub padding: Option<BytesOutput>,
 }
 
 impl Http2HeadersFrameOutput {
@@ -657,8 +657,8 @@ pub struct Http2PushPromiseFrameOutput {
     pub stream_id: u32,
     pub promised_r: bool,
     pub promised_stream_id: u32,
-    pub header_block_fragment: Vec<u8>,
-    pub padding: Option<Vec<u8>>,
+    pub header_block_fragment: BytesOutput,
+    pub padding: Option<BytesOutput>,
 }
 
 impl Http2PushPromiseFrameOutput {
@@ -720,7 +720,7 @@ pub struct Http2PingFrameOutput {
     pub ack: bool,
     pub r: bool,
     pub stream_id: u32,
-    pub data: Vec<u8>,
+    pub data: BytesOutput,
 }
 
 impl Http2PingFrameOutput {
@@ -750,7 +750,7 @@ pub struct Http2GoawayFrameOutput {
     pub last_r: bool,
     pub last_stream_id: u32,
     pub error_code: u32,
-    pub debug_data: Vec<u8>,
+    pub debug_data: MaybeUtf8,
 }
 
 impl Http2GoawayFrameOutput {
@@ -812,7 +812,7 @@ pub struct Http2ContinuationFrameOutput {
     pub end_headers: bool,
     pub r: bool,
     pub stream_id: u32,
-    pub header_block_fragment: Vec<u8>,
+    pub header_block_fragment: BytesOutput,
 }
 
 impl Http2ContinuationFrameOutput {
@@ -840,7 +840,7 @@ pub struct Http2GenericFrameOutput {
     pub flags: Http2FrameFlag,
     pub r: bool,
     pub stream_id: u32,
-    pub payload: Vec<u8>,
+    pub payload: BytesOutput,
 }
 
 impl Http2GenericFrameOutput {
@@ -871,7 +871,7 @@ pub struct RawHttp2Output {
 pub struct RawHttp2PlanOutput {
     pub host: String,
     pub port: u16,
-    pub preamble: Option<Vec<u8>>,
+    pub preamble: Option<MaybeUtf8>,
     pub frames: Vec<Http2FrameOutput>,
 }
 

@@ -4,6 +4,7 @@ use std::time::Instant;
 use std::{mem, pin::pin};
 
 use anyhow::{anyhow, bail};
+use bytes::Bytes;
 use cel_interpreter::Duration;
 use chrono::TimeDelta;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
@@ -11,7 +12,7 @@ use tokio::io::{ReadHalf, WriteHalf};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::spawn;
 
-use crate::{TcpError, TcpOutput, TcpPlanOutput, TcpReceivedOutput, TcpSentOutput};
+use crate::{MaybeUtf8, TcpError, TcpOutput, TcpPlanOutput, TcpReceivedOutput, TcpSentOutput};
 
 use super::pause::{PauseReader, PauseSpec, PauseWriter};
 use super::raw_tcp::RawTcpRunner;
@@ -80,7 +81,7 @@ impl TcpRunner {
         self.out.sent = Some(TcpSentOutput {
             dest_ip: remote_addr_string,
             dest_port: remote_addr.port(),
-            body: Vec::new(),
+            body: MaybeUtf8::default(),
             time_to_first_byte: None,
             time_to_last_byte: None,
         });
@@ -281,11 +282,11 @@ impl TcpRunner {
                 sent.time_to_last_byte =
                     Some(TimeDelta::from_std(last_write - start).unwrap().into());
             }
-            sent.body = writes;
+            sent.body = MaybeUtf8(Bytes::from(writes).into());
         }
         if !reads.is_empty() {
             self.out.received = Some(TcpReceivedOutput {
-                body: reads,
+                body: MaybeUtf8(Bytes::from(reads).into()),
                 time_to_first_byte: reader
                     .first_read()
                     .map(|first_read| first_read - start)

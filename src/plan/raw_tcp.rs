@@ -1,24 +1,10 @@
-use super::{AddContentLength, Evaluate, PlanData, PlanValue, PlanValueTable, TryFromPlanData};
-use crate::bindings::{EnumKind, Literal, ValueOrArray};
+use super::{Evaluate, PlanValue};
 use crate::{
-    bindings, cel_functions, Error, LocationOutput, Regex, Result, State, StepPlanOutput,
-    TcpSegmentOptionOutput, TcpSegmentOutput,
+    bindings, BytesOutput, Error, Result, State, TcpSegmentOptionOutput, TcpSegmentOutput,
 };
-use anyhow::{anyhow, bail};
-use base64::Engine;
-use cel_interpreter::{Context, Program};
-use chrono::{Duration, NaiveDateTime, TimeZone};
-use go_parse_duration::parse_duration;
-use indexmap::IndexMap;
+use anyhow::anyhow;
 use itertools::Itertools;
 use rand::RngCore;
-use std::convert::Infallible;
-use std::fmt::Display;
-use std::str::FromStr;
-use std::sync::OnceLock;
-use std::{collections::HashMap, ops::Deref, rc::Rc, sync::Arc};
-use tokio::sync::Semaphore;
-use url::Url;
 
 #[derive(Debug, Clone)]
 pub struct RawTcpRequest {
@@ -103,7 +89,7 @@ pub struct TcpSegment {
     pub checksum: Option<PlanValue<u16>>,
     pub urgent_ptr: PlanValue<u16>,
     pub options: Vec<PlanValue<TcpSegmentOptionOutput>>,
-    pub payload: PlanValue<Vec<u8>>,
+    pub payload: PlanValue<BytesOutput>,
 }
 
 impl Evaluate<TcpSegmentOutput> for TcpSegment {
@@ -138,59 +124,59 @@ impl TryFrom<bindings::TcpSegment> for TcpSegment {
         Ok(Self {
             source: value
                 .source
-                .map(PlanValue::<u16>::try_from)
+                .map(PlanValue::try_from)
                 .transpose()?
                 .unwrap_or_default(),
             destination: value
                 .destination
-                .map(PlanValue::<u16>::try_from)
+                .map(PlanValue::try_from)
                 .transpose()?
                 .unwrap_or_default(),
             sequence_number: value
                 .sequence_number
-                .map(PlanValue::<u32>::try_from)
+                .map(PlanValue::try_from)
                 .transpose()?
                 .unwrap_or_default(),
             acknowledgment: value
                 .acknowledgment
-                .map(PlanValue::<u32>::try_from)
+                .map(PlanValue::try_from)
                 .transpose()?
                 .unwrap_or_default(),
             data_offset: value
                 .data_offset
-                .map(PlanValue::<u8>::try_from)
+                .map(PlanValue::try_from)
                 .transpose()?
                 .unwrap_or_default(),
             reserved: value
                 .reserved
-                .map(PlanValue::<u8>::try_from)
+                .map(PlanValue::try_from)
                 .transpose()?
                 .unwrap_or_default(),
             flags: value
                 .flags
-                .map(PlanValue::<u8>::try_from)
+                .map(PlanValue::try_from)
                 .transpose()?
                 .unwrap_or_default(),
             window: value
                 .window
-                .map(PlanValue::<u16>::try_from)
+                .map(PlanValue::try_from)
                 .transpose()?
                 .unwrap_or_default(),
-            checksum: value.checksum.map(PlanValue::<u16>::try_from).transpose()?,
+            checksum: value.checksum.map(PlanValue::try_from).transpose()?,
             urgent_ptr: value
                 .urgent_ptr
-                .map(PlanValue::<u16>::try_from)
+                .map(PlanValue::try_from)
                 .transpose()?
                 .unwrap_or_default(),
             options: value
                 .options
                 .unwrap_or_default()
                 .into_iter()
-                .map(PlanValue::<TcpSegmentOptionOutput>::try_from)
+                .map(PlanValue::try_from)
                 .collect::<Result<_>>()?,
             payload: value
                 .payload
-                .map(PlanValue::<Vec<u8>>::try_from)
+                .map(PlanValue::try_from)
                 .transpose()?
                 .unwrap_or_default(),
         })

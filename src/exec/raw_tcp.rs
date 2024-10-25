@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use std::{io, net::IpAddr, pin::Pin, sync::Arc, time::Instant};
 
 use anyhow::{anyhow, bail};
+use bytes::Bytes;
 use cel_interpreter::Duration;
 use chrono::TimeDelta;
 use futures::Future;
@@ -27,7 +28,8 @@ use tokio::{
 use tracing::{debug, info};
 
 use crate::{
-    RawTcpError, RawTcpOutput, RawTcpPlanOutput, TcpSegmentOptionOutput, TcpSegmentOutput,
+    MaybeUtf8, RawTcpError, RawTcpOutput, RawTcpPlanOutput, TcpSegmentOptionOutput,
+    TcpSegmentOutput,
 };
 
 use super::Context;
@@ -596,10 +598,10 @@ fn packet_to_output(packet: TcpPacket, start: Instant) -> TcpSegmentOutput {
                 }
                 _ => TcpSegmentOptionOutput::Generic {
                     kind: opts.get_number().0,
-                    value: opts.payload().to_vec(),
+                    value: Bytes::copy_from_slice(opts.payload()).into(),
                 },
             })
             .collect(),
-        payload: packet.payload().to_vec(),
+        payload: Bytes::copy_from_slice(packet.payload()).into(),
     }
 }

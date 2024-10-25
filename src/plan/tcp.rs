@@ -1,12 +1,12 @@
 use super::{Evaluate, PlanValue};
-use crate::{bindings, Error, Result, State};
+use crate::{bindings, Error, MaybeUtf8, Result, State};
 use anyhow::anyhow;
 
 #[derive(Debug, Clone)]
 pub struct TcpRequest {
     pub host: PlanValue<String>,
     pub port: PlanValue<u16>,
-    pub body: PlanValue<Vec<u8>>,
+    pub body: PlanValue<MaybeUtf8>,
     //pub close: TcpClose,
 }
 
@@ -32,17 +32,17 @@ impl TryFrom<bindings::Tcp> for TcpRequest {
         Ok(Self {
             host: binding
                 .host
-                .map(PlanValue::<String>::try_from)
+                .map(PlanValue::try_from)
                 .ok_or_else(|| anyhow!("tcp.host is required"))??,
             port: binding
                 .port
-                .map(PlanValue::<u16>::try_from)
+                .map(PlanValue::try_from)
                 .ok_or_else(|| anyhow!("tcp.port is required"))??,
             body: binding
                 .body
-                .map(PlanValue::<Vec<u8>>::try_from)
+                .map(PlanValue::try_from)
                 .transpose()?
-                .unwrap_or_else(|| PlanValue::Literal(Vec::new())),
+                .unwrap_or_default(),
             //close: binding.close.unwrap_or_default().try_into()?,
         })
     }

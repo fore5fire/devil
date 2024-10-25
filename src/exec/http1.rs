@@ -8,6 +8,7 @@ use anyhow::anyhow;
 use anyhow::bail;
 use bytes::Buf;
 use bytes::BufMut;
+use bytes::Bytes;
 use bytes::BytesMut;
 use cel_interpreter::Duration;
 use chrono::TimeDelta;
@@ -23,6 +24,7 @@ use crate::AddContentLength;
 use crate::Http1Error;
 use crate::Http1PlanOutput;
 use crate::Http1RequestOutput;
+use crate::MaybeUtf8;
 use crate::{Http1Output, Http1Response};
 
 #[derive(Debug)]
@@ -38,10 +40,10 @@ pub(super) struct Http1Runner {
     first_read: Option<Instant>,
     shutdown_time: Option<Instant>,
     resp_header_buf: BytesMut,
-    req_body_buf: Vec<u8>,
-    resp_body_buf: Vec<u8>,
+    req_body_buf: BytesMut,
+    resp_body_buf: BytesMut,
     size_hint: Option<usize>,
-    send_headers: Vec<(Vec<u8>, Vec<u8>)>,
+    send_headers: Vec<(MaybeUtf8, MaybeUtf8)>,
 }
 
 #[derive(Debug)]
@@ -214,24 +216,28 @@ impl Http1Runner {
             first_read: None,
             shutdown_time: None,
             resp_header_buf: BytesMut::new(),
-            req_body_buf: Vec::new(),
-            resp_body_buf: Vec::new(),
+            req_body_buf: BytesMut::new(),
+            resp_body_buf: BytesMut::new(),
             size_hint: None,
         }
     }
 
     #[inline]
-    fn compute_header(plan: &Http1PlanOutput, headers: &[(Vec<u8>, Vec<u8>)]) -> BytesMut {
+    fn compute_header(plan: &Http1PlanOutput, headers: &[(MaybeUtf8, MaybeUtf8)]) -> BytesMut {
         // Build a buffer with the header contents to avoid the overhead of separate writes.
         // TODO: We may actually want to split packets based on info at the HTTP layer, that logic
         // will go here once I figure out the right configuration to express it.
         let mut buf = BytesMut::with_capacity(
-            plan.method.as_ref().map(Vec::len).unwrap_or(0)
+            plan.method.as_ref().map(MaybeUtf8::len).unwrap_or(0)
                 + 1
                 + plan.url.path().len()
                 + plan.url.query().map(|x| x.len() + 1).unwrap_or(0)
                 + 1
-                + plan.version_string.as_ref().map(Vec::len).unwrap_or(0)
+                + plan
+                    .version_string
+                    .as_ref()
+                    .map(MaybeUtf8::len)
+                    .unwrap_or(0)
                 + 2
                 + headers
                     .iter()
@@ -320,7 +326,9 @@ impl Http1Runner {
                 let header_complete_time = Instant::now();
                 // Set the header fields in our response.
                 self.out.response = Some(Http1Response {
-                    protocol: resp.version.map(|v| format!("HTTP/1.{}", v).into()),
+                    protocol: resp
+                        .version
+                        .map(|v| MaybeUtf8(format!("HTTP/1.{}", v).into())),
                     status_code: resp.code,
                     // Use the first valid Content-Length header as the content length, if any.
                     content_length: resp
@@ -332,10 +340,20 @@ impl Http1Runner {
                     headers: resp.reason.as_ref().map(|_| {
                         resp.headers
                             .into_iter()
-                            .map(|h| (Vec::from(h.name), Vec::from(h.value)))
+                            .map(|h| {
+                                (
+                                    // TODO: We could probably avoid extra copies here since these
+                                    // are backed by a BytesMut, but the current approach reparses
+                                    // the whole buffer so it's not trivial.
+                                    MaybeUtf8(Arc::new(h.name.to_owned()).into()),
+                                    MaybeUtf8(Bytes::copy_from_slice(h.value).into()),
+                                )
+                            })
                             .collect()
                     }),
-                    status_reason: resp.reason.map(Vec::from),
+                    status_reason: resp
+                        .reason
+                        .map(|r| MaybeUtf8(Arc::new(r.to_owned()).into())),
                     body: None,
                     duration: TimeDelta::zero().into(),
                     header_duration: None,
@@ -398,8 +416,8 @@ impl Http1Runner {
             //&& self.out.plan.chunked_transfer_encoding != ChunkedTransferEncoding::Force
             {
                 self.send_headers.push((
-                    b"Content-Length".to_vec(),
-                    size_hint.to_string().into_bytes(),
+                    MaybeUtf8("Content-Length".into()),
+                    MaybeUtf8(Arc::new(size_hint.to_string()).into()),
                 ))
             }
         }
@@ -479,7 +497,7 @@ impl Http1Runner {
             headers: self.send_headers.clone(),
             method: self.out.plan.method.clone(),
             version_string: self.out.plan.version_string.clone(),
-            body: Vec::new(),
+            body: MaybeUtf8::default(),
             duration: TimeDelta::zero().into(),
             body_duration: None,
             time_to_first_byte: None,
@@ -590,12 +608,12 @@ impl Http1Runner {
                 .transpose()
                 .unwrap()
                 .map(Duration);
-            req.body = self.req_body_buf.to_vec();
+            req.body = MaybeUtf8(self.req_body_buf.split().freeze().into());
         }
 
         // The response should be set if the header has been read.
         if let Some(resp) = &mut self.out.response {
-            resp.body = Some(self.resp_body_buf.to_vec());
+            resp.body = Some(MaybeUtf8(self.resp_body_buf.split().freeze().into()));
             resp.duration = TimeDelta::from_std(
                 self.resp_start_time
                     .map(|start| end_time - start)

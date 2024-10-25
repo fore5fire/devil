@@ -4,6 +4,7 @@ use std::time::Instant;
 use std::{pin::pin, sync::Arc};
 
 use anyhow::{anyhow, bail};
+use bytes::Bytes;
 use chrono::Duration;
 use derivative::Derivative;
 use rustls::pki_types::ServerName;
@@ -19,7 +20,9 @@ use super::tee::Tee;
 use super::timing::Timing;
 use super::Context;
 use crate::exec::pause::{Pause, PauseSpec};
-use crate::{TlsError, TlsOutput, TlsPlanOutput, TlsRequestOutput, TlsResponse, TlsVersion};
+use crate::{
+    MaybeUtf8, TlsError, TlsOutput, TlsPlanOutput, TlsRequestOutput, TlsResponse, TlsVersion,
+};
 
 #[derive(Debug)]
 pub(super) struct TlsRunner {
@@ -58,7 +61,7 @@ impl TlsRunner {
         let mut tls_config = rustls::ClientConfig::builder()
             .with_root_certificates(root_cert_store)
             .with_no_client_auth();
-        tls_config.alpn_protocols = plan.alpn.clone();
+        tls_config.alpn_protocols = plan.alpn.iter().map(|alpn| alpn.to_vec()).collect();
         let connector = tokio_rustls::TlsConnector::from(Arc::new(tls_config));
 
         TlsRunner {
@@ -71,7 +74,7 @@ impl TlsRunner {
                 request: Some(TlsRequestOutput {
                     host: plan.host.clone(),
                     port: plan.port,
-                    body: Vec::new(),
+                    body: MaybeUtf8::default(),
                     time_to_first_byte: None,
                     time_to_last_byte: None,
                 }),
@@ -284,11 +287,11 @@ impl TlsRunner {
             req.time_to_last_byte = stream
                 .last_write()
                 .map(|last_write| Duration::from_std(last_write - start).unwrap().into());
-            req.body = writes;
+            req.body = MaybeUtf8(Bytes::from(writes).into());
         }
         if !reads.is_empty() {
             self.out.response = Some(TlsResponse {
-                body: reads,
+                body: MaybeUtf8(Bytes::from(reads).into()),
                 time_to_first_byte: stream
                     .first_read()
                     .map(|first_read| Duration::from_std(first_read - start).unwrap().into()),

@@ -1,6 +1,8 @@
 use cel_interpreter::Duration;
 use serde::Serialize;
 
+use super::BytesOutput;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RawTcpOutput {
     pub plan: RawTcpPlanOutput,
@@ -39,7 +41,7 @@ pub struct TcpSegmentOutput {
     pub checksum: Option<u16>,
     pub urgent_ptr: u16,
     pub options: Vec<TcpSegmentOptionOutput>,
-    pub payload: Vec<u8>,
+    pub payload: BytesOutput,
     pub received: Option<Duration>,
     pub sent: Option<Duration>,
 }
@@ -55,7 +57,7 @@ pub enum TcpSegmentOptionOutput {
     SackPermitted(bool),
     Sack(Vec<u32>),
     Timestamps { tsval: u32, tsecr: u32 },
-    Generic { kind: u8, value: Vec<u8> },
+    Generic { kind: u8, value: BytesOutput },
 }
 
 impl TcpSegmentOptionOutput {

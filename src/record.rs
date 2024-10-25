@@ -197,6 +197,7 @@ impl Describe for JobOutput {
                 Protocol::TcpSegments => {
                     if let Some(segments) = &self.raw_tcp {
                         for seg in &segments.sent {
+                            // TODO: format OutputBytes as hex pairs.
                             writeln!(
                                 w,
                                 "> {}",
@@ -208,11 +209,7 @@ impl Describe for JobOutput {
                 Protocol::Tcp => {
                     if let Some(tcp) = &self.tcp {
                         if let Some(req) = &tcp.sent {
-                            writeln!(
-                                w,
-                                "> {}",
-                                String::from_utf8_lossy(&req.body).replace("\n", "\n> ")
-                            )?;
+                            writeln!(w, "> {}", &req.body.to_string().replace("\n", "\n> "))?;
                             if let Some(ttfb) = &req.time_to_first_byte {
                                 writeln!(w, "sent time to first byte: {}", ttfb.0)?;
                             }
@@ -222,11 +219,7 @@ impl Describe for JobOutput {
                 Protocol::Tls => {
                     if let Some(tls) = &self.tls {
                         if let Some(req) = &tls.request {
-                            writeln!(
-                                w,
-                                "> {}",
-                                String::from_utf8_lossy(&req.body).replace("\n", "\n> ")
-                            )?;
+                            writeln!(w, "> {}", &req.body.to_string().replace("\n", "\n> "))?;
                             if let Some(ttfb) = &req.time_to_first_byte {
                                 writeln!(w, "request time to first byte: {}", ttfb.0)?;
                             }
@@ -250,7 +243,7 @@ impl Describe for JobOutput {
                                 .map(|req| req.method.as_ref())
                                 .flatten()
                                 .as_deref()
-                                .map(|x| String::from_utf8_lossy(x) + " ")
+                                .map(|x| x.to_string() + " ")
                                 .unwrap_or_default(),
                             http.request
                                 .as_ref()
@@ -263,19 +256,10 @@ impl Describe for JobOutput {
                         )?;
                         if let Some(req) = &http.request {
                             for (k, v) in &req.headers {
-                                writeln!(
-                                    w,
-                                    ">   {}: {}",
-                                    String::from_utf8_lossy(k),
-                                    String::from_utf8_lossy(v)
-                                )?;
+                                writeln!(w, ">   {}: {}", k, v)?;
                             }
 
-                            writeln!(
-                                w,
-                                "> {}",
-                                String::from_utf8_lossy(&req.body).replace("\n", "\n> ")
-                            )?;
+                            writeln!(w, "> {}", &req.body.to_string().replace("\n", "\n> "))?;
                             if let Some(ttfb) = &req.time_to_first_byte {
                                 writeln!(w, "request time to first byte: {}", ttfb.0)?;
                             }
@@ -292,7 +276,7 @@ impl Describe for JobOutput {
                                 .map(|req| req.method.as_ref())
                                 .flatten()
                                 .as_deref()
-                                .map(|x| String::from_utf8_lossy(x) + " ")
+                                .map(|x| x.to_string() + " ")
                                 .unwrap_or_default(),
                             http.request
                                 .as_ref()
@@ -303,24 +287,15 @@ impl Describe for JobOutput {
                                 .map(|req| req
                                     .version_string
                                     .as_ref()
-                                    .map(|v| " ".to_owned() + &String::from_utf8_lossy(v))
+                                    .map(|v| " ".to_owned() + &v.to_string())
                                     .unwrap_or_default())
                                 .unwrap_or_default(),
                         )?;
                         if let Some(req) = &http.request {
                             for (k, v) in &req.headers {
-                                writeln!(
-                                    w,
-                                    ">   {}: {}",
-                                    String::from_utf8_lossy(k),
-                                    String::from_utf8_lossy(v)
-                                )?;
+                                writeln!(w, ">   {}: {}", k, v)?;
                             }
-                            writeln!(
-                                w,
-                                "> {}",
-                                String::from_utf8_lossy(&req.body).replace("\n", "\n> ")
-                            )?;
+                            writeln!(w, "> {}", &req.body.to_string().replace("\n", "\n> "))?;
                             if let Some(ttfb) = &req.time_to_first_byte {
                                 writeln!(w, "request time to first byte: {}", ttfb.0)?;
                             }
@@ -336,7 +311,7 @@ impl Describe for JobOutput {
                                 .map(|req| req.method.as_ref())
                                 .flatten()
                                 .as_deref()
-                                .map(|x| String::from_utf8_lossy(x) + " ")
+                                .map(|x| x.to_string() + " ")
                                 .unwrap_or_default(),
                             http.request
                                 .as_ref()
@@ -345,18 +320,9 @@ impl Describe for JobOutput {
                         )?;
                         if let Some(req) = &http.request {
                             for (k, v) in &req.headers {
-                                writeln!(
-                                    w,
-                                    ">   {}: {}",
-                                    String::from_utf8_lossy(k),
-                                    String::from_utf8_lossy(v)
-                                )?;
+                                writeln!(w, ">   {}: {}", k, v)?;
                             }
-                            writeln!(
-                                w,
-                                "> {}",
-                                String::from_utf8_lossy(&req.body).replace("\n", "\n> ")
-                            )?;
+                            writeln!(w, "> {}", &req.body.to_string().replace("\n", "\n> "))?;
                             if let Some(ttfb) = &req.time_to_first_byte {
                                 writeln!(w, "request time to first byte: {}", ttfb.0)?;
                             }
@@ -426,11 +392,7 @@ impl Describe for JobOutput {
                 Protocol::Tcp => {
                     if let Some(tcp) = &self.tcp {
                         if let Some(resp) = &tcp.received {
-                            writeln!(
-                                w,
-                                "< {}",
-                                String::from_utf8_lossy(&resp.body).replace("\n", "\n< ")
-                            )?;
+                            writeln!(w, "< {}", &resp.body.to_string().replace("\n", "\n< "))?;
                             if let Some(ttfb) = &resp.time_to_first_byte {
                                 writeln!(w, "response time to first byte: {}", ttfb.0)?;
                             }
@@ -462,11 +424,7 @@ impl Describe for JobOutput {
                 Protocol::Tls => {
                     if let Some(tls) = &self.tls {
                         if let Some(resp) = &tls.response {
-                            writeln!(
-                                w,
-                                "< {}",
-                                String::from_utf8_lossy(&resp.body).replace("\n", "\n< ")
-                            )?;
+                            writeln!(w, "< {}", &resp.body.to_string().replace("\n", "\n< "))?;
                             if let Some(ttfb) = &resp.time_to_first_byte {
                                 writeln!(w, "response time to first byte: {}", ttfb.0)?;
                             }
@@ -520,21 +478,12 @@ impl Describe for JobOutput {
                             )?;
                             if let Some(headers) = &resp.headers {
                                 for (k, v) in headers {
-                                    writeln!(
-                                        w,
-                                        "< {}: {}",
-                                        String::from_utf8_lossy(&k),
-                                        String::from_utf8_lossy(&v)
-                                    )?;
+                                    writeln!(w, "< {}: {}", k, v)?;
                                 }
                             }
                             writeln!(w, "< ")?;
                             if let Some(body) = &resp.body {
-                                writeln!(
-                                    w,
-                                    "< {}",
-                                    String::from_utf8_lossy(&body).replace("\n", "\n< ")
-                                )?;
+                                writeln!(w, "< {}", &body.to_string().replace("\n", "\n< "))?;
                             }
                             if let Some(ttfb) = &resp.time_to_first_byte {
                                 writeln!(w, "response time to first byte: {}", ttfb.0)?;
@@ -578,26 +527,17 @@ impl Describe for JobOutput {
                                 resp.status_code.unwrap_or(0),
                                 resp.protocol
                                     .as_ref()
-                                    .map(|x| String::from_utf8_lossy(x))
+                                    .map(|x| x.to_string())
                                     .unwrap_or_default()
                             )?;
                             if let Some(headers) = &resp.headers {
                                 for (k, v) in headers {
-                                    writeln!(
-                                        w,
-                                        "< {}: {}",
-                                        String::from_utf8_lossy(&k),
-                                        String::from_utf8_lossy(&v)
-                                    )?;
+                                    writeln!(w, "< {}: {}", k, v)?;
                                 }
                             }
                             writeln!(w, "< ")?;
                             if let Some(body) = &resp.body {
-                                writeln!(
-                                    w,
-                                    "< {}",
-                                    String::from_utf8_lossy(&body).replace("\n", "\n< ")
-                                )?;
+                                writeln!(w, "< {}", body.to_string().replace("\n", "\n< "))?;
                             }
                             if let Some(ttfb) = &resp.time_to_first_byte {
                                 writeln!(w, "response time to first byte: {}", ttfb.0)?;
@@ -638,21 +578,16 @@ impl Describe for JobOutput {
                             writeln!(w, "< {} HTTP/2", resp.status_code.unwrap_or(0))?;
                             if let Some(headers) = &resp.headers {
                                 for (k, v) in headers {
-                                    writeln!(
-                                        w,
-                                        "< {}: {}",
-                                        String::from_utf8_lossy(&k),
-                                        String::from_utf8_lossy(&v)
-                                    )?;
+                                    if let Some(k) = k {
+                                        writeln!(w, "< {}: {}", k, v)?;
+                                    } else {
+                                        writeln!(w, "< {}", v)?;
+                                    }
                                 }
                             }
                             writeln!(w, "< ")?;
                             if let Some(body) = &resp.body {
-                                writeln!(
-                                    w,
-                                    "< {}",
-                                    String::from_utf8_lossy(&body).replace("\n", "\n< ")
-                                )?;
+                                writeln!(w, "< {}", &body.to_string().replace("\n", "\n< "))?;
                             }
                             if let Some(ttfb) = &resp.time_to_first_byte {
                                 writeln!(w, "response time to first byte: {}", ttfb.0)?;

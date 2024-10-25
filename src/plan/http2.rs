@@ -1,16 +1,16 @@
 use super::{AddContentLength, Evaluate, PlanValue, PlanValueTable};
-use crate::{bindings, Error, Result, State};
+use crate::{bindings, Error, MaybeUtf8, Result, State};
 use anyhow::anyhow;
 use url::Url;
 
 #[derive(Debug, Clone)]
 pub struct Http2Request {
     pub url: PlanValue<Url>,
-    pub method: PlanValue<Option<Vec<u8>>>,
+    pub method: PlanValue<Option<MaybeUtf8>>,
     pub add_content_length: PlanValue<AddContentLength>,
-    pub headers: PlanValueTable<Vec<u8>, Vec<u8>>,
-    pub body: PlanValue<Option<Vec<u8>>>,
-    pub trailers: PlanValueTable<Vec<u8>, Vec<u8>>,
+    pub headers: PlanValueTable<MaybeUtf8, MaybeUtf8>,
+    pub body: PlanValue<Option<MaybeUtf8>>,
+    pub trailers: PlanValueTable<MaybeUtf8, MaybeUtf8>,
 }
 
 impl Evaluate<crate::Http2PlanOutput> for Http2Request {

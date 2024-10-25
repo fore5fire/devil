@@ -1,14 +1,15 @@
+use core::str;
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use anyhow::bail;
 use cel_interpreter::{Duration, Value};
 use indexmap::IndexMap;
-use prost::Message;
 use serde::Serialize;
 
 use crate::{location, IterableKey, Parallelism, ProtocolField};
 
+mod bytes;
 mod graphql;
 mod http;
 mod http1;
@@ -19,6 +20,7 @@ mod tcp;
 mod tls;
 mod value;
 
+pub use bytes::*;
 pub use graphql::*;
 pub use http::*;
 pub use http1::*;

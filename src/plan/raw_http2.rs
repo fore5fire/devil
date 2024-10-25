@@ -1,20 +1,22 @@
 use anyhow::anyhow;
+use bytes::Bytes;
 use itertools::Itertools;
 
 use crate::{
-    bindings, Error, Evaluate, Http2ContinuationFrameOutput, Http2DataFrameOutput, Http2FrameFlag,
-    Http2FrameOutput, Http2FrameType, Http2GenericFrameOutput, Http2GoawayFrameOutput,
-    Http2HeadersFrameOutput, Http2HeadersFramePriorityOutput, Http2PingFrameOutput,
-    Http2PriorityFrameOutput, Http2PushPromiseFrameOutput, Http2RstStreamFrameOutput,
-    Http2SettingsFrameOutput, Http2SettingsParameterId, Http2SettingsParameterOutput,
-    Http2WindowUpdateFrameOutput, PlanValue, Result, State,
+    bindings, BytesOutput, Error, Evaluate, Http2ContinuationFrameOutput, Http2DataFrameOutput,
+    Http2FrameFlag, Http2FrameOutput, Http2FrameType, Http2GenericFrameOutput,
+    Http2GoawayFrameOutput, Http2HeadersFrameOutput, Http2HeadersFramePriorityOutput,
+    Http2PingFrameOutput, Http2PriorityFrameOutput, Http2PushPromiseFrameOutput,
+    Http2RstStreamFrameOutput, Http2SettingsFrameOutput, Http2SettingsParameterId,
+    Http2SettingsParameterOutput, Http2WindowUpdateFrameOutput, MaybeUtf8, PlanValue, Result,
+    State,
 };
 
 #[derive(Debug, Clone)]
 pub struct RawHttp2Request {
     pub host: PlanValue<String>,
     pub port: PlanValue<u16>,
-    pub preamble: PlanValue<Option<Vec<u8>>>,
+    pub preamble: PlanValue<Option<MaybeUtf8>>,
     pub frames: Vec<Http2Frame>,
 }
 
@@ -119,8 +121,8 @@ pub struct Http2DataFrame {
     end_stream: PlanValue<bool>,
     r: PlanValue<bool>,
     stream_id: PlanValue<u32>,
-    data: PlanValue<Vec<u8>>,
-    padding: Option<PlanValue<Vec<u8>>>,
+    data: PlanValue<BytesOutput>,
+    padding: Option<PlanValue<BytesOutput>>,
 }
 
 impl TryFrom<bindings::Http2DataFrame> for Http2DataFrame {
@@ -184,8 +186,8 @@ pub struct Http2HeadersFrame {
     r: PlanValue<bool>,
     stream_id: PlanValue<u32>,
     priority: Option<Http2HeadersFramePriority>,
-    header_block_fragment: PlanValue<Vec<u8>>,
-    padding: Option<PlanValue<Vec<u8>>>,
+    header_block_fragment: PlanValue<BytesOutput>,
+    padding: Option<PlanValue<BytesOutput>>,
 }
 
 impl TryFrom<bindings::Http2HeadersFrame> for Http2HeadersFrame {
@@ -517,8 +519,8 @@ pub struct Http2PushPromiseFrame {
     stream_id: PlanValue<u32>,
     promised_r: PlanValue<bool>,
     promised_stream_id: PlanValue<u32>,
-    header_block_fragment: PlanValue<Vec<u8>>,
-    padding: Option<PlanValue<Vec<u8>>>,
+    header_block_fragment: PlanValue<BytesOutput>,
+    padding: Option<PlanValue<BytesOutput>>,
 }
 
 impl TryFrom<bindings::Http2PushPromiseFrame> for Http2PushPromiseFrame {
@@ -594,7 +596,7 @@ pub struct Http2PingFrame {
     ack: PlanValue<bool>,
     r: PlanValue<bool>,
     stream_id: PlanValue<u32>,
-    data: PlanValue<Vec<u8>>,
+    data: PlanValue<BytesOutput>,
 }
 
 impl TryFrom<bindings::Http2PingFrame> for Http2PingFrame {
@@ -620,7 +622,7 @@ impl TryFrom<bindings::Http2PingFrame> for Http2PingFrame {
                 .data
                 .map(PlanValue::try_from)
                 .transpose()?
-                .unwrap_or(PlanValue::Literal(Vec::from([0; 8]))),
+                .unwrap_or(PlanValue::Literal(BytesOutput::Bytes(Bytes::from(vec![0])))),
         })
     }
 }
@@ -654,7 +656,7 @@ pub struct Http2GoawayFrame {
     last_r: PlanValue<bool>,
     last_stream_id: PlanValue<u32>,
     error_code: PlanValue<u32>,
-    debug_data: PlanValue<Vec<u8>>,
+    debug_data: PlanValue<MaybeUtf8>,
 }
 
 impl TryFrom<bindings::Http2GoawayFrame> for Http2GoawayFrame {
@@ -690,7 +692,7 @@ impl TryFrom<bindings::Http2GoawayFrame> for Http2GoawayFrame {
                 .debug_data
                 .map(PlanValue::try_from)
                 .transpose()?
-                .unwrap_or(PlanValue::Literal(Vec::new())),
+                .unwrap_or_default(),
         })
     }
 }
@@ -775,7 +777,7 @@ pub struct Http2ContinuationFrame {
     end_headers: PlanValue<bool>,
     r: PlanValue<bool>,
     stream_id: PlanValue<u32>,
-    header_block_fragment: PlanValue<Vec<u8>>,
+    header_block_fragment: PlanValue<BytesOutput>,
 }
 
 impl TryFrom<bindings::Http2ContinuationFrame> for Http2ContinuationFrame {
@@ -837,7 +839,7 @@ pub struct Http2GenericFrame {
     flags: PlanValue<u8>,
     r: PlanValue<bool>,
     stream_id: PlanValue<u32>,
-    payload: PlanValue<Vec<u8>>,
+    payload: PlanValue<BytesOutput>,
 }
 
 impl TryFrom<bindings::Http2GenericFrame> for Http2GenericFrame {

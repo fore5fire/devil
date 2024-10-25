@@ -6,7 +6,7 @@ use std::{mem, sync::Arc};
 
 use anyhow::{anyhow, bail};
 use byteorder::{ByteOrder, NetworkEndian};
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use chrono::TimeDelta;
 use h2::client::{handshake, SendRequest};
 use tokio::io::{split, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -14,7 +14,9 @@ use tokio::join;
 use tokio::task::JoinHandle;
 use tracing::{debug, debug_span, Instrument};
 
-use crate::{Http2FrameOutput, Http2FrameType, RawHttp2Error, RawHttp2Output, RawHttp2PlanOutput};
+use crate::{
+    Http2FrameOutput, Http2FrameType, MaybeUtf8, RawHttp2Error, RawHttp2Output, RawHttp2PlanOutput,
+};
 
 use super::extract;
 use super::{runner::Runner, Context};
@@ -26,7 +28,7 @@ pub struct RawHttp2Runner {
     state: State,
     start_time: Option<Instant>,
     send_frames: Vec<Http2FrameOutput>,
-    send_preface: Vec<u8>,
+    send_preface: MaybeUtf8,
 }
 
 #[derive(Debug)]
@@ -223,7 +225,7 @@ const WRITE_PREFACE: &str = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 
 #[derive(Debug)]
 struct FrameParser {
-    buf: Vec<u8>,
+    buf: BytesMut,
     state: FrameParserState,
     out: Vec<Http2FrameOutput>,
 }
@@ -231,7 +233,7 @@ struct FrameParser {
 impl FrameParser {
     fn new(state: FrameParserState) -> Self {
         Self {
-            buf: Vec::new(),
+            buf: BytesMut::new(),
             state,
             out: Vec::new(),
         }
@@ -300,7 +302,7 @@ impl FrameParser {
                         (*flags).into(),
                         *r,
                         *stream_id,
-                        &self.buf,
+                        self.buf.split().freeze(),
                     );
                     debug!(out = ?out, "push finished frame");
                     self.out.push(out);

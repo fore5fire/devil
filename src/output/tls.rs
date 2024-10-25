@@ -3,6 +3,8 @@ use serde::Serialize;
 
 use crate::TlsVersion;
 
+use super::MaybeUtf8;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct TlsOutput {
     pub plan: TlsPlanOutput,
@@ -18,22 +20,22 @@ pub struct TlsOutput {
 pub struct TlsPlanOutput {
     pub host: String,
     pub port: u16,
-    pub alpn: Vec<Vec<u8>>,
-    pub body: Vec<u8>,
+    pub alpn: Vec<MaybeUtf8>,
+    pub body: MaybeUtf8,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TlsRequestOutput {
     pub host: String,
     pub port: u16,
-    pub body: Vec<u8>,
+    pub body: MaybeUtf8,
     pub time_to_first_byte: Option<Duration>,
     pub time_to_last_byte: Option<Duration>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TlsResponse {
-    pub body: Vec<u8>,
+    pub body: MaybeUtf8,
     pub time_to_first_byte: Option<Duration>,
     pub time_to_last_byte: Option<Duration>,
 }

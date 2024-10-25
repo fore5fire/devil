@@ -4,6 +4,8 @@ use cel_interpreter::Duration;
 use serde::Serialize;
 use url::Url;
 
+use super::MaybeUtf8;
+
 #[derive(Debug, Clone, Serialize)]
 pub struct GraphQlOutput {
     pub plan: GraphQlPlanOutput,
@@ -18,7 +20,7 @@ pub struct GraphQlPlanOutput {
     pub url: Url,
     pub query: String,
     pub operation: Option<serde_json::Value>,
-    pub params: Option<HashMap<Vec<u8>, serde_json::Value>>,
+    pub params: Option<HashMap<MaybeUtf8, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -26,7 +28,7 @@ pub struct GraphQlRequestOutput {
     pub url: Url,
     pub query: String,
     pub operation: Option<serde_json::Value>,
-    pub params: Option<HashMap<Vec<u8>, serde_json::Value>>,
+    pub params: Option<HashMap<MaybeUtf8, serde_json::Value>>,
     pub duration: Duration,
 }
 

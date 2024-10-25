@@ -1,6 +1,6 @@
 use super::{Evaluate, PlanData, PlanValue, TryFromPlanData};
 use crate::bindings::Literal;
-use crate::{bindings, Error, Result, State};
+use crate::{bindings, Error, MaybeUtf8, Result, State};
 use anyhow::{anyhow, bail};
 use itertools::Itertools;
 use serde::Serialize;
@@ -99,8 +99,8 @@ impl TryFromPlanData for TlsVersion {
 pub struct TlsRequest {
     pub host: PlanValue<String>,
     pub port: PlanValue<u16>,
-    pub alpn: Vec<PlanValue<Vec<u8>>>,
-    pub body: PlanValue<Vec<u8>>,
+    pub alpn: Vec<PlanValue<MaybeUtf8>>,
+    pub body: PlanValue<MaybeUtf8>,
 }
 
 impl Evaluate<crate::TlsPlanOutput> for TlsRequest {
@@ -125,23 +125,23 @@ impl TryFrom<bindings::Tls> for TlsRequest {
         Ok(Self {
             host: binding
                 .host
-                .map(PlanValue::<String>::try_from)
+                .map(PlanValue::try_from)
                 .ok_or_else(|| anyhow!("tls.host is required"))??,
             port: binding
                 .port
-                .map(PlanValue::<u16>::try_from)
+                .map(PlanValue::try_from)
                 .ok_or_else(|| anyhow!("tls.port is required"))??,
             alpn: binding
                 .alpn
                 .into_iter()
                 .flatten()
-                .map(PlanValue::<Vec<u8>>::try_from)
+                .map(PlanValue::try_from)
                 .try_collect()?,
             body: binding
                 .body
-                .map(PlanValue::<Vec<u8>>::try_from)
+                .map(PlanValue::try_from)
                 .transpose()?
-                .unwrap_or_else(|| PlanValue::Literal(Vec::new())),
+                .unwrap_or_default(),
         })
     }
 }

@@ -7,20 +7,21 @@ use std::{
 };
 
 use anyhow::bail;
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use cel_interpreter::Duration;
 use chrono::TimeDelta;
 use futures::FutureExt;
 use h2::{client::SendRequest, Reason, RecvStream, SendStream};
 use http::{response::Parts, HeaderMap, HeaderName, HeaderValue, Request, Uri};
-use nom::AsBytes;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     join,
     task::JoinHandle,
 };
 
-use crate::{AddContentLength, Http2Error, Http2Output, Http2PlanOutput, Http2RequestOutput};
+use crate::{
+    AddContentLength, Http2Error, Http2Output, Http2PlanOutput, Http2RequestOutput, MaybeUtf8,
+};
 
 use super::{
     pause::{PauseReader, PauseSpec, PauseWriter},
@@ -136,16 +137,14 @@ impl Http2Runner {
     fn build_request(plan: &Http2PlanOutput) -> Result<http::Request<()>, http::Error> {
         let uri: Uri = plan.url.as_str().parse().unwrap();
         let mut req = Request::builder().uri(uri).method(
-            String::from_utf8(
-                plan.clone()
-                    .method
-                    .expect("missing method is not yet supported for http2"),
-            )
-            .expect("non-utf8 method is not yet supported with http2")
-            .as_str(),
+            plan.method
+                .as_ref()
+                .expect("missing method is not yet supported for http2")
+                .as_str()
+                .expect("non-utf8 method is not yet supported with http2"),
         );
-        for (k, v) in plan.headers.clone() {
-            req = req.header(k, v);
+        for (k, v) in &plan.headers {
+            req = req.header(k.as_bytes(), v.as_bytes());
         }
         req.body(())
     }
@@ -391,24 +390,20 @@ impl Http2Runner {
                     .into_iter()
                     .map(|(k, v)| {
                         (
-                            k.as_ref()
-                                .map(HeaderName::as_str)
-                                .unwrap_or_default()
-                                .into(),
-                            v.as_bytes().to_owned(),
+                            k.map(|k| MaybeUtf8(k.to_string().into())),
+                            MaybeUtf8(Bytes::copy_from_slice(v.as_bytes()).into()),
                         )
                     })
                     .collect(),
             ),
-            body: resp_body,
+            body: resp_body.map(|b| MaybeUtf8(b.freeze().into())),
             trailers: mem::take(&mut self.receive_trailers).map(|trailers| {
                 trailers
                     .into_iter()
                     .map(|(k, v)| {
                         (
-                            k.map(|k| k.as_str().as_bytes().to_vec())
-                                .unwrap_or_default(),
-                            v.as_bytes().to_vec(),
+                            k.map(|k| MaybeUtf8(k.to_string().into())),
+                            MaybeUtf8(Bytes::copy_from_slice(v.as_bytes()).into()),
                         )
                     })
                     .collect()
@@ -680,16 +675,16 @@ impl AsyncWrite for SendTransport {
 #[derive(Debug)]
 struct RecvTransport {
     inner: RecvStream,
-    buffer: Bytes,
-    data: Vec<u8>,
+    pending_index: usize,
+    data: BytesMut,
 }
 
 impl RecvTransport {
     fn new(inner: RecvStream) -> Self {
         Self {
             inner,
-            buffer: Bytes::new(),
-            data: Vec::new(),
+            pending_index: 0,
+            data: BytesMut::new(),
         }
     }
 
@@ -697,7 +692,7 @@ impl RecvTransport {
         &mut self.inner
     }
 
-    fn into_parts(self) -> (RecvStream, Vec<u8>) {
+    fn into_parts(self) -> (RecvStream, BytesMut) {
         (self.inner, self.data)
     }
 }
@@ -709,17 +704,19 @@ impl AsyncRead for RecvTransport {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         // Copy any buffered bytes from a previous read.
-        let len = self.buffer.len();
-        buf.put_slice(&self.buffer.split_to(buf.remaining().min(len)));
+        let start = self.pending_index;
+        let pending_len = self.data.len() - self.pending_index;
+        self.pending_index += buf.remaining().min(pending_len);
+        buf.put_slice(&self.data[start..self.pending_index]);
         if buf.remaining() == 0 {
             return Poll::Ready(Ok(()));
         }
         // We've got room still, so read another frame.
         match ready!(self.inner.poll_data(cx)) {
-            Some(Ok(mut data)) => {
+            Some(Ok(data)) => {
+                self.pending_index = self.data.len();
                 self.data.extend_from_slice(&data);
-                self.buffer = data.split_off(buf.remaining().min(data.len()));
-                buf.put_slice(data.as_bytes());
+                buf.put_slice(&data[..buf.remaining().min(data.len())]);
                 Poll::Ready(Ok(()))
             }
             Some(Err(e)) => Poll::Ready(Err(std::io::Error::other(e))),

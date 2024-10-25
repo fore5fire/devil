@@ -1,5 +1,5 @@
 use super::{Evaluate, PlanValue, PlanValueTable};
-use crate::{bindings, Error, Result, State};
+use crate::{bindings, Error, MaybeUtf8, Result, State};
 use anyhow::anyhow;
 use url::Url;
 
@@ -7,7 +7,7 @@ use url::Url;
 pub struct GraphQlRequest {
     pub url: PlanValue<Url>,
     pub query: PlanValue<String>,
-    pub params: Option<PlanValueTable<Vec<u8>, serde_json::Value>>,
+    pub params: Option<PlanValueTable<MaybeUtf8, serde_json::Value>>,
     pub operation: PlanValue<Option<serde_json::Value>>,
 }
 

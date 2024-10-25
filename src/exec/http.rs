@@ -11,8 +11,8 @@ use super::tcp::TcpRunner;
 use super::tls::TlsRunner;
 use super::{http1::Http1Runner, Context};
 use crate::{
-    HttpOutput, HttpPlanOutput, HttpRequestOutput, HttpResponse, RawTcpPlanOutput, TcpPlanOutput,
-    TlsPlanOutput,
+    HttpOutput, HttpPlanOutput, HttpRequestOutput, HttpResponse, MaybeUtf8, RawTcpPlanOutput,
+    TcpPlanOutput, TlsPlanOutput,
 };
 
 #[derive(Debug)]
@@ -118,7 +118,7 @@ impl HttpRunner {
                     .url
                     .port_or_known_default()
                     .ok_or_else(|| anyhow!("url is missing port"))?,
-                body: Vec::new(),
+                body: MaybeUtf8::default(),
                 //close: TcpPlanCloseOutput::default(),
             },
         ))));
@@ -136,8 +136,8 @@ impl HttpRunner {
                         .url
                         .port_or_known_default()
                         .ok_or_else(|| anyhow!("url is missing port"))?,
-                    alpn: vec![b"http/1.1".to_vec() /*, b"h2".to_vec()*/],
-                    body: Vec::new(),
+                    alpn: vec![MaybeUtf8("http/1.1".into()) /*, b"h2".to_vec()*/],
+                    body: MaybeUtf8::default(),
                 },
             ))))
         }
@@ -149,7 +149,7 @@ impl HttpRunner {
                 crate::Http1PlanOutput {
                     url: plan.url,
                     method: plan.method,
-                    version_string: Some("HTTP/1.1".into()),
+                    version_string: Some(MaybeUtf8("HTTP/1.1".into())),
                     add_content_length: plan.add_content_length,
                     headers: plan.headers,
                     body: plan.body,
