@@ -6,7 +6,7 @@ use serde::Serialize;
 use super::{BytesOutput, Direction, PduName, ProtocolName};
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename = "snake_case")]
+#[serde(tag = "kind", rename = "raw_tcp")]
 pub struct RawTcpOutput {
     pub name: ProtocolName,
     pub plan: RawTcpPlanOutput,
@@ -33,7 +33,7 @@ pub struct RawTcpPlanOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename = "snake_case")]
+#[serde(tag = "kind", rename = "raw_tcp_segment")]
 pub struct TcpSegmentOutput {
     pub name: PduName,
     pub source: u16,

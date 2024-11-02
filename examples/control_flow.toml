@@ -1,4 +1,5 @@
 devil.version = 0
+devil.name = "examples_control_flow"
 
 [count_example.http]
     url = "https://example.com/test"

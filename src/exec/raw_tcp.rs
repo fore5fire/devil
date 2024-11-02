@@ -1,6 +1,7 @@
 use std::mem;
 use std::net::SocketAddr;
 use std::ops::Deref;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{io, net::IpAddr, pin::Pin, sync::Arc, time::Instant};
 
 use anyhow::{anyhow, bail};
@@ -29,8 +30,8 @@ use tokio::{
 use tracing::{debug, info};
 
 use crate::{
-    Direction, RawTcpError, RawTcpOutput, RawTcpPlanOutput, TcpSegmentOptionOutput,
-    TcpSegmentOutput,
+    Direction, PduName, ProtocolName, ProtocolOutputDiscriminants, RawTcpError, RawTcpOutput,
+    RawTcpPlanOutput, TcpSegmentOptionOutput, TcpSegmentOutput,
 };
 
 use super::Context;
@@ -84,12 +85,15 @@ struct OpenState {
 impl RawTcpRunner {
     pub fn new(ctx: Arc<Context>, plan: RawTcpPlanOutput) -> Self {
         Self {
-            ctx,
             state: State::Pending,
             start_time: None,
             remote_ip: None,
             local_ip: None,
             out: RawTcpOutput {
+                name: ProtocolName::with_job(
+                    ctx.job_name.clone(),
+                    ProtocolOutputDiscriminants::RawTcp,
+                ),
                 dest_ip: String::new(),
                 dest_port: plan.dest_port,
                 sent: Vec::new(),
@@ -101,6 +105,7 @@ impl RawTcpRunner {
                 handshake_duration: None,
                 plan,
             },
+            ctx,
         }
     }
 
@@ -211,11 +216,21 @@ impl RawTcpRunner {
             self.state = State::CompletedEmpty;
         })?;
 
+        let counter = Arc::new(AtomicU64::new(0));
+
         let start = || {
             let start = Instant::now();
             self.start_time = Some(start);
             let (reads_done, recv_reads_done) = oneshot::channel();
-            let reads = reader(read, remote_addr, start, recv_reads_done, Direction::Recv);
+            let reads = reader(
+                read,
+                remote_addr,
+                start,
+                recv_reads_done,
+                Direction::Recv,
+                self.out.name.clone(),
+                counter.clone(),
+            );
             (start, reads, reads_done)
         };
 
@@ -238,7 +253,15 @@ impl RawTcpRunner {
             })?;
             let (writes_done, recv_writes_done) = oneshot::channel();
             self.state = State::Passive {
-                writes: reader(read, local_addr, start, recv_writes_done, Direction::Send),
+                writes: reader(
+                    read,
+                    local_addr,
+                    start,
+                    recv_writes_done,
+                    Direction::Send,
+                    self.out.name.clone(),
+                    counter,
+                ),
                 writes_done,
                 reads,
                 reads_done,
@@ -504,6 +527,8 @@ pub fn reader(
     start: Instant,
     mut done: oneshot::Receiver<usize>,
     direction: Direction,
+    proto: ProtocolName,
+    counter: Arc<AtomicU64>,
 ) -> JoinHandle<(Vec<Arc<TcpSegmentOutput>>, Option<io::Error>)> {
     // TODO: Use AsyncFd instead of one thread per request.
     //let read_fd = AsyncFd::new(read.socket.fd)?;
@@ -534,7 +559,15 @@ pub fn reader(
                         info!("got fin packet from {src_ip}:{}", packet.get_source());
                         seen_fin = true;
                     }
-                    out.push(packet_to_output(packet, start, direction));
+                    out.push(packet_to_output(
+                        packet,
+                        start,
+                        PduName::with_protocol(
+                            proto.clone(),
+                            counter.fetch_add(1, Ordering::Relaxed),
+                        ),
+                        direction,
+                    ));
                 }
                 // Network failure, bail.
                 Err(e) => return (out, Some(e)),
@@ -559,7 +592,15 @@ pub fn reader(
                         info!("got fin packet from {src_ip}:{}", packet.get_source());
                         seen_fin = true;
                     }
-                    out.push(packet_to_output(packet, start, direction));
+                    out.push(packet_to_output(
+                        packet,
+                        start,
+                        PduName::with_protocol(
+                            proto.clone(),
+                            counter.fetch_add(1, Ordering::Relaxed),
+                        ),
+                        direction,
+                    ));
                 }
                 // Network failure, bail.
                 Err(e) => return (out, Some(e)),
@@ -572,10 +613,12 @@ pub fn reader(
 fn packet_to_output(
     packet: TcpPacket,
     start: Instant,
+    name: PduName,
     direction: Direction,
 ) -> Arc<TcpSegmentOutput> {
     let dur = TimeDelta::from_std(start.elapsed()).ok().map(Duration);
     Arc::new(TcpSegmentOutput {
+        name,
         received: if direction.is_recv() { dur } else { None },
         sent: if direction.is_send() { dur } else { None },
         direction,

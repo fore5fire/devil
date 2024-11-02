@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, hash::Hash};
 
 use anyhow::{anyhow, bail};
 use indexmap::IndexMap;
@@ -47,6 +47,7 @@ impl Plan {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Settings {
     pub version: u16,
+    pub name: String,
     #[serde(default)]
     pub defaults: Vec<Defaults>,
     #[serde(default)]

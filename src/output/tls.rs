@@ -8,7 +8,7 @@ use crate::TlsVersion;
 use super::{MaybeUtf8, PduName, ProtocolName};
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename = "snake_case")]
+#[serde(tag = "kind", rename = "tls")]
 pub struct TlsOutput {
     pub name: ProtocolName,
     pub plan: TlsPlanOutput,
@@ -29,7 +29,7 @@ pub struct TlsPlanOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename = "snake_case")]
+#[serde(tag = "kind", rename = "tls_sent")]
 pub struct TlsSentOutput {
     pub name: PduName,
     pub host: String,
@@ -40,7 +40,7 @@ pub struct TlsSentOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename = "snake_case")]
+#[serde(tag = "kind", rename = "tls_recv")]
 pub struct TlsReceivedOutput {
     pub name: PduName,
     pub body: MaybeUtf8,

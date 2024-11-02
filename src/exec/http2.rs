@@ -21,6 +21,7 @@ use tokio::{
 
 use crate::{
     AddContentLength, Http2Error, Http2Output, Http2PlanOutput, Http2RequestOutput, MaybeUtf8,
+    PduName, ProtocolName, ProtocolOutputDiscriminants,
 };
 
 use super::{
@@ -90,11 +91,15 @@ enum ReadState {
 }
 
 impl Http2Runner {
-    pub(super) fn new(ctx: Arc<Context>, plan: Http2PlanOutput) -> crate::Result<Self> {
+    pub(super) fn new(
+        ctx: Arc<Context>,
+        plan: Http2PlanOutput,
+        protocol: ProtocolOutputDiscriminants,
+    ) -> crate::Result<Self> {
         Ok(Self {
-            ctx,
             write_state: WriteState::Pending {
                 request_out: Http2RequestOutput {
+                    name: PduName::with_job(ctx.job_name.clone(), protocol, 0),
                     url: plan.url.clone(),
                     method: plan.method.clone(),
                     headers: plan.headers.clone(),
@@ -107,12 +112,14 @@ impl Http2Runner {
             },
             read_state: ReadState::Pending,
             out: Http2Output {
+                name: ProtocolName::with_job(ctx.job_name.clone(), protocol),
                 plan,
                 request: None,
                 response: None,
                 errors: Vec::new(),
                 duration: TimeDelta::zero().into(),
             },
+            ctx,
             transport: None,
             start_time: None,
             header_send_start: None,
@@ -382,6 +389,7 @@ impl Http2Runner {
             _ => return (self.out, self.transport),
         };
         self.out.response = Some(Arc::new(crate::Http2Response {
+            name: PduName::with_protocol(self.out.name.clone(), 1),
             status_code: Some(resp_head.status.into()),
             content_length: None,
             headers: Some(

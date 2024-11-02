@@ -1,4 +1,5 @@
 devil.version = 0
+devil.name = "implicit_defaults"
 
 [[devil.defaults]]
 selector = ["graphql", "graphql_h1c", "graphql_h1", "graphql_h2", "graphql_h2c", "graphql_h3"]

@@ -9,7 +9,7 @@ use crate::AddContentLength;
 use super::{MaybeUtf8, PduName, ProtocolName};
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename = "snake_case")]
+#[serde(tag = "kind", rename = "http")]
 pub struct HttpOutput {
     pub name: ProtocolName,
     pub plan: HttpPlanOutput,
@@ -30,7 +30,7 @@ pub struct HttpPlanOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename = "snake_case")]
+#[serde(tag = "kind", rename = "http_request")]
 pub struct HttpRequestOutput {
     pub name: PduName,
     pub url: Url,
@@ -44,7 +44,7 @@ pub struct HttpRequestOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename = "snake_case")]
+#[serde(tag = "kind", rename = "http_response")]
 pub struct HttpResponse {
     pub name: PduName,
     pub protocol: Option<MaybeUtf8>,

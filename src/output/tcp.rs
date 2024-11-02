@@ -6,7 +6,7 @@ use serde::Serialize;
 use super::{MaybeUtf8, PduName, ProtocolName};
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename = "snake_case")]
+#[serde(tag = "kind", rename = "tcp")]
 pub struct TcpOutput {
     pub name: ProtocolName,
     pub plan: TcpPlanOutput,
@@ -42,7 +42,7 @@ pub struct TcpPlanOutput {
 //}
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename = "snake_case")]
+#[serde(tag = "kind", rename = "tcp_sent")]
 pub struct TcpSentOutput {
     pub name: PduName,
     pub dest_ip: String,
@@ -53,7 +53,7 @@ pub struct TcpSentOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename = "snake_case")]
+#[serde(tag = "kind", rename = "tcp_recv")]
 pub struct TcpReceivedOutput {
     pub name: PduName,
     pub body: MaybeUtf8,

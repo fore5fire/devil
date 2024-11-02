@@ -1,4 +1,5 @@
 use std::io;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{ready, Poll};
 use std::time::Instant;
 use std::{iter, pin::pin};
@@ -15,8 +16,8 @@ use tokio::task::JoinHandle;
 use tracing::{debug, debug_span, Instrument};
 
 use crate::{
-    Direction, Http2FrameOutput, Http2FrameType, MaybeUtf8, RawHttp2Error, RawHttp2Output,
-    RawHttp2PlanOutput,
+    Direction, Http2FrameOutput, Http2FrameType, MaybeUtf8, PduName, ProtocolName,
+    ProtocolOutputDiscriminants, RawHttp2Error, RawHttp2Output, RawHttp2PlanOutput,
 };
 
 use super::extract;
@@ -28,7 +29,7 @@ pub struct RawHttp2Runner {
     out: RawHttp2Output,
     state: State,
     start_time: Option<Instant>,
-    send_frames: Vec<Arc<Http2FrameOutput>>,
+    send_frames: Vec<Http2FrameOutput>,
     send_preface: MaybeUtf8,
 }
 
@@ -52,18 +53,30 @@ enum State {
 }
 
 impl RawHttp2Runner {
-    pub(super) fn new(ctx: Arc<Context>, plan: RawHttp2PlanOutput, executor: bool) -> Self {
+    pub(super) fn new(
+        ctx: Arc<Context>,
+        mut plan: RawHttp2PlanOutput,
+        protocol: ProtocolOutputDiscriminants,
+        executor: bool,
+    ) -> Self {
         Self {
-            ctx,
-            send_frames: plan.frames.clone(),
+            // Pull the frames out of the plan, since we'll need to update their pdu numbers when
+            // we actually send them (or, if we're not executor, we'll just put them back
+            // unmodified in [complete]
+            send_frames: mem::take(&mut plan.frames)
+                .into_iter()
+                .map(Arc::unwrap_or_clone)
+                .collect(),
             send_preface: plan.preamble.clone().unwrap_or_default(),
             out: RawHttp2Output {
+                name: ProtocolName::with_job(ctx.job_name.clone(), protocol),
                 errors: Vec::new(),
                 duration: TimeDelta::zero().into(),
                 received: Vec::new(),
                 sent: plan.frames.clone(),
                 plan,
             },
+            ctx,
             state: State::Pending { executor },
             start_time: None,
         }
@@ -88,19 +101,26 @@ impl RawHttp2Runner {
             panic!("wrong state to execute raw_http2: {:?}", self.state);
         };
         let (mut recv, mut send) = split(transport);
-        let frames = mem::take(&mut self.send_frames);
+        let mut frames = mem::take(&mut self.send_frames);
         let preface = mem::take(&mut self.send_preface);
+        let counter = Arc::new(AtomicU64::new(0));
+        let proto = self.out.name.clone();
         let (send_result, (received, recv_err)) = join!(
             async {
                 send.write_all(&preface).await?;
-                for frame in frames {
+                for frame in &mut frames {
                     frame.write(&mut send).await?;
+                    frame.name.pdu = counter.fetch_add(1, Ordering::Relaxed);
                 }
-                send.shutdown().await?;
-                Ok::<_, io::Error>(())
+                send.shutdown().await
             },
             async {
-                let mut parser = FrameParser::new(FrameParserState::FrameHeader, Direction::Recv);
+                let mut parser = FrameParser::new(
+                    FrameParserState::FrameHeader,
+                    Direction::Recv,
+                    proto,
+                    counter.clone(),
+                );
                 let mut buf = [0; 2048];
                 loop {
                     match recv.read(&mut buf).await {
@@ -116,6 +136,7 @@ impl RawHttp2Runner {
             }
             .instrument(debug_span!("raw_http2_execute_read"))
         );
+        self.send_frames = frames;
         self.out.received = received;
         if let Some(e) = recv_err {
             self.out.errors.push(RawHttp2Error {
@@ -144,7 +165,8 @@ impl RawHttp2Runner {
         self.state = if executor {
             State::Executing { transport }
         } else {
-            let (extractor, transport) = extract::new(FrameParserStream::new(transport));
+            let (extractor, transport) =
+                extract::new(FrameParserStream::new(transport, self.out.name.clone()));
 
             let (stream, connection) = handshake(transport).await.inspect_err(|e| {
                 self.out.errors.push(crate::RawHttp2Error {
@@ -180,6 +202,11 @@ impl RawHttp2Runner {
                 .expect("durations should fit in chrono")
                 .into();
         }
+        // Restore the planned frames to send, even if we're not executor.
+        self.out.plan.frames = mem::take(&mut self.send_frames)
+            .into_iter()
+            .map(Arc::new)
+            .collect();
         let state = std::mem::replace(&mut self.state, State::Invalid);
         match state {
             State::Open { connection, .. } => match connection.await {
@@ -210,6 +237,7 @@ impl RawHttp2Runner {
                 self.state = State::Completed {
                     transport: Some(transport),
                 };
+                self.out.sent = self.out.plan.frames.clone();
             }
             State::Completed { transport } => {
                 self.state = State::Completed { transport };
@@ -230,15 +258,24 @@ struct FrameParser {
     state: FrameParserState,
     out: Vec<Arc<Http2FrameOutput>>,
     direction: Direction,
+    proto: ProtocolName,
+    counter: Arc<AtomicU64>,
 }
 
 impl FrameParser {
-    fn new(state: FrameParserState, direction: Direction) -> Self {
+    fn new(
+        state: FrameParserState,
+        direction: Direction,
+        proto: ProtocolName,
+        counter: Arc<AtomicU64>,
+    ) -> Self {
         Self {
             buf: BytesMut::new(),
             state,
             out: Vec::new(),
             direction,
+            proto,
+            counter,
         }
     }
 
@@ -301,6 +338,10 @@ impl FrameParser {
                     }
                     buf = &buf[to_copy..];
                     let out = Arc::new(Http2FrameOutput::new(
+                        PduName::with_protocol(
+                            self.proto.clone(),
+                            self.counter.fetch_add(1, Ordering::Relaxed),
+                        ),
                         Http2FrameType::new(*kind),
                         (*flags).into(),
                         *r,
@@ -327,14 +368,22 @@ struct FrameParserStream {
 }
 
 impl FrameParserStream {
-    fn new(transport: Runner) -> Self {
+    fn new(transport: Runner, proto: ProtocolName) -> Self {
+        let counter = Arc::new(AtomicU64::new(0));
         Self {
             transport,
             write: FrameParser::new(
                 FrameParserState::Preface(WRITE_PREFACE.as_bytes()),
                 Direction::Send,
+                proto.clone(),
+                counter.clone(),
             ),
-            read: FrameParser::new(FrameParserState::FrameHeader, Direction::Recv),
+            read: FrameParser::new(
+                FrameParserState::FrameHeader,
+                Direction::Recv,
+                proto,
+                counter,
+            ),
         }
     }
 

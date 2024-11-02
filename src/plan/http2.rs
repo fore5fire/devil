@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::{AddContentLength, Evaluate, PlanValue, PlanValueTable};
 use crate::{bindings, Error, MaybeUtf8, Result, State};
 use anyhow::anyhow;

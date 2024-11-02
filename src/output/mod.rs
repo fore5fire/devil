@@ -91,17 +91,35 @@ impl<T: Debug + Clone> PlanWrapper<T> {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(tag = "kind", rename = "snake_case")]
+#[serde(tag = "kind", rename = "run")]
 pub struct RunOutput {
     pub name: RunName,
     pub steps: IndexMap<Arc<String>, Arc<StepOutput>>,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
-#[serde(tag = "kind", rename = "snake_case")]
+impl RunOutput {
+    pub fn new(name: RunName) -> Self {
+        Self {
+            name,
+            steps: IndexMap::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename = "step")]
 pub struct StepOutput {
     pub name: StepName,
     pub jobs: IndexMap<IterableKey, Arc<JobOutput>>,
+}
+
+impl StepOutput {
+    pub fn new(name: StepName) -> Self {
+        Self {
+            name,
+            jobs: IndexMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, EnumDiscriminants)]
@@ -241,7 +259,7 @@ pub enum Pdu {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename = "snake_case")]
+#[serde(tag = "kind", rename = "job")]
 pub struct JobOutput {
     pub name: JobName,
     pub graphql: Option<Arc<GraphqlOutput>>,

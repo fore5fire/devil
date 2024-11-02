@@ -1,4 +1,5 @@
 devil.version = 0
+devil.name = "examples_local"
 
 [simple.tcp]
     host = "127.0.0.1"

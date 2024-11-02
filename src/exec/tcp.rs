@@ -12,7 +12,10 @@ use tokio::io::{ReadHalf, WriteHalf};
 use tokio::net::{TcpSocket, TcpStream};
 use tokio::spawn;
 
-use crate::{MaybeUtf8, TcpError, TcpOutput, TcpPlanOutput, TcpReceivedOutput, TcpSentOutput};
+use crate::{
+    MaybeUtf8, PduName, ProtocolName, ProtocolOutputDiscriminants, TcpError, TcpOutput,
+    TcpPlanOutput, TcpReceivedOutput, TcpSentOutput,
+};
 
 use super::pause::{PauseReader, PauseSpec, PauseWriter};
 use super::raw_tcp::RawTcpRunner;
@@ -48,6 +51,10 @@ impl TcpRunner {
             state: State::Pending,
             reader: None,
             out: TcpOutput {
+                name: ProtocolName::with_job(
+                    ctx.job_name.clone(),
+                    ProtocolOutputDiscriminants::Tcp,
+                ),
                 sent: None,
                 plan,
                 received: None,
@@ -79,6 +86,9 @@ impl TcpRunner {
         let remote_addr_string = remote_addr.ip().to_string();
 
         self.out.sent = Some(Arc::new(TcpSentOutput {
+            // TODO: if we pause before sending data, receive all data, then send data, this should
+            // really be numbered 1 not 0.
+            name: PduName::with_protocol(self.out.name.clone(), 0),
             dest_ip: remote_addr_string,
             dest_port: remote_addr.port(),
             body: MaybeUtf8::default(),
@@ -286,6 +296,7 @@ impl TcpRunner {
         }
         if !reads.is_empty() {
             self.out.received = Some(Arc::new(TcpReceivedOutput {
+                name: PduName::with_protocol(self.out.name.clone(), 1),
                 body: MaybeUtf8(Bytes::from(reads).into()),
                 time_to_first_byte: reader
                     .first_read()

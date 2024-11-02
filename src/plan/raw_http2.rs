@@ -6,12 +6,12 @@ use itertools::Itertools;
 
 use crate::{
     bindings, BytesOutput, Direction, Error, Evaluate, Http2ContinuationFrameOutput,
-    Http2DataFrameOutput, Http2FrameOutput, Http2FramePayloadOutput, Http2FrameType,
-    Http2GenericFrameOutput, Http2GoawayFrameOutput, Http2HeadersFrameOutput,
+    Http2DataFrameOutput, Http2FrameFlag, Http2FrameOutput, Http2FramePayloadOutput,
+    Http2FrameType, Http2GenericFrameOutput, Http2GoawayFrameOutput, Http2HeadersFrameOutput,
     Http2HeadersFramePriorityOutput, Http2PingFrameOutput, Http2PriorityFrameOutput,
     Http2PushPromiseFrameOutput, Http2RstStreamFrameOutput, Http2SettingsFrameOutput,
     Http2SettingsParameterId, Http2SettingsParameterOutput, Http2WindowUpdateFrameOutput,
-    MaybeUtf8, PlanValue, Result, State,
+    MaybeUtf8, PduName, PlanValue, ProtocolOutputDiscriminants, Result, State,
 };
 
 #[derive(Debug, Clone)]
@@ -36,7 +36,8 @@ impl Evaluate<crate::RawHttp2PlanOutput> for RawHttp2Request {
             frames: self
                 .frames
                 .iter()
-                .map(|f| f.evaluate(state).map(Arc::new))
+                .enumerate()
+                .map(|(i, f)| f.evaluate(state, i.try_into().unwrap()).map(Arc::new))
                 .try_collect()?,
         })
     }
@@ -113,14 +114,14 @@ pub struct Http2Frame {
     payload: Http2FramePayload,
 }
 
-impl Evaluate<Http2FrameOutput> for Http2Frame {
-    fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Http2FrameOutput>
+impl Http2Frame {
+    fn evaluate<'a, S, O, I>(&self, state: &S, id: u64) -> Result<Http2FrameOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
-        let payload = match self.payload {
+        let payload = match &self.payload {
             Http2FramePayload::Data(frame) => Http2FramePayloadOutput::Data(frame.evaluate(state)?),
             Http2FramePayload::Headers(frame) => {
                 Http2FramePayloadOutput::Headers(frame.evaluate(state)?)
@@ -153,7 +154,12 @@ impl Evaluate<Http2FrameOutput> for Http2Frame {
         };
 
         Ok(Http2FrameOutput {
-            flags: self.flags.evaluate(state)?.into() | payload.compute_flags(),
+            name: PduName::with_job(
+                state.job_name().unwrap().clone(),
+                ProtocolOutputDiscriminants::RawTcp,
+                id,
+            ),
+            flags: Http2FrameFlag::from(self.flags.evaluate(state)?) | payload.compute_flags(),
             r: self.r.evaluate(state)?,
             stream_id: self.stream_id.evaluate(state)?,
             payload,

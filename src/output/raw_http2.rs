@@ -11,7 +11,7 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use super::{BytesOutput, Direction, MaybeUtf8, PduName, ProtocolName};
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "snake_case", tag = "kind", rename = "snake_case")]
+#[serde(rename_all = "snake_case", tag = "kind", rename = "raw_http2_frame")]
 pub struct Http2FrameOutput {
     pub name: PduName,
     pub flags: Http2FrameFlag,
@@ -784,7 +784,7 @@ impl Http2GenericFrameOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename = "snake_case")]
+#[serde(tag = "kind", rename = "raw_http2")]
 pub struct RawHttp2Output {
     pub name: ProtocolName,
     pub plan: RawHttp2PlanOutput,

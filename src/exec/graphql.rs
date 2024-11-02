@@ -5,7 +5,10 @@ use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::{runner::Runner, Context};
-use crate::{GraphqlError, GraphqlOutput, GraphqlPlanOutput};
+use crate::{
+    GraphqlError, GraphqlOutput, GraphqlPlanOutput, GraphqlRequestOutput, PduName, ProtocolName,
+    ProtocolOutputDiscriminants,
+};
 
 #[derive(Debug)]
 pub(super) struct GraphqlRunner {
@@ -47,6 +50,10 @@ impl GraphqlRunner {
 
         Ok(Self {
             out: GraphqlOutput {
+                name: ProtocolName::with_job(
+                    ctx.job_name.clone(),
+                    ProtocolOutputDiscriminants::Graphql,
+                ),
                 request: None,
                 response: None,
                 errors: Vec::new(),
@@ -120,6 +127,22 @@ impl<'a> GraphqlRunner {
             return (self.out, None);
         };
 
+        // TODO: Reflect how far a failed request got
+        if let Some(req_end) = self.resp_start_time {
+            self.out.request = Some(Arc::new(GraphqlRequestOutput {
+                name: PduName::with_job(
+                    self.ctx.job_name.clone(),
+                    ProtocolOutputDiscriminants::Graphql,
+                    0,
+                ),
+                url: self.out.plan.url.clone(),
+                query: self.out.plan.query.clone(),
+                operation: self.out.plan.operation.clone(),
+                params: self.out.plan.params.clone(),
+                duration: Duration::from_std(req_end - start_time).unwrap().into(),
+            }));
+        }
+
         let resp_body: Option<serde_json::Value> = match serde_json::from_slice(&self.resp) {
             Ok(resp) => Some(resp),
             Err(e) => {
@@ -133,6 +156,11 @@ impl<'a> GraphqlRunner {
 
         if let Some(resp_body) = resp_body {
             self.out.response = Some(Arc::new(crate::GraphqlResponse {
+                name: PduName::with_job(
+                    self.ctx.job_name.clone(),
+                    ProtocolOutputDiscriminants::Graphql,
+                    1,
+                ),
                 data: resp_body
                     .get("data")
                     .unwrap_or(&serde_json::Value::Null)

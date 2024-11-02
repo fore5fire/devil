@@ -7,7 +7,7 @@ use url::Url;
 use super::{MaybeUtf8, PduName, ProtocolName};
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename = "snake_case")]
+#[serde(tag = "kind", rename = "graphql")]
 pub struct GraphqlOutput {
     pub name: ProtocolName,
     pub plan: GraphqlPlanOutput,
@@ -26,7 +26,7 @@ pub struct GraphqlPlanOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename = "snake_case")]
+#[serde(tag = "kind", rename = "graphql_request")]
 pub struct GraphqlRequestOutput {
     pub name: PduName,
     pub url: Url,
@@ -37,7 +37,7 @@ pub struct GraphqlRequestOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename = "snake_case")]
+#[serde(tag = "kind", rename = "graphql_response")]
 pub struct GraphqlResponse {
     pub name: PduName,
     pub data: serde_json::Value,

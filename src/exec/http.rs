@@ -11,8 +11,8 @@ use super::tcp::TcpRunner;
 use super::tls::TlsRunner;
 use super::{http1::Http1Runner, Context};
 use crate::{
-    HttpOutput, HttpPlanOutput, HttpRequestOutput, HttpResponse, MaybeUtf8, RawTcpPlanOutput,
-    TcpPlanOutput, TlsPlanOutput,
+    HttpOutput, HttpPlanOutput, HttpRequestOutput, HttpResponse, MaybeUtf8,
+    ProtocolOutputDiscriminants, RawTcpPlanOutput, TcpPlanOutput, TlsPlanOutput,
 };
 
 #[derive(Debug)]
@@ -154,6 +154,7 @@ impl HttpRunner {
                     headers: plan.headers,
                     body: plan.body,
                 },
+                ProtocolOutputDiscriminants::Http,
             )),
         })
     }
@@ -208,6 +209,7 @@ impl HttpRunner {
                 let (out, inner) = r.finish();
                 (
                     HttpOutput {
+                        name: out.name,
                         plan: HttpPlanOutput {
                             url: out.plan.url,
                             method: out.plan.method,
@@ -218,6 +220,7 @@ impl HttpRunner {
                         request: out.request.map(|req| {
                             let req = Arc::unwrap_or_clone(req);
                             Arc::new(HttpRequestOutput {
+                                name: req.name,
                                 url: req.url,
                                 protocol: MaybeUtf8(protocol.into()),
                                 method: req.method,
@@ -231,6 +234,7 @@ impl HttpRunner {
                         response: out.response.map(|resp| {
                             let resp = Arc::unwrap_or_clone(resp);
                             Arc::new(HttpResponse {
+                                name: resp.name,
                                 protocol: resp.protocol,
                                 status_code: resp.status_code,
                                 headers: resp.headers,

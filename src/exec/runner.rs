@@ -6,7 +6,7 @@ use tracing::info;
 
 use super::raw_http2::RawHttp2Runner;
 use super::{http2::Http2Runner, raw_tcp::RawTcpRunner};
-use crate::{JobOutput, ProtocolField, StepPlanOutput};
+use crate::{JobOutput, ProtocolField, ProtocolOutputDiscriminants, StepPlanOutput};
 
 use super::{
     graphql::GraphqlRunner, http::HttpRunner, http1::Http1Runner, tcp::TcpRunner, tls::TlsRunner,
@@ -47,16 +47,38 @@ impl Runner {
             StepPlanOutput::Tcp(output) => Self::Tcp(Box::new(TcpRunner::new(ctx, output))),
             StepPlanOutput::Tls(output) => Self::Tls(Box::new(TlsRunner::new(ctx, output))),
             StepPlanOutput::Http(output) => Self::Http(Box::new(HttpRunner::new(ctx, output)?)),
-            StepPlanOutput::H1c(output) => Runner::H1c(Box::new(Http1Runner::new(ctx, output))),
-            StepPlanOutput::H1(output) => Runner::H1(Box::new(Http1Runner::new(ctx, output))),
-            StepPlanOutput::H2c(output) => Self::H2c(Box::new(Http2Runner::new(ctx, output)?)),
-            StepPlanOutput::RawH2c(output) => {
-                Self::RawH2c(Box::new(RawHttp2Runner::new(ctx, output, executor)))
-            }
-            StepPlanOutput::H2(output) => Self::H2(Box::new(Http2Runner::new(ctx, output)?)),
-            StepPlanOutput::RawH2(output) => {
-                Self::RawH2(Box::new(RawHttp2Runner::new(ctx, output, executor)))
-            }
+            StepPlanOutput::H1c(output) => Runner::H1c(Box::new(Http1Runner::new(
+                ctx,
+                output,
+                ProtocolOutputDiscriminants::H1c,
+            ))),
+            StepPlanOutput::H1(output) => Runner::H1(Box::new(Http1Runner::new(
+                ctx,
+                output,
+                ProtocolOutputDiscriminants::H1,
+            ))),
+            StepPlanOutput::H2c(output) => Self::H2c(Box::new(Http2Runner::new(
+                ctx,
+                output,
+                ProtocolOutputDiscriminants::H2c,
+            )?)),
+            StepPlanOutput::RawH2c(output) => Self::RawH2c(Box::new(RawHttp2Runner::new(
+                ctx,
+                output,
+                ProtocolOutputDiscriminants::RawH2c,
+                executor,
+            ))),
+            StepPlanOutput::H2(output) => Self::H2(Box::new(Http2Runner::new(
+                ctx,
+                output,
+                ProtocolOutputDiscriminants::H2,
+            )?)),
+            StepPlanOutput::RawH2(output) => Self::RawH2(Box::new(RawHttp2Runner::new(
+                ctx,
+                output,
+                ProtocolOutputDiscriminants::RawH2,
+                executor,
+            ))),
             StepPlanOutput::Graphql(output) => {
                 Self::Graphql(Box::new(GraphqlRunner::new(ctx, output)?))
             }

@@ -59,6 +59,9 @@ impl<'a> Plan {
     }
 
     pub fn from_binding(mut plan: bindings::Plan) -> Result<Self> {
+        if plan.devil.name.contains(".") {
+            bail!("devil.name may not contain a '.'");
+        }
         static IMPLICIT_DEFUALTS: OnceLock<bindings::Plan> = OnceLock::new();
 
         // Apply the implicit defaults to the user defaults.
@@ -87,7 +90,7 @@ impl<'a> Plan {
             .map(|(k, v)| Ok((k, PlanValue::try_from(v)?)))
             .collect::<Result<_>>()?;
 
-        Ok(Plan { steps, locals })
+        Ok(Plan { name: plan.devil.name.into(), steps, locals })
     }
 }
 

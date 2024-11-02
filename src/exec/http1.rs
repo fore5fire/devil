@@ -25,6 +25,9 @@ use crate::Http1Error;
 use crate::Http1PlanOutput;
 use crate::Http1RequestOutput;
 use crate::MaybeUtf8;
+use crate::PduName;
+use crate::ProtocolName;
+use crate::ProtocolOutputDiscriminants;
 use crate::{Http1Output, Http1Response};
 
 #[derive(Debug)]
@@ -195,11 +198,15 @@ impl AsyncWrite for Http1Runner {
 }
 
 impl Http1Runner {
-    pub(super) fn new(ctx: Arc<Context>, plan: Http1PlanOutput) -> Self {
+    pub(super) fn new(
+        ctx: Arc<Context>,
+        plan: Http1PlanOutput,
+        protocol: ProtocolOutputDiscriminants,
+    ) -> Self {
         Self {
-            state: State::Pending { ctx },
             send_headers: plan.headers.clone(),
             out: Http1Output {
+                name: ProtocolName::with_job(ctx.job_name.clone(), protocol),
                 request: None,
                 response: None,
                 errors: Vec::new(),
@@ -207,6 +214,7 @@ impl Http1Runner {
                 //pause: crate::Http1PauseOutput::with_planned_capacity(&plan.pause),
                 plan,
             },
+            state: State::Pending { ctx },
             start_time: None,
             req_header_start_time: None,
             req_body_start_time: None,
@@ -326,6 +334,7 @@ impl Http1Runner {
                 let header_complete_time = Instant::now();
                 // Set the header fields in our response.
                 self.out.response = Some(Arc::new(Http1Response {
+                    name: PduName::with_protocol(self.out.name.clone(), 1),
                     protocol: resp
                         .version
                         .map(|v| MaybeUtf8(format!("HTTP/1.{}", v).into())),
@@ -493,6 +502,7 @@ impl Http1Runner {
         self.state = State::SendingBody { transport };
 
         self.out.request = Some(Arc::new(Http1RequestOutput {
+            name: PduName::with_protocol(self.out.name.clone(), 0),
             url: self.out.plan.url.clone(),
             headers: self.send_headers.clone(),
             method: self.out.plan.method.clone(),

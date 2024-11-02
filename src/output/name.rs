@@ -1,7 +1,7 @@
 use std::{fmt::Display, sync::Arc};
 
 use serde::Serialize;
-use svix_ksuid::KsuidMs;
+use svix_ksuid::{KsuidLike, KsuidMs};
 
 use crate::IterableKey;
 
@@ -11,6 +11,15 @@ use super::ProtocolOutputDiscriminants;
 pub struct RunName {
     pub plan: Arc<String>,
     pub run: KsuidMs,
+}
+
+impl RunName {
+    pub fn new(plan: Arc<String>) -> Self {
+        Self {
+            plan,
+            run: KsuidMs::new(None, None),
+        }
+    }
 }
 
 impl Display for RunName {
@@ -85,6 +94,14 @@ impl JobName {
         }
     }
 
+    pub fn into_step_name(self) -> StepName {
+        StepName {
+            plan: self.plan,
+            run: self.run,
+            step: self.step,
+        }
+    }
+
     pub fn step_name(&self) -> StepName {
         StepName {
             plan: self.plan.clone(),
@@ -118,12 +135,24 @@ pub struct ProtocolName {
     pub protocol: ProtocolOutputDiscriminants,
 }
 
+impl ProtocolName {
+    pub fn with_job(job: JobName, protocol: ProtocolOutputDiscriminants) -> Self {
+        Self {
+            plan: job.plan,
+            run: job.run,
+            step: job.step,
+            job: job.job,
+            protocol,
+        }
+    }
+}
+
 impl Display for ProtocolName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{}.{}.{}.{}",
-            self.plan, self.step, self.job, self.protocol
+            "{}.{}.{}.{}.{}",
+            self.plan, self.run, self.step, self.job, self.protocol
         )
     }
 }
@@ -148,6 +177,17 @@ pub struct PduName {
 }
 
 impl PduName {
+    pub fn with_protocol(proto: ProtocolName, pdu: u64) -> Self {
+        Self {
+            plan: proto.plan,
+            run: proto.run,
+            step: proto.step,
+            job: proto.job,
+            protocol: proto.protocol,
+            pdu,
+        }
+    }
+
     pub fn with_job(job: JobName, protocol: ProtocolOutputDiscriminants, pdu: u64) -> Self {
         Self {
             plan: job.plan,
@@ -164,8 +204,8 @@ impl Display for PduName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{}.{}.{}.{}.{}",
-            self.plan, self.step, self.job, self.protocol, self.pdu,
+            "{}.{}.{}.{}.{}.{}",
+            self.plan, self.run, self.step, self.job, self.protocol, self.pdu,
         )
     }
 }

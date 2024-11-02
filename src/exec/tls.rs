@@ -21,7 +21,8 @@ use super::timing::Timing;
 use super::Context;
 use crate::exec::pause::{Pause, PauseSpec};
 use crate::{
-    MaybeUtf8, TlsError, TlsOutput, TlsPlanOutput, TlsReceivedOutput, TlsSentOutput, TlsVersion,
+    MaybeUtf8, PduName, ProtocolName, ProtocolOutputDiscriminants, TlsError, TlsOutput,
+    TlsPlanOutput, TlsReceivedOutput, TlsSentOutput, TlsVersion,
 };
 
 #[derive(Debug)]
@@ -65,13 +66,23 @@ impl TlsRunner {
         let connector = tokio_rustls::TlsConnector::from(Arc::new(tls_config));
 
         TlsRunner {
-            ctx,
             state: State::Pending {
                 connector,
                 domain: Box::new(plan.host.clone()),
             },
             out: TlsOutput {
+                name: ProtocolName::with_job(
+                    ctx.job_name.clone(),
+                    ProtocolOutputDiscriminants::Tls,
+                ),
                 sent: Some(Arc::new(TlsSentOutput {
+                    // TODO: if we pause before sending data, receive all data, then send data, this should
+                    // really be numbered 1 not 0.
+                    name: PduName::with_job(
+                        ctx.job_name.clone(),
+                        ProtocolOutputDiscriminants::Tls,
+                        0,
+                    ),
                     host: plan.host.clone(),
                     port: plan.port,
                     body: MaybeUtf8::default(),
@@ -86,6 +97,7 @@ impl TlsRunner {
                 handshake_duration: None,
             },
             size_hint: None,
+            ctx,
         }
     }
 
@@ -291,6 +303,9 @@ impl TlsRunner {
         }
         if !reads.is_empty() {
             self.out.received = Some(Arc::new(TlsReceivedOutput {
+                // TODO: if we pause before sending data, receive all data, then send data, this should
+                // really be numbered 0 not 1.
+                name: PduName::with_protocol(self.out.name.clone(), 1),
                 body: MaybeUtf8(Bytes::from(reads).into()),
                 time_to_first_byte: stream
                     .first_read()

@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use anyhow::bail;
 use futures::future::try_join_all;
+use indexmap::IndexMap;
 use itertools::{Either, Itertools, Position};
 use svix_ksuid::{KsuidLike, KsuidMs};
 use tokio_task_pool::Pool;
@@ -26,7 +27,7 @@ use tracing::debug;
 
 use crate::{
     location, Evaluate, IterableKey, JobName, JobOutput, Parallelism, Plan, PlanWrapper, Protocol,
-    ProtocolField, RunName, Step, StepOutput, StepPlanOutput, StepPlanOutputs,
+    ProtocolField, ProtocolName, RunName, Step, StepOutput, StepPlanOutput, StepPlanOutputs,
 };
 
 use self::runner::Runner;
@@ -40,12 +41,8 @@ pub struct Executor {
 }
 
 impl<'a> Executor {
-    pub fn new(plan: &'a Plan) -> Result<Self, crate::Error> {
+    pub fn new(plan: &'a Plan, run_name: RunName) -> Result<Self, crate::Error> {
         let mut locals = HashMap::new();
-        let run_name = RunName {
-            plan: plan.name.clone(),
-            run: KsuidMs::new(None, None),
-        };
         // Evaluate the locals in order.
         for (k, v) in plan.locals.iter() {
             let inputs = State {
@@ -86,12 +83,12 @@ impl<'a> Executor {
             run_for: None,
             run_count: None,
             run_name: &job_name.run_name(),
-            job_name: Some(job_name),
+            job_name: Some(job_name.clone()),
         };
 
         // Check the if condition only before the first iteration.
         if !step.run.run_if.evaluate(&inputs)? {
-            return Ok(StepOutput::default());
+            return Ok(StepOutput::new(job_name.into_step_name()));
         }
 
         let parallel = step.run.parallel.evaluate(&inputs)?;
@@ -109,7 +106,7 @@ impl<'a> Executor {
         let count_usize: usize = count.try_into()?;
 
         // Preallocate space when able.
-        let mut output = StepOutput::default();
+        let mut output = StepOutput::new(job_name.step_name());
         if step.run.run_while.is_none() {
             output.jobs.try_reserve(count_usize)?;
         }
@@ -132,8 +129,11 @@ impl<'a> Executor {
             .unwrap_or_default();
 
         // Create the runners for the shared stack in advance.
-        let shared_runners =
-            Self::prepare_runners(&Arc::new(Context::default()), &shared_stack, &mut inputs)?;
+        let shared_runners = Self::prepare_runners(
+            &Arc::new(Context::new(job_name.clone())),
+            &shared_stack,
+            &mut inputs,
+        )?;
         let syncs = step
             .sync
             .iter()
@@ -157,6 +157,7 @@ impl<'a> Executor {
             Parallelism::Parallel(max_parallel) => {
                 let ctx = Arc::new(Context {
                     sync_locations: StepLocations::new(syncs, &signals, &pauses),
+                    job_name,
                 });
 
                 let states: Vec<_> = (0..count)
@@ -253,7 +254,7 @@ impl<'a> Executor {
                 );
             }
             Parallelism::Serial => {
-                let ctx = Arc::new(Context::default());
+                let ctx = Arc::new(Context::new(job_name));
 
                 // Start the shared runners.
                 let mut shared_transport = Executor::start_runners(None, shared_runners, 1).await?;
@@ -467,12 +468,19 @@ pub enum Error {
     Done,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(super) struct Context {
     sync_locations: sync::StepLocations,
+    pub job_name: JobName,
 }
 
 impl Context {
+    fn new(job_name: JobName) -> Self {
+        Self {
+            sync_locations: sync::StepLocations::default(),
+            job_name,
+        }
+    }
     pub(super) fn next_sync_location(&self, loc: location::Location) -> Option<StepLocation> {
         // TODO: implement
         None

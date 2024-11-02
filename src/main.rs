@@ -4,7 +4,8 @@ use clap::{ArgGroup, Parser, ValueEnum};
 use devil::exec::Executor;
 use devil::record::{BigQueryWriter, Describe, FileWriter, Record, RecordWriter, StdoutWriter};
 use devil::{
-    JobOutput, Pdu, Plan, ProtocolOutput, ProtocolOutputDiscriminants, RunOutput, StepOutput,
+    JobOutput, Pdu, Plan, ProtocolOutput, ProtocolOutputDiscriminants, RunName, RunOutput,
+    StepOutput,
 };
 use futures::future::try_join_all;
 use itertools::Itertools;
@@ -141,7 +142,7 @@ enum Protocol {
 impl From<&Protocol> for devil::ProtocolOutputDiscriminants {
     fn from(value: &Protocol) -> Self {
         match value {
-            Protocol::Graphql => Self::GraphQl,
+            Protocol::Graphql => Self::Graphql,
             Protocol::Http => Self::Http,
             Protocol::H1 => Self::H1,
             Protocol::H1c => Self::H1c,
@@ -205,7 +206,7 @@ async fn main() -> anyhow::Result<()> {
             let mut recv = recv.clone();
             spawn(async move {
                 while !recv.is_closed() {
-                    if let Err(e) = w.write(&mut recv).await {
+                    if let Err(e) = w.handle(&mut recv).await {
                         error!("write output to {}: {e}", w.inner.name())
                     }
                 }
@@ -227,8 +228,8 @@ async fn main() -> anyhow::Result<()> {
             return Ok(());
         }
 
-        let mut executor = Executor::new(&plan)?;
-        let mut plan_output = RunOutput::default();
+        let mut plan_output = RunOutput::new(RunName::new(plan.name.clone()));
+        let mut executor = Executor::new(&plan, plan_output.name.clone())?;
         for (name, _) in plan.steps.iter() {
             let step_output = Arc::new(executor.next().await?);
             send(
@@ -277,6 +278,8 @@ enum FlushMessages {
 impl FlushMessages {
     fn normalize(self, target: Normalize) -> Vec<Normalized> {
         match (self, target) {
+            (Self::Plan(p), Normalize::None) => vec![Normalized::None(p)],
+
             (Self::Step(s), Normalize::Step) => vec![Normalized::Step(s)],
             (Self::Step(s), Normalize::Job) => s
                 .jobs
@@ -301,41 +304,8 @@ impl FlushMessages {
                 .map(Normalized::Pdu)
                 .collect(),
 
-            (Self::Plan(p), Normalize::None) => vec![Normalized::None(p)],
-            (Self::Plan(p), Normalize::Step) => {
-                p.steps.values().cloned().map(Normalized::Step).collect()
-            }
-            (Self::Plan(p), Normalize::Job) => p
-                .steps
-                .values()
-                .map(|s| s.jobs.values())
-                .flatten()
-                .cloned()
-                .map(Normalized::Job)
-                .collect(),
-            (Self::Plan(p), Normalize::Protocol) => p
-                .steps
-                .values()
-                .map(|s| s.jobs.values())
-                .flatten()
-                .map(|j| j.stack())
-                .flatten()
-                .map(Normalized::Protocol)
-                .collect(),
-            (Self::Plan(s), Normalize::Pdu) => s
-                .steps
-                .values()
-                .map(|s| s.jobs.values())
-                .flatten()
-                .map(|s| s.stack())
-                .flatten()
-                .map(|p| p.pdus())
-                .flatten()
-                .map(Normalized::Pdu)
-                .collect(),
-            (_, Normalize::None) => {
-                unreachable!("normalization is required when flush is not plan")
-            }
+            // Skip unmatched since it should be handled at a different flush level.
+            _ => Vec::new(),
         }
     }
 }
@@ -440,17 +410,19 @@ impl Writer {
         }
     }
 
-    async fn write(&mut self, recv: &mut Receiver<FlushMessages>) -> anyhow::Result<()> {
+    async fn handle(&mut self, recv: &mut Receiver<FlushMessages>) -> anyhow::Result<()> {
         match recv.recv_direct().await {
             Ok(flush) => {
                 let normalized = flush.normalize(self.normalize);
-                self.inner.write(&normalized, &self.layers).await
+                if !normalized.is_empty() {
+                    self.inner.write(&normalized, &self.layers).await?;
+                }
             }
             Err(RecvError::Overflowed(n)) => {
                 warn!("{} writer missed {n} messages", self.inner.name());
-                Ok(())
             }
-            Err(RecvError::Closed) => return Ok(()),
+            Err(RecvError::Closed) => {}
         }
+        Ok(())
     }
 }

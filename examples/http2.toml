@@ -1,4 +1,5 @@
 devil.version = 0
+devil.name = "examples_http2"
 
 # Basic HTTP/2 request
 [basic.h2]
