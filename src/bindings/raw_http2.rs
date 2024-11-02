@@ -50,8 +50,18 @@ impl RawHttp2 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Http2Frame {
+    pub flags: Option<Value>,
+    pub r: Option<Value>,
+    pub stream_id: Option<Value>,
+    pub payload: Option<Http2FramePayload>,
+    #[serde(flatten)]
+    pub unrecognized: toml::Table,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Http2Frame {
+pub enum Http2FramePayload {
     Data(Http2DataFrame),
     Headers(Http2HeadersFrame),
     Priority(Http2PriorityFrame),
@@ -67,18 +77,30 @@ pub enum Http2Frame {
 
 impl Http2Frame {
     fn validate(&self) -> crate::Result<()> {
-        match self {
-            Self::Data(frame) => frame.validate(),
-            Self::Headers(frame) => frame.validate(),
-            Self::Priority(frame) => frame.validate(),
-            Self::RstStream(frame) => frame.validate(),
-            Self::Settings(frame) => frame.validate(),
-            Self::PushPromise(frame) => frame.validate(),
-            Self::Ping(frame) => frame.validate(),
-            Self::Goaway(frame) => frame.validate(),
-            Self::WindowUpdate(frame) => frame.validate(),
-            Self::Continuation(frame) => frame.validate(),
-            Self::Generic(frame) => frame.validate(),
+        if !self.unrecognized.is_empty() {
+            bail!(
+                "unrecognized field{} {}",
+                if self.unrecognized.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                self.unrecognized.keys().join(", "),
+            );
+        }
+        match &self.payload {
+            Some(Http2FramePayload::Data(frame)) => frame.validate(),
+            Some(Http2FramePayload::Headers(frame)) => frame.validate(),
+            Some(Http2FramePayload::Priority(frame)) => frame.validate(),
+            Some(Http2FramePayload::RstStream(frame)) => frame.validate(),
+            Some(Http2FramePayload::Settings(frame)) => frame.validate(),
+            Some(Http2FramePayload::PushPromise(frame)) => frame.validate(),
+            Some(Http2FramePayload::Ping(frame)) => frame.validate(),
+            Some(Http2FramePayload::Goaway(frame)) => frame.validate(),
+            Some(Http2FramePayload::WindowUpdate(frame)) => frame.validate(),
+            Some(Http2FramePayload::Continuation(frame)) => frame.validate(),
+            Some(Http2FramePayload::Generic(frame)) => frame.validate(),
+            None => Ok(()),
         }
     }
 }
@@ -86,8 +108,6 @@ impl Http2Frame {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Http2DataFrame {
     pub end_stream: Option<Value>,
-    pub r: Option<Value>,
-    pub stream_id: Option<Value>,
     pub data: Option<Value>,
     pub padding: Option<Value>,
 
@@ -116,8 +136,6 @@ impl Http2DataFrame {
 pub struct Http2HeadersFrame {
     pub end_stream: Option<Value>,
     pub end_headers: Option<Value>,
-    pub r: Option<Value>,
-    pub stream_id: Option<Value>,
     pub priority: Option<Http2HeadersFramePriority>,
     pub header_block_fragment: Option<Value>,
     pub padding: Option<Value>,
@@ -175,8 +193,6 @@ impl Http2HeadersFramePriority {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Http2PriorityFrame {
-    pub r: Option<Value>,
-    pub stream_id: Option<Value>,
     pub e: Option<Value>,
     pub stream_dependency: Option<Value>,
     pub weight: Option<Value>,
@@ -204,8 +220,6 @@ impl Http2PriorityFrame {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Http2RstStreamFrame {
-    pub r: Option<Value>,
-    pub stream_id: Option<Value>,
     pub error_code: Option<Value>,
 
     #[serde(flatten)]
@@ -232,8 +246,6 @@ impl Http2RstStreamFrame {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Http2SettingsFrame {
     pub ack: Option<Value>,
-    pub r: Option<Value>,
-    pub stream_id: Option<Value>,
     pub parameters: Option<Vec<Http2SettingsParameter>>,
 
     #[serde(flatten)]
@@ -289,8 +301,6 @@ impl Http2SettingsParameter {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Http2PushPromiseFrame {
     pub end_headers: Option<Value>,
-    pub r: Option<Value>,
-    pub stream_id: Option<Value>,
     pub promised_r: Option<Value>,
     pub promised_stream_id: Option<Value>,
     pub header_block_fragment: Option<Value>,
@@ -320,8 +330,6 @@ impl Http2PushPromiseFrame {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Http2PingFrame {
     pub ack: Option<Value>,
-    pub r: Option<Value>,
-    pub stream_id: Option<Value>,
     pub data: Option<Value>,
 
     #[serde(flatten)]
@@ -347,8 +355,6 @@ impl Http2PingFrame {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Http2GoawayFrame {
-    pub r: Option<Value>,
-    pub stream_id: Option<Value>,
     pub last_r: Option<Value>,
     pub last_stream_id: Option<Value>,
     pub error_code: Option<Value>,
@@ -377,8 +383,6 @@ impl Http2GoawayFrame {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Http2WindowUpdateFrame {
-    pub r: Option<Value>,
-    pub stream_id: Option<Value>,
     pub window_r: Option<Value>,
     pub window_size_increment: Option<Value>,
 
@@ -406,8 +410,6 @@ impl Http2WindowUpdateFrame {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Http2ContinuationFrame {
     pub end_headers: Option<Value>,
-    pub r: Option<Value>,
-    pub stream_id: Option<Value>,
     pub header_block_fragment: Option<Value>,
 
     #[serde(flatten)]
@@ -434,9 +436,6 @@ impl Http2ContinuationFrame {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Http2GenericFrame {
     pub r#type: Option<Value>,
-    pub flags: Option<Value>,
-    pub r: Option<Value>,
-    pub stream_id: Option<Value>,
     pub payload: Option<Value>,
 
     #[serde(flatten)]

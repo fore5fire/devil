@@ -202,6 +202,7 @@ impl HttpRunner {
     }
 
     pub fn finish(self) -> (HttpOutput, Option<Runner>) {
+        let protocol = "HTTP/1.1";
         match self.inner {
             HttpProtocol::Http1(r) => {
                 let (out, inner) = r.finish();
@@ -214,23 +215,30 @@ impl HttpRunner {
                             headers: out.plan.headers,
                             body: out.plan.body,
                         },
-                        request: out.request.map(|req| HttpRequestOutput {
-                            url: req.url,
-                            method: req.method,
-                            headers: req.headers,
-                            body: req.body,
-                            duration: req.duration,
-                            body_duration: req.body_duration,
-                            time_to_first_byte: req.time_to_first_byte,
+                        request: out.request.map(|req| {
+                            let req = Arc::unwrap_or_clone(req);
+                            Arc::new(HttpRequestOutput {
+                                url: req.url,
+                                protocol: MaybeUtf8(protocol.into()),
+                                method: req.method,
+                                headers: req.headers,
+                                body: req.body,
+                                duration: req.duration,
+                                body_duration: req.body_duration,
+                                time_to_first_byte: req.time_to_first_byte,
+                            })
                         }),
-                        response: out.response.map(|resp| HttpResponse {
-                            protocol: resp.protocol,
-                            status_code: resp.status_code,
-                            headers: resp.headers,
-                            body: resp.body,
-                            duration: resp.duration,
-                            header_duration: resp.header_duration,
-                            time_to_first_byte: resp.time_to_first_byte,
+                        response: out.response.map(|resp| {
+                            let resp = Arc::unwrap_or_clone(resp);
+                            Arc::new(HttpResponse {
+                                protocol: resp.protocol,
+                                status_code: resp.status_code,
+                                headers: resp.headers,
+                                body: resp.body,
+                                duration: resp.duration,
+                                header_duration: resp.header_duration,
+                                time_to_first_byte: resp.time_to_first_byte,
+                            })
                         }),
                         errors: out
                             .errors
@@ -240,7 +248,7 @@ impl HttpRunner {
                                 message: e.message,
                             })
                             .collect(),
-                        protocol: Some("HTTP/1.1".to_string()),
+                        protocol: Some(protocol.to_string()),
                         duration: out.duration,
                     },
                     inner,

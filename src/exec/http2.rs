@@ -264,7 +264,7 @@ impl Http2Runner {
             response: tokio::task::spawn(response).fuse(),
         };
 
-        self.out.request = Some(request_out);
+        self.out.request = Some(Arc::new(request_out));
 
         Ok(())
     }
@@ -381,7 +381,7 @@ impl Http2Runner {
             ReadState::Invalid => panic!("invalid state for http2 finish"),
             _ => return (self.out, self.transport),
         };
-        self.out.response = Some(crate::Http2Response {
+        self.out.response = Some(Arc::new(crate::Http2Response {
             status_code: Some(resp_head.status.into()),
             content_length: None,
             headers: Some(
@@ -431,7 +431,7 @@ impl Http2Runner {
                 .transpose()
                 .expect("duration should fit into std duration")
                 .map(Duration),
-        });
+        }));
 
         self.read_state = ReadState::Completed;
         self.write_state = match mem::replace(&mut self.write_state, WriteState::Invalid) {

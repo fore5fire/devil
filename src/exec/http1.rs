@@ -325,7 +325,7 @@ impl Http1Runner {
             Ok(result) => {
                 let header_complete_time = Instant::now();
                 // Set the header fields in our response.
-                self.out.response = Some(Http1Response {
+                self.out.response = Some(Arc::new(Http1Response {
                     protocol: resp
                         .version
                         .map(|v| MaybeUtf8(format!("HTTP/1.{}", v).into())),
@@ -368,11 +368,11 @@ impl Http1Runner {
                         .transpose()
                         .expect("durations should fit in std")
                         .map(Duration),
-                });
+                }));
                 match result {
                     httparse::Status::Partial => Poll::Pending,
                     httparse::Status::Complete(body_start) => {
-                        self.out.response.as_mut().unwrap().header_duration = Some(
+                        Arc::make_mut(self.out.response.as_mut().unwrap()).header_duration = Some(
                             TimeDelta::from_std(header_complete_time - self.start_time.unwrap())
                                 .unwrap()
                                 .into(),
@@ -492,7 +492,7 @@ impl Http1Runner {
 
         self.state = State::SendingBody { transport };
 
-        self.out.request = Some(Http1RequestOutput {
+        self.out.request = Some(Arc::new(Http1RequestOutput {
             url: self.out.plan.url.clone(),
             headers: self.send_headers.clone(),
             method: self.out.plan.method.clone(),
@@ -501,7 +501,7 @@ impl Http1Runner {
             duration: TimeDelta::zero().into(),
             body_duration: None,
             time_to_first_byte: None,
-        });
+        }));
         Ok(())
     }
 
@@ -590,7 +590,7 @@ impl Http1Runner {
 
         let start_time = self.start_time.unwrap();
 
-        if let Some(req) = &mut self.out.request {
+        if let Some(req) = self.out.request.as_mut().map(Arc::make_mut) {
             req.duration = TimeDelta::from_std(self.req_end_time.unwrap_or(end_time) - start_time)
                 .unwrap()
                 .into();
@@ -612,7 +612,7 @@ impl Http1Runner {
         }
 
         // The response should be set if the header has been read.
-        if let Some(resp) = &mut self.out.response {
+        if let Some(resp) = self.out.response.as_mut().map(Arc::make_mut) {
             resp.body = Some(MaybeUtf8(self.resp_body_buf.split().freeze().into()));
             resp.duration = TimeDelta::from_std(
                 self.resp_start_time

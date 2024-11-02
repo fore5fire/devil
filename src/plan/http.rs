@@ -4,6 +4,7 @@ use crate::{bindings, Error, MaybeUtf8, Result, State};
 use anyhow::{anyhow, bail};
 use serde::Serialize;
 use std::str::FromStr;
+use std::sync::Arc;
 use url::Url;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -92,7 +93,7 @@ impl Evaluate<crate::HttpPlanOutput> for HttpRequest {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::HttpPlanOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
         Ok(crate::HttpPlanOutput {

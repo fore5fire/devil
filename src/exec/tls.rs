@@ -21,7 +21,7 @@ use super::timing::Timing;
 use super::Context;
 use crate::exec::pause::{Pause, PauseSpec};
 use crate::{
-    MaybeUtf8, TlsError, TlsOutput, TlsPlanOutput, TlsRequestOutput, TlsResponse, TlsVersion,
+    MaybeUtf8, TlsError, TlsOutput, TlsPlanOutput, TlsReceivedOutput, TlsSentOutput, TlsVersion,
 };
 
 #[derive(Debug)]
@@ -71,15 +71,15 @@ impl TlsRunner {
                 domain: Box::new(plan.host.clone()),
             },
             out: TlsOutput {
-                request: Some(TlsRequestOutput {
+                sent: Some(Arc::new(TlsSentOutput {
                     host: plan.host.clone(),
                     port: plan.port,
                     body: MaybeUtf8::default(),
                     time_to_first_byte: None,
                     time_to_last_byte: None,
-                }),
+                })),
                 plan,
-                response: None,
+                received: None,
                 errors: Vec::new(),
                 version: None,
                 duration: Duration::zero().into(),
@@ -280,7 +280,7 @@ impl TlsRunner {
         //self.out.pause.send_body.start = send_pause.next().unwrap_or_default();
         //self.out.pause.send_body.end = send_pause.next().unwrap_or_default();
 
-        if let Some(req) = &mut self.out.request {
+        if let Some(req) = self.out.sent.as_mut().map(Arc::make_mut) {
             req.time_to_first_byte = stream
                 .first_write()
                 .map(|first_write| Duration::from_std(first_write - start).unwrap().into());
@@ -290,7 +290,7 @@ impl TlsRunner {
             req.body = MaybeUtf8(Bytes::from(writes).into());
         }
         if !reads.is_empty() {
-            self.out.response = Some(TlsResponse {
+            self.out.received = Some(Arc::new(TlsReceivedOutput {
                 body: MaybeUtf8(Bytes::from(reads).into()),
                 time_to_first_byte: stream
                     .first_read()
@@ -298,7 +298,7 @@ impl TlsRunner {
                 time_to_last_byte: stream
                     .last_read()
                     .map(|last_read| Duration::from_std(last_read - start).unwrap().into()),
-            });
+            }));
         }
         self.out.duration = Duration::from_std(end_time - start).unwrap().into();
 

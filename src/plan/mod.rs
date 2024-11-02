@@ -47,7 +47,8 @@ use url::Url;
 
 #[derive(Debug)]
 pub struct Plan {
-    pub steps: IndexMap<String, Step>,
+    pub name: Arc<String>,
+    pub steps: IndexMap<Arc<String>, Step>,
     pub locals: IndexMap<String, PlanValue<PlanData, Infallible>>,
 }
 
@@ -69,14 +70,14 @@ impl<'a> Plan {
             .defaults
             .extend(implicit_defaults.devil.defaults.clone());
         // Generate final steps.
-        let steps: IndexMap<String, Step> = plan
+        let steps: IndexMap<Arc<String>, Step> = plan
             .steps
             .into_iter()
             .map(|(name, value)| {
                 // Apply the user and implicit defaults.
                 let value = value.apply_defaults(plan.devil.defaults.clone());
                 // Apply planner requirements and convert to planner structure.
-                Ok((name, Step::from_bindings(value)?))
+                Ok((Arc::new(name), Step::from_bindings(value)?))
             })
             .collect::<Result<_>>()?;
         let locals = plan
@@ -120,7 +121,7 @@ impl Evaluate<LocationValueOutput> for LocationValue {
 fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<LocationValueOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O> {
     Ok(LocationValueOutput {
         id: self.id.evaluate(state)?,
@@ -149,7 +150,7 @@ impl Evaluate<LocationOutput> for Location {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<LocationOutput>
         where
             S: State<'a, O, I>,
-            O: Into<&'a str>,
+            O: Into<&'a Arc<String>>,
             I: IntoIterator<Item = O> {
                 match self {
                     Self::Before(loc) => Ok(LocationOutput::Before(loc.evaluate(state)?)),
@@ -180,7 +181,7 @@ impl Evaluate<crate::PauseValueOutput> for PauseValue {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::PauseValueOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
         let out = crate::PauseValueOutput {
@@ -226,7 +227,7 @@ impl Evaluate<crate::SignalValueOutput> for SignalValue {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::SignalValueOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
         let out = crate::SignalValueOutput {
@@ -786,55 +787,55 @@ pub struct Step {
 impl Step {
     pub fn from_bindings(binding: bindings::Step) -> Result<Step> {
         let protocols = match binding.protocols {
-            bindings::StepProtocols::GraphQl { graphql, http } => StepProtocols::GraphQlHttp {
+            bindings::StepProtocols::Graphql { graphql, http } => StepProtocols::GraphqlHttp {
                 graphql: graphql.try_into()?,
                 http: http.unwrap_or_default().try_into()?,
             },
-            bindings::StepProtocols::GraphQlH1c {
+            bindings::StepProtocols::GraphqlH1c {
                 graphql,
                 h1c,
                 tcp,
                 raw_tcp,
-            } => StepProtocols::GraphQlH1c {
+            } => StepProtocols::GraphqlH1c {
                 graphql: graphql.try_into()?,
                 h1c: h1c.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
                 raw_tcp: raw_tcp.unwrap_or_default().try_into()?,
             },
-            bindings::StepProtocols::GraphQlH1 {
+            bindings::StepProtocols::GraphqlH1 {
                 graphql,
                 h1,
                 tls,
                 tcp,
                 raw_tcp,
-            } => StepProtocols::GraphQlH1 {
+            } => StepProtocols::GraphqlH1 {
                 graphql: graphql.try_into()?,
                 h1: h1.unwrap_or_default().try_into()?,
                 tls: tls.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
                 raw_tcp: raw_tcp.unwrap_or_default().try_into()?,
             },
-            bindings::StepProtocols::GraphQlH2c {
+            bindings::StepProtocols::GraphqlH2c {
                 graphql,
                 h2c,
                 raw_h2c,
                 tcp,
                 raw_tcp,
-            } => StepProtocols::GraphQlH2c {
+            } => StepProtocols::GraphqlH2c {
                 graphql: graphql.try_into()?,
                 h2c: h2c.unwrap_or_default().try_into()?,
                 raw_h2c: raw_h2c.unwrap_or_default().try_into()?,
                 tcp: tcp.unwrap_or_default().try_into()?,
                 raw_tcp: raw_tcp.unwrap_or_default().try_into()?,
             },
-            bindings::StepProtocols::GraphQlH2 {
+            bindings::StepProtocols::GraphqlH2 {
                 graphql,
                 h2,
                 raw_h2,
                 tls,
                 tcp,
                 raw_tcp,
-            } => StepProtocols::GraphQlH2 {
+            } => StepProtocols::GraphqlH2 {
                 graphql: graphql.try_into()?,
                 h2: h2.unwrap_or_default().try_into()?,
                 raw_h2: raw_h2.unwrap_or_default().try_into()?,
@@ -842,12 +843,12 @@ impl Step {
                 tcp: tcp.unwrap_or_default().try_into()?,
                 raw_tcp: raw_tcp.unwrap_or_default().try_into()?,
             },
-            bindings::StepProtocols::GraphQlH3 {
+            bindings::StepProtocols::GraphqlH3 {
                 graphql,
                 h3,
                 quic,
                 udp,
-            } => StepProtocols::GraphQlH3 {
+            } => StepProtocols::GraphqlH3 {
                 graphql: graphql.try_into()?,
                 h3: h3.unwrap_or_default().try_into()?,
                 quic: quic.unwrap_or_default().try_into()?,
@@ -1028,7 +1029,7 @@ impl Evaluate<SyncOutput> for Synchronizer{
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<SyncOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
         Ok(match self {
@@ -1118,7 +1119,7 @@ impl Evaluate<crate::RunPlanOutput> for Run {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::RunPlanOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
         let out = crate::RunPlanOutput {
@@ -1154,40 +1155,40 @@ impl Evaluate<crate::RunPlanOutput> for Run {
 
 #[derive(Debug, Clone)]
 pub enum StepProtocols {
-    GraphQlHttp {
-        graphql: GraphQlRequest,
+    GraphqlHttp {
+        graphql: GraphqlRequest,
         http: HttpRequest,
     },
-    GraphQlH1c {
-        graphql: GraphQlRequest,
+    GraphqlH1c {
+        graphql: GraphqlRequest,
         h1c: Http1Request,
         tcp: TcpRequest,
         raw_tcp: RawTcpRequest,
     },
-    GraphQlH1 {
-        graphql: GraphQlRequest,
+    GraphqlH1 {
+        graphql: GraphqlRequest,
         h1: Http1Request,
         tls: TlsRequest,
         tcp: TcpRequest,
         raw_tcp: RawTcpRequest,
     },
-    GraphQlH2c {
-        graphql: GraphQlRequest,
+    GraphqlH2c {
+        graphql: GraphqlRequest,
         h2c: Http2Request,
         raw_h2c: RawHttp2Request,
         tcp: TcpRequest,
         raw_tcp: RawTcpRequest,
     },
-    GraphQlH2 {
-        graphql: GraphQlRequest,
+    GraphqlH2 {
+        graphql: GraphqlRequest,
         h2: Http2Request,
         raw_h2: RawHttp2Request,
         tls: TlsRequest,
         tcp: TcpRequest,
         raw_tcp: RawTcpRequest,
     },
-    GraphQlH3 {
-        graphql: GraphQlRequest,
+    GraphqlH3 {
+        graphql: GraphqlRequest,
         h3: Http3Request,
         quic: QuicRequest,
         udp: UdpRequest,
@@ -1263,23 +1264,23 @@ pub enum StepProtocols {
 impl StepProtocols {
     pub fn into_stack(self) -> Vec<Protocol> {
         match self {
-            Self::GraphQlHttp { graphql, http } => {
-                vec![Protocol::GraphQl(graphql), Protocol::Http(http)]
+            Self::GraphqlHttp { graphql, http } => {
+                vec![Protocol::Graphql(graphql), Protocol::Http(http)]
             }
-            Self::GraphQlH1c {
+            Self::GraphqlH1c {
                 graphql,
                 h1c,
                 tcp,
                 raw_tcp,
             } => {
                 vec![
-                    Protocol::GraphQl(graphql),
+                    Protocol::Graphql(graphql),
                     Protocol::H1c(h1c),
                     Protocol::Tcp(tcp),
                     Protocol::RawTcp(raw_tcp),
                 ]
             }
-            Self::GraphQlH1 {
+            Self::GraphqlH1 {
                 graphql,
                 h1,
                 tls,
@@ -1287,14 +1288,14 @@ impl StepProtocols {
                 raw_tcp,
             } => {
                 vec![
-                    Protocol::GraphQl(graphql),
+                    Protocol::Graphql(graphql),
                     Protocol::H1(h1),
                     Protocol::Tls(tls),
                     Protocol::Tcp(tcp),
                     Protocol::RawTcp(raw_tcp),
                 ]
             }
-            Self::GraphQlH2c {
+            Self::GraphqlH2c {
                 graphql,
                 h2c,
                 raw_h2c,
@@ -1302,14 +1303,14 @@ impl StepProtocols {
                 raw_tcp,
             } => {
                 vec![
-                    Protocol::GraphQl(graphql),
+                    Protocol::Graphql(graphql),
                     Protocol::H2c(h2c),
                     Protocol::RawH2c(raw_h2c),
                     Protocol::Tcp(tcp),
                     Protocol::RawTcp(raw_tcp),
                 ]
             }
-            Self::GraphQlH2 {
+            Self::GraphqlH2 {
                 graphql,
                 h2,
                 raw_h2,
@@ -1318,7 +1319,7 @@ impl StepProtocols {
                 raw_tcp,
             } => {
                 vec![
-                    Protocol::GraphQl(graphql),
+                    Protocol::Graphql(graphql),
                     Protocol::H2(h2),
                     Protocol::RawH2(raw_h2),
                     Protocol::Tls(tls),
@@ -1326,14 +1327,14 @@ impl StepProtocols {
                     Protocol::RawTcp(raw_tcp),
                 ]
             }
-            Self::GraphQlH3 {
+            Self::GraphqlH3 {
                 graphql,
                 h3,
                 quic,
                 udp,
             } => {
                 vec![
-                    Protocol::GraphQl(graphql),
+                    Protocol::Graphql(graphql),
                     Protocol::H3(h3),
                     Protocol::Quic(quic),
                     Protocol::Udp(udp),
@@ -1453,7 +1454,7 @@ impl StepProtocols {
 
 #[derive(Debug, Clone)]
 pub enum Protocol {
-    GraphQl(GraphQlRequest),
+    Graphql(GraphqlRequest),
     Http(HttpRequest),
     H1c(Http1Request),
     H1(Http1Request),
@@ -1472,7 +1473,7 @@ pub enum Protocol {
 impl Protocol {
     pub fn field(&self) -> ProtocolField {
         match self {
-            Self::GraphQl(_) => ProtocolField::GraphQl,
+            Self::Graphql(_) => ProtocolField::Graphql,
             Self::Http(_) => ProtocolField::Http,
             Self::H1c(_) => ProtocolField::H1c,
             Self::H1(_) => ProtocolField::H1,
@@ -1494,11 +1495,11 @@ impl Evaluate<StepPlanOutput> for Protocol {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<StepPlanOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
         Ok(match self {
-            Self::GraphQl(proto) => StepPlanOutput::GraphQl(proto.evaluate(state)?),
+            Self::Graphql(proto) => StepPlanOutput::Graphql(proto.evaluate(state)?),
             Self::Http(proto) => StepPlanOutput::Http(proto.evaluate(state)?),
             Self::H1c(proto) => StepPlanOutput::H1c(proto.evaluate(state)?),
             Self::H1(proto) => StepPlanOutput::H1(proto.evaluate(state)?),
@@ -1521,7 +1522,7 @@ impl Evaluate<StepPlanOutput> for Protocol {
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ProtocolField {
-    GraphQl,
+    Graphql,
     Http,
     H1c,
     H1,
@@ -1556,7 +1557,7 @@ impl FromStr for ProtocolField {
             "h2" => Ok(Self::H2),
             "raw_h2" => Ok(Self::RawH2),
             "h3" => Ok(Self::H3),
-            "graphql" => Ok(Self::GraphQl),
+            "graphql" => Ok(Self::Graphql),
             _ => bail!("invalid tls version string {}", s),
         }
     }
@@ -2108,7 +2109,7 @@ where
 {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<T>
     where
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         S: State<'a, O, I>,
         I: IntoIterator<Item = O>,
     {
@@ -2267,7 +2268,7 @@ impl Evaluate<Vec<(IterableKey, PlanData)>> for IterablePlanValue {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Vec<(IterableKey, PlanData)>>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
         match self {
@@ -2357,7 +2358,7 @@ where
 {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Vec<(K, V)>>
     where
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         S: State<'a, O, I>,
         I: IntoIterator<Item = O>,
     {
@@ -2401,7 +2402,7 @@ where
 
 fn add_state_to_context<'a, S, O, I>(state: &S, ctx: &mut cel_interpreter::Context)
 where
-    O: Into<&'a str>,
+    O: Into<&'a Arc<String>>,
     S: State<'a, O, I>,
     I: IntoIterator<Item = O>,
 {
@@ -2427,7 +2428,7 @@ where
             })
             .collect::<HashMap<_, _>>(),
     ).unwrap();
-    ctx.add_variable("current", state.current()).unwrap();
+    ctx.add_variable("current", state.current());
     ctx.add_variable("for", state.run_for()).unwrap();
     ctx.add_variable("while", state.run_while()).unwrap();
     ctx.add_variable("count", state.run_count()).unwrap();
@@ -2446,15 +2447,16 @@ pub trait Evaluate<T> {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<T>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>;
 }
 
 impl<T: Evaluate<T2>, T2> Evaluate<Vec<T2>> for Vec<T> {
+    #[inline]
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Vec<T2>>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
         self.iter().map(|x| x.evaluate(state)).collect()
@@ -2462,10 +2464,11 @@ impl<T: Evaluate<T2>, T2> Evaluate<Vec<T2>> for Vec<T> {
 }
 
 impl<T: Evaluate<T2>, T2> Evaluate<Option<T2>> for Option<T> {
+    #[inline]
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Option<T2>>
         where
             S: State<'a, O, I>,
-            O: Into<&'a str>,
+            O: Into<&'a Arc<String>>,
             I: IntoIterator<Item = O> {
         self.as_ref().map(|x| x.evaluate(state)).transpose()
     }
@@ -2473,7 +2476,7 @@ impl<T: Evaluate<T2>, T2> Evaluate<Option<T2>> for Option<T> {
 
 fn exec_cel<'a, S, O, I>(cel: &str, vars: &[(String, String)], state: &S) -> Result<PlanData>
 where
-    O: Into<&'a str>,
+    O: Into<&'a Arc<String>>,
     S: State<'a, O, I>,
     I: IntoIterator<Item = O>,
 {

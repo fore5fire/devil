@@ -17,7 +17,7 @@ impl Evaluate<crate::Http2PlanOutput> for Http2Request {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::Http2PlanOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
         Ok(crate::Http2PlanOutput {

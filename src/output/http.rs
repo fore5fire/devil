@@ -1,16 +1,20 @@
+use std::sync::Arc;
+
 use cel_interpreter::Duration;
 use serde::Serialize;
 use url::Url;
 
 use crate::AddContentLength;
 
-use super::MaybeUtf8;
+use super::{MaybeUtf8, PduName, ProtocolName};
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename = "snake_case")]
 pub struct HttpOutput {
+    pub name: ProtocolName,
     pub plan: HttpPlanOutput,
-    pub request: Option<HttpRequestOutput>,
-    pub response: Option<HttpResponse>,
+    pub request: Option<Arc<HttpRequestOutput>>,
+    pub response: Option<Arc<HttpResponse>>,
     pub errors: Vec<HttpError>,
     pub protocol: Option<String>,
     pub duration: Duration,
@@ -26,8 +30,11 @@ pub struct HttpPlanOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename = "snake_case")]
 pub struct HttpRequestOutput {
+    pub name: PduName,
     pub url: Url,
+    pub protocol: MaybeUtf8,
     pub method: Option<MaybeUtf8>,
     pub headers: Vec<(MaybeUtf8, MaybeUtf8)>,
     pub body: MaybeUtf8,
@@ -37,7 +44,9 @@ pub struct HttpRequestOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename = "snake_case")]
 pub struct HttpResponse {
+    pub name: PduName,
     pub protocol: Option<MaybeUtf8>,
     pub status_code: Option<u16>,
     pub headers: Option<Vec<(MaybeUtf8, MaybeUtf8)>>,

@@ -1,5 +1,6 @@
 use std::mem;
 use std::net::SocketAddr;
+use std::ops::Deref;
 use std::{io, net::IpAddr, pin::Pin, sync::Arc, time::Instant};
 
 use anyhow::{anyhow, bail};
@@ -28,7 +29,7 @@ use tokio::{
 use tracing::{debug, info};
 
 use crate::{
-    MaybeUtf8, RawTcpError, RawTcpOutput, RawTcpPlanOutput, TcpSegmentOptionOutput,
+    Direction, RawTcpError, RawTcpOutput, RawTcpPlanOutput, TcpSegmentOptionOutput,
     TcpSegmentOutput,
 };
 
@@ -51,19 +52,19 @@ enum State {
     Pending,
     Open(OpenState),
     Passive {
-        writes: JoinHandle<(Vec<TcpSegmentOutput>, Option<io::Error>)>,
+        writes: JoinHandle<(Vec<Arc<TcpSegmentOutput>>, Option<io::Error>)>,
         writes_done: oneshot::Sender<usize>,
-        reads: JoinHandle<(Vec<TcpSegmentOutput>, Option<io::Error>)>,
+        reads: JoinHandle<(Vec<Arc<TcpSegmentOutput>>, Option<io::Error>)>,
         reads_done: oneshot::Sender<usize>,
         remote_addr: SocketAddr,
         local_addr: SocketAddr,
     },
     Completed {
-        reads: JoinHandle<(Vec<TcpSegmentOutput>, Option<io::Error>)>,
+        reads: JoinHandle<(Vec<Arc<TcpSegmentOutput>>, Option<io::Error>)>,
     },
     CompletedPassive {
-        reads: JoinHandle<(Vec<TcpSegmentOutput>, Option<io::Error>)>,
-        writes: JoinHandle<(Vec<TcpSegmentOutput>, Option<io::Error>)>,
+        reads: JoinHandle<(Vec<Arc<TcpSegmentOutput>>, Option<io::Error>)>,
+        writes: JoinHandle<(Vec<Arc<TcpSegmentOutput>>, Option<io::Error>)>,
     },
     CompletedEmpty,
     Invalid,
@@ -73,7 +74,7 @@ enum State {
 struct OpenState {
     send_write: mpsc::UnboundedSender<Option<TcpPacket<'static>>>,
     write_done: JoinHandle<Result<(), Box<dyn std::error::Error + Send + Sync>>>,
-    reads: Option<JoinHandle<(Vec<TcpSegmentOutput>, Option<io::Error>)>>,
+    reads: Option<JoinHandle<(Vec<Arc<TcpSegmentOutput>>, Option<io::Error>)>>,
     reads_done: oneshot::Sender<usize>,
     remote_addr: SocketAddr,
     local_addr: SocketAddr,
@@ -214,7 +215,7 @@ impl RawTcpRunner {
             let start = Instant::now();
             self.start_time = Some(start);
             let (reads_done, recv_reads_done) = oneshot::channel();
-            let reads = reader(read, remote_addr, start, recv_reads_done);
+            let reads = reader(read, remote_addr, start, recv_reads_done, Direction::Recv);
             (start, reads, reads_done)
         };
 
@@ -237,7 +238,7 @@ impl RawTcpRunner {
             })?;
             let (writes_done, recv_writes_done) = oneshot::channel();
             self.state = State::Passive {
-                writes: reader(read, local_addr, start, recv_writes_done),
+                writes: reader(read, local_addr, start, recv_writes_done, Direction::Send),
                 writes_done,
                 reads,
                 reads_done,
@@ -245,7 +246,13 @@ impl RawTcpRunner {
                 local_addr,
             }
         } else {
-            let send_segments = self.out.plan.segments.clone();
+            let send_segments = self
+                .out
+                .plan
+                .segments
+                .iter()
+                .map(|seg| seg.deref().clone())
+                .collect();
             let (_, reads, reads_done) = start();
             // TODO: Use AsyncFd instead of one thread per request.
             //let write_fd = AsyncFd::new(write.socket.fd)?;
@@ -484,7 +491,9 @@ impl RawTcpRunner {
                 });
                 io::Error::from(io::ErrorKind::ConnectionReset)
             })?;
-        self.out.sent.push(segment);
+        // Now that the segment is sent it will never be mutated again, and we're already incuring
+        // the cost of moving it into the Vec's backing memory, so wrap it in an Arc here.
+        self.out.sent.push(Arc::new(segment));
         Ok(())
     }
 }
@@ -494,7 +503,8 @@ pub fn reader(
     target_addr: SocketAddr,
     start: Instant,
     mut done: oneshot::Receiver<usize>,
-) -> JoinHandle<(Vec<TcpSegmentOutput>, Option<io::Error>)> {
+    direction: Direction,
+) -> JoinHandle<(Vec<Arc<TcpSegmentOutput>>, Option<io::Error>)> {
     // TODO: Use AsyncFd instead of one thread per request.
     //let read_fd = AsyncFd::new(read.socket.fd)?;
     //let readable = read_fd.readable().await?;
@@ -524,7 +534,7 @@ pub fn reader(
                         info!("got fin packet from {src_ip}:{}", packet.get_source());
                         seen_fin = true;
                     }
-                    out.push(packet_to_output(packet, start));
+                    out.push(packet_to_output(packet, start, direction));
                 }
                 // Network failure, bail.
                 Err(e) => return (out, Some(e)),
@@ -549,7 +559,7 @@ pub fn reader(
                         info!("got fin packet from {src_ip}:{}", packet.get_source());
                         seen_fin = true;
                     }
-                    out.push(packet_to_output(packet, start));
+                    out.push(packet_to_output(packet, start, direction));
                 }
                 // Network failure, bail.
                 Err(e) => return (out, Some(e)),
@@ -559,10 +569,16 @@ pub fn reader(
     })
 }
 
-fn packet_to_output(packet: TcpPacket, start: Instant) -> TcpSegmentOutput {
-    TcpSegmentOutput {
-        received: TimeDelta::from_std(start.elapsed()).ok().map(Duration),
-        sent: None,
+fn packet_to_output(
+    packet: TcpPacket,
+    start: Instant,
+    direction: Direction,
+) -> Arc<TcpSegmentOutput> {
+    let dur = TimeDelta::from_std(start.elapsed()).ok().map(Duration);
+    Arc::new(TcpSegmentOutput {
+        received: if direction.is_recv() { dur } else { None },
+        sent: if direction.is_send() { dur } else { None },
+        direction,
         sequence_number: packet.get_sequence(),
         flags: packet.get_flags(),
         source: packet.get_source(),
@@ -603,5 +619,5 @@ fn packet_to_output(packet: TcpPacket, start: Instant) -> TcpSegmentOutput {
             })
             .collect(),
         payload: Bytes::copy_from_slice(packet.payload()).into(),
-    }
+    })
 }

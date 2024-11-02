@@ -1,13 +1,17 @@
+use std::sync::Arc;
+
 use cel_interpreter::Duration;
 use serde::Serialize;
 
-use super::MaybeUtf8;
+use super::{MaybeUtf8, PduName, ProtocolName};
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename = "snake_case")]
 pub struct TcpOutput {
+    pub name: ProtocolName,
     pub plan: TcpPlanOutput,
-    pub sent: Option<TcpSentOutput>,
-    pub received: Option<TcpReceivedOutput>,
+    pub sent: Option<Arc<TcpSentOutput>>,
+    pub received: Option<Arc<TcpReceivedOutput>>,
     //pub close: TcpCloseOutput,
     pub errors: Vec<TcpError>,
     pub duration: Duration,
@@ -38,7 +42,9 @@ pub struct TcpPlanOutput {
 //}
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename = "snake_case")]
 pub struct TcpSentOutput {
+    pub name: PduName,
     pub dest_ip: String,
     pub dest_port: u16,
     pub body: MaybeUtf8,
@@ -47,7 +53,9 @@ pub struct TcpSentOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename = "snake_case")]
 pub struct TcpReceivedOutput {
+    pub name: PduName,
     pub body: MaybeUtf8,
     pub time_to_first_byte: Option<Duration>,
     pub time_to_last_byte: Option<Duration>,

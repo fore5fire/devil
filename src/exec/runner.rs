@@ -9,12 +9,12 @@ use super::{http2::Http2Runner, raw_tcp::RawTcpRunner};
 use crate::{JobOutput, ProtocolField, StepPlanOutput};
 
 use super::{
-    graphql::GraphQlRunner, http::HttpRunner, http1::Http1Runner, tcp::TcpRunner, tls::TlsRunner,
+    graphql::GraphqlRunner, http::HttpRunner, http1::Http1Runner, tcp::TcpRunner, tls::TlsRunner,
 };
 
 #[derive(Debug)]
 pub(super) enum Runner {
-    GraphQl(Box<GraphQlRunner>),
+    Graphql(Box<GraphqlRunner>),
     Http(Box<HttpRunner>),
     H1c(Box<Http1Runner>),
     H1(Box<Http1Runner>),
@@ -57,8 +57,8 @@ impl Runner {
             StepPlanOutput::RawH2(output) => {
                 Self::RawH2(Box::new(RawHttp2Runner::new(ctx, output, executor)))
             }
-            StepPlanOutput::GraphQl(output) => {
-                Self::GraphQl(Box::new(GraphQlRunner::new(ctx, output)?))
+            StepPlanOutput::Graphql(output) => {
+                Self::Graphql(Box::new(GraphqlRunner::new(ctx, output)?))
             }
         })
     }
@@ -77,7 +77,7 @@ impl Runner {
             Self::RawH2(_) => ProtocolField::RawH2,
             Self::MuxRawH2(_) => ProtocolField::RawH2,
             Self::Http(_) => ProtocolField::Http,
-            Self::GraphQl(_) => ProtocolField::GraphQl,
+            Self::Graphql(_) => ProtocolField::Graphql,
         }
     }
 
@@ -91,7 +91,7 @@ impl Runner {
             Self::RawH2c(r) | Self::RawH2(r) => r.size_hint(hint),
             Self::MuxRawH2(_) | Self::MuxRawH2c(_) => None,
             Self::Http(r) => r.size_hint(hint),
-            Self::GraphQl(r) => r.size_hint(hint),
+            Self::Graphql(r) => r.size_hint(hint),
         }
     }
 
@@ -103,7 +103,7 @@ impl Runner {
             Self::H1c(r) | Self::H1(r) => r.executor_size_hint(),
             Self::H2c(r) | Self::H2(r) => r.executor_size_hint(),
             Self::Http(r) => r.executor_size_hint(),
-            Self::GraphQl(r) => r.executor_size_hint(),
+            Self::Graphql(r) => r.executor_size_hint(),
             Self::RawH2c(_) => None,
             Self::RawH2(_) => None,
             Self::MuxRawH2c(_) => unimplemented!(),
@@ -152,7 +152,7 @@ impl Runner {
                 assert!(transport.is_none());
                 Box::pin(r.start())
             }
-            Self::GraphQl(r) => Box::pin(
+            Self::Graphql(r) => Box::pin(
                 r.start(transport.expect("no plan should have graphql as a base protocol")),
             ),
         }
@@ -170,64 +170,64 @@ impl Runner {
                 panic!("cannot multiplex and execute at the same layer")
             }
             Self::Http(r) => r.execute().await,
-            Self::GraphQl(r) => r.execute().await,
+            Self::Graphql(r) => r.execute().await,
         }
     }
 
     pub async fn finish(self: Self, output: &mut JobOutput) -> Option<Runner> {
         match self {
             Self::RawTcp(r) => {
-                output.raw_tcp = Some(r.finish().await);
+                output.raw_tcp = Some(Arc::new(r.finish().await));
                 None
             }
             Self::Tcp(r) => {
                 let (out, inner) = r.finish().await;
-                output.tcp = Some(out);
+                output.tcp = Some(Arc::new(out));
                 Some(Runner::RawTcp(Box::new(inner)))
             }
             Self::Tls(r) => {
                 let (out, inner) = r.finish();
-                output.tls = Some(out);
+                output.tls = Some(Arc::new(out));
                 Some(inner)
             }
             Self::Http(r) => {
                 let (out, inner) = r.finish();
-                output.http = Some(out);
+                output.http = Some(Arc::new(out));
                 inner
             }
             Self::H1c(r) => {
                 let (out, inner) = r.finish();
-                output.h1c = Some(out);
+                output.h1c = Some(Arc::new(out));
                 inner
             }
             Self::H1(r) => {
                 let (out, inner) = r.finish();
-                output.h1 = Some(out);
+                output.h1 = Some(Arc::new(out));
                 inner
             }
             Self::H2c(r) => {
                 let (out, inner) = r.finish().await;
-                output.h2c = Some(out);
+                output.h2c = Some(Arc::new(out));
                 inner.map(|inner| Runner::RawH2c(Box::new(inner)))
             }
             Self::RawH2c(r) => {
                 let (out, inner) = r.finish().await;
-                output.raw_h2c = Some(out);
+                output.raw_h2c = Some(Arc::new(out));
                 inner
             }
             Self::H2(r) => {
                 let (out, inner) = r.finish().await;
-                output.h2 = Some(out);
+                output.h2 = Some(Arc::new(out));
                 inner.map(|inner| Runner::RawH2(Box::new(inner)))
             }
             Self::RawH2(r) => {
                 let (out, inner) = r.finish().await;
-                output.raw_h2 = Some(out);
+                output.raw_h2 = Some(Arc::new(out));
                 inner
             }
-            Self::GraphQl(r) => {
+            Self::Graphql(r) => {
                 let (out, inner) = r.finish();
-                output.graphql = Some(out);
+                output.graphql = Some(Arc::new(out));
                 inner
             }
             Self::MuxRawH2(_) | Self::MuxRawH2c(_) => panic!(),
@@ -256,7 +256,7 @@ impl AsyncRead for Runner {
                 panic!("raw_h2 doesn't support stream reading")
             }
             Self::Http(ref mut r) => pin!(r).poll_read(cx, buf),
-            Self::GraphQl(_) => panic!("graphql cannot be used as a transport"),
+            Self::Graphql(_) => panic!("graphql cannot be used as a transport"),
         }
     }
 }
@@ -282,7 +282,7 @@ impl AsyncWrite for Runner {
                 panic!("raw_h2 doesn't support stream writing")
             }
             Self::Http(ref mut r) => pin!(r).poll_write(cx, buf),
-            Self::GraphQl(_) => panic!("graphql cannot be used as a transport"),
+            Self::Graphql(_) => panic!("graphql cannot be used as a transport"),
         }
     }
     fn poll_flush(
@@ -304,7 +304,7 @@ impl AsyncWrite for Runner {
                 panic!("h2 doesn't support stream writing")
             }
             Self::Http(ref mut r) => pin!(r).poll_flush(cx),
-            Self::GraphQl(_) => panic!("graphql cannot be used as a transport"),
+            Self::Graphql(_) => panic!("graphql cannot be used as a transport"),
         }
     }
     fn poll_shutdown(
@@ -326,7 +326,7 @@ impl AsyncWrite for Runner {
                 panic!("raw_h2 doesn't support stream writing")
             }
             Self::Http(ref mut r) => pin!(r).poll_shutdown(cx),
-            Self::GraphQl(_) => panic!("graphql cannot be used as a transport"),
+            Self::Graphql(_) => panic!("graphql cannot be used as a transport"),
         }
     }
 }

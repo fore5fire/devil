@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::{AddContentLength, Evaluate, PlanValue, PlanValueTable};
 use crate::{bindings, Error, MaybeUtf8, Result, State};
 use anyhow::anyhow;
@@ -17,7 +19,7 @@ impl Evaluate<crate::Http1PlanOutput> for Http1Request {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::Http1PlanOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
         Ok(crate::Http1PlanOutput {

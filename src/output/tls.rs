@@ -1,15 +1,19 @@
+use std::sync::Arc;
+
 use cel_interpreter::Duration;
 use serde::Serialize;
 
 use crate::TlsVersion;
 
-use super::MaybeUtf8;
+use super::{MaybeUtf8, PduName, ProtocolName};
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename = "snake_case")]
 pub struct TlsOutput {
+    pub name: ProtocolName,
     pub plan: TlsPlanOutput,
-    pub request: Option<TlsRequestOutput>,
-    pub response: Option<TlsResponse>,
+    pub sent: Option<Arc<TlsSentOutput>>,
+    pub received: Option<Arc<TlsReceivedOutput>>,
     pub errors: Vec<TlsError>,
     pub version: Option<TlsVersion>,
     pub duration: Duration,
@@ -25,7 +29,9 @@ pub struct TlsPlanOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct TlsRequestOutput {
+#[serde(tag = "kind", rename = "snake_case")]
+pub struct TlsSentOutput {
+    pub name: PduName,
     pub host: String,
     pub port: u16,
     pub body: MaybeUtf8,
@@ -34,7 +40,9 @@ pub struct TlsRequestOutput {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct TlsResponse {
+#[serde(tag = "kind", rename = "snake_case")]
+pub struct TlsReceivedOutput {
+    pub name: PduName,
     pub body: MaybeUtf8,
     pub time_to_first_byte: Option<Duration>,
     pub time_to_last_byte: Option<Duration>,

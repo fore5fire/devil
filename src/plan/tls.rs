@@ -107,7 +107,7 @@ impl Evaluate<crate::TlsPlanOutput> for TlsRequest {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<crate::TlsPlanOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
         Ok(crate::TlsPlanOutput {

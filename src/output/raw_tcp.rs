@@ -1,17 +1,21 @@
+use std::sync::Arc;
+
 use cel_interpreter::Duration;
 use serde::Serialize;
 
-use super::BytesOutput;
+use super::{BytesOutput, Direction, PduName, ProtocolName};
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename = "snake_case")]
 pub struct RawTcpOutput {
+    pub name: ProtocolName,
     pub plan: RawTcpPlanOutput,
     pub dest_ip: String,
     pub dest_port: u16,
-    pub sent: Vec<TcpSegmentOutput>,
+    pub sent: Vec<Arc<TcpSegmentOutput>>,
     pub src_host: String,
     pub src_port: u16,
-    pub received: Vec<TcpSegmentOutput>,
+    pub received: Vec<Arc<TcpSegmentOutput>>,
     pub errors: Vec<RawTcpError>,
     pub duration: Duration,
     pub handshake_duration: Option<Duration>,
@@ -25,11 +29,13 @@ pub struct RawTcpPlanOutput {
     pub src_port: Option<u16>,
     pub isn: u32,
     pub window: u16,
-    pub segments: Vec<TcpSegmentOutput>,
+    pub segments: Vec<Arc<TcpSegmentOutput>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename = "snake_case")]
 pub struct TcpSegmentOutput {
+    pub name: PduName,
     pub source: u16,
     pub destination: u16,
     pub sequence_number: u32,
@@ -44,6 +50,7 @@ pub struct TcpSegmentOutput {
     pub payload: BytesOutput,
     pub received: Option<Duration>,
     pub sent: Option<Duration>,
+    pub direction: Direction,
 }
 
 #[derive(Debug, Clone, Serialize)]

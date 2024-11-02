@@ -1,15 +1,17 @@
+use std::sync::Arc;
+
 use anyhow::anyhow;
 use bytes::Bytes;
 use itertools::Itertools;
 
 use crate::{
-    bindings, BytesOutput, Error, Evaluate, Http2ContinuationFrameOutput, Http2DataFrameOutput,
-    Http2FrameFlag, Http2FrameOutput, Http2FrameType, Http2GenericFrameOutput,
-    Http2GoawayFrameOutput, Http2HeadersFrameOutput, Http2HeadersFramePriorityOutput,
-    Http2PingFrameOutput, Http2PriorityFrameOutput, Http2PushPromiseFrameOutput,
-    Http2RstStreamFrameOutput, Http2SettingsFrameOutput, Http2SettingsParameterId,
-    Http2SettingsParameterOutput, Http2WindowUpdateFrameOutput, MaybeUtf8, PlanValue, Result,
-    State,
+    bindings, BytesOutput, Direction, Error, Evaluate, Http2ContinuationFrameOutput,
+    Http2DataFrameOutput, Http2FrameOutput, Http2FramePayloadOutput, Http2FrameType,
+    Http2GenericFrameOutput, Http2GoawayFrameOutput, Http2HeadersFrameOutput,
+    Http2HeadersFramePriorityOutput, Http2PingFrameOutput, Http2PriorityFrameOutput,
+    Http2PushPromiseFrameOutput, Http2RstStreamFrameOutput, Http2SettingsFrameOutput,
+    Http2SettingsParameterId, Http2SettingsParameterOutput, Http2WindowUpdateFrameOutput,
+    MaybeUtf8, PlanValue, Result, State,
 };
 
 #[derive(Debug, Clone)]
@@ -24,14 +26,18 @@ impl Evaluate<crate::RawHttp2PlanOutput> for RawHttp2Request {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::RawHttp2PlanOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
         Ok(crate::RawHttp2PlanOutput {
             host: self.host.evaluate(state)?,
             port: self.port.evaluate(state)?,
             preamble: self.preamble.evaluate(state)?,
-            frames: self.frames.evaluate(state)?,
+            frames: self
+                .frames
+                .iter()
+                .map(|f| f.evaluate(state).map(Arc::new))
+                .try_collect()?,
         })
     }
 }
@@ -60,7 +66,7 @@ impl TryFrom<bindings::RawHttp2> for RawHttp2Request {
 }
 
 #[derive(Debug, Clone)]
-pub enum Http2Frame {
+pub enum Http2FramePayload {
     Data(Http2DataFrame),
     Headers(Http2HeadersFrame),
     Priority(Http2PriorityFrame),
@@ -74,53 +80,119 @@ pub enum Http2Frame {
     Generic(Http2GenericFrame),
 }
 
+impl TryFrom<bindings::Http2FramePayload> for Http2FramePayload {
+    type Error = Error;
+    fn try_from(binding: bindings::Http2FramePayload) -> Result<Self> {
+        match binding {
+            bindings::Http2FramePayload::Data(frame) => Ok(Self::Data(frame.try_into()?)),
+            bindings::Http2FramePayload::Headers(frame) => Ok(Self::Headers(frame.try_into()?)),
+            bindings::Http2FramePayload::Priority(frame) => Ok(Self::Priority(frame.try_into()?)),
+            bindings::Http2FramePayload::RstStream(frame) => Ok(Self::RstStream(frame.try_into()?)),
+            bindings::Http2FramePayload::Settings(frame) => Ok(Self::Settings(frame.try_into()?)),
+            bindings::Http2FramePayload::PushPromise(frame) => {
+                Ok(Self::PushPromise(frame.try_into()?))
+            }
+            bindings::Http2FramePayload::Ping(frame) => Ok(Self::Ping(frame.try_into()?)),
+            bindings::Http2FramePayload::Goaway(frame) => Ok(Self::Goaway(frame.try_into()?)),
+            bindings::Http2FramePayload::WindowUpdate(frame) => {
+                Ok(Self::WindowUpdate(frame.try_into()?))
+            }
+            bindings::Http2FramePayload::Continuation(frame) => {
+                Ok(Self::Continuation(frame.try_into()?))
+            }
+            bindings::Http2FramePayload::Generic(frame) => Ok(Self::Generic(frame.try_into()?)),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Http2Frame {
+    flags: PlanValue<u8>,
+    r: PlanValue<bool>,
+    stream_id: PlanValue<u32>,
+    payload: Http2FramePayload,
+}
+
 impl Evaluate<Http2FrameOutput> for Http2Frame {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Http2FrameOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
-        match self {
-            Self::Data(frame) => Ok(Http2FrameOutput::Data(frame.evaluate(state)?)),
-            Self::Headers(frame) => Ok(Http2FrameOutput::Headers(frame.evaluate(state)?)),
-            Self::Priority(frame) => Ok(Http2FrameOutput::Priority(frame.evaluate(state)?)),
-            Self::RstStream(frame) => Ok(Http2FrameOutput::RstStream(frame.evaluate(state)?)),
-            Self::Settings(frame) => Ok(Http2FrameOutput::Settings(frame.evaluate(state)?)),
-            Self::PushPromise(frame) => Ok(Http2FrameOutput::PushPromise(frame.evaluate(state)?)),
-            Self::Ping(frame) => Ok(Http2FrameOutput::Ping(frame.evaluate(state)?)),
-            Self::Goaway(frame) => Ok(Http2FrameOutput::Goaway(frame.evaluate(state)?)),
-            Self::WindowUpdate(frame) => Ok(Http2FrameOutput::WindowUpdate(frame.evaluate(state)?)),
-            Self::Continuation(frame) => Ok(Http2FrameOutput::Continuation(frame.evaluate(state)?)),
-            Self::Generic(frame) => Ok(Http2FrameOutput::Generic(frame.evaluate(state)?)),
-        }
+        let payload = match self.payload {
+            Http2FramePayload::Data(frame) => Http2FramePayloadOutput::Data(frame.evaluate(state)?),
+            Http2FramePayload::Headers(frame) => {
+                Http2FramePayloadOutput::Headers(frame.evaluate(state)?)
+            }
+            Http2FramePayload::Priority(frame) => {
+                Http2FramePayloadOutput::Priority(frame.evaluate(state)?)
+            }
+            Http2FramePayload::RstStream(frame) => {
+                Http2FramePayloadOutput::RstStream(frame.evaluate(state)?)
+            }
+            Http2FramePayload::Settings(frame) => {
+                Http2FramePayloadOutput::Settings(frame.evaluate(state)?)
+            }
+            Http2FramePayload::PushPromise(frame) => {
+                Http2FramePayloadOutput::PushPromise(frame.evaluate(state)?)
+            }
+            Http2FramePayload::Ping(frame) => Http2FramePayloadOutput::Ping(frame.evaluate(state)?),
+            Http2FramePayload::Goaway(frame) => {
+                Http2FramePayloadOutput::Goaway(frame.evaluate(state)?)
+            }
+            Http2FramePayload::WindowUpdate(frame) => {
+                Http2FramePayloadOutput::WindowUpdate(frame.evaluate(state)?)
+            }
+            Http2FramePayload::Continuation(frame) => {
+                Http2FramePayloadOutput::Continuation(frame.evaluate(state)?)
+            }
+            Http2FramePayload::Generic(frame) => {
+                Http2FramePayloadOutput::Generic(frame.evaluate(state)?)
+            }
+        };
+
+        Ok(Http2FrameOutput {
+            flags: self.flags.evaluate(state)?.into() | payload.compute_flags(),
+            r: self.r.evaluate(state)?,
+            stream_id: self.stream_id.evaluate(state)?,
+            payload,
+            // HACK: currently we only specify values to send in plans.
+            direction: Direction::Send,
+        })
     }
 }
 
 impl TryFrom<bindings::Http2Frame> for Http2Frame {
     type Error = Error;
     fn try_from(binding: bindings::Http2Frame) -> Result<Self> {
-        match binding {
-            bindings::Http2Frame::Data(frame) => Ok(Self::Data(frame.try_into()?)),
-            bindings::Http2Frame::Headers(frame) => Ok(Self::Headers(frame.try_into()?)),
-            bindings::Http2Frame::Priority(frame) => Ok(Self::Priority(frame.try_into()?)),
-            bindings::Http2Frame::RstStream(frame) => Ok(Self::RstStream(frame.try_into()?)),
-            bindings::Http2Frame::Settings(frame) => Ok(Self::Settings(frame.try_into()?)),
-            bindings::Http2Frame::PushPromise(frame) => Ok(Self::PushPromise(frame.try_into()?)),
-            bindings::Http2Frame::Ping(frame) => Ok(Self::Ping(frame.try_into()?)),
-            bindings::Http2Frame::Goaway(frame) => Ok(Self::Goaway(frame.try_into()?)),
-            bindings::Http2Frame::WindowUpdate(frame) => Ok(Self::WindowUpdate(frame.try_into()?)),
-            bindings::Http2Frame::Continuation(frame) => Ok(Self::Continuation(frame.try_into()?)),
-            bindings::Http2Frame::Generic(frame) => Ok(Self::Generic(frame.try_into()?)),
-        }
+        Ok(Self {
+            flags: binding
+                .flags
+                .map(PlanValue::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+            r: binding
+                .r
+                .map(PlanValue::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+            stream_id: binding
+                .stream_id
+                .map(PlanValue::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+            payload: binding
+                .payload
+                .map(Http2FramePayload::try_from)
+                .ok_or_else(|| anyhow!("frame type is required for HTTP2 frame"))??,
+        })
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Http2DataFrame {
     end_stream: PlanValue<bool>,
-    r: PlanValue<bool>,
-    stream_id: PlanValue<u32>,
     data: PlanValue<BytesOutput>,
     padding: Option<PlanValue<BytesOutput>>,
 }
@@ -133,16 +205,7 @@ impl TryFrom<bindings::Http2DataFrame> for Http2DataFrame {
                 .end_stream
                 .map(PlanValue::try_from)
                 .transpose()?
-                .unwrap_or(PlanValue::Literal(false)),
-            r: binding
-                .r
-                .map(PlanValue::try_from)
-                .transpose()?
-                .unwrap_or(PlanValue::Literal(false)),
-            stream_id: binding
-                .stream_id
-                .map(PlanValue::try_from)
-                .ok_or_else(|| anyhow!("stream_id is required for HTTP2 DATA frame"))??,
+                .unwrap_or_default(),
             data: binding
                 .data
                 .map(PlanValue::try_from)
@@ -157,22 +220,11 @@ impl Evaluate<Http2DataFrameOutput> for Http2DataFrame {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Http2DataFrameOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
-        let mut flags: Http2FrameFlag = 0.into();
-        let end_stream = self.end_stream.evaluate(state)?;
-        if end_stream {
-            flags |= Http2FrameFlag::EndStream;
-        }
-        if self.padding.is_some() {
-            flags |= Http2FrameFlag::Padded
-        }
         Ok(Http2DataFrameOutput {
-            flags,
-            end_stream,
-            r: self.r.evaluate(state)?,
-            stream_id: self.stream_id.evaluate(state)?,
+            end_stream: self.end_stream.evaluate(state)?,
             data: self.data.evaluate(state)?,
             padding: self.padding.evaluate(state)?,
         })
@@ -183,8 +235,6 @@ impl Evaluate<Http2DataFrameOutput> for Http2DataFrame {
 pub struct Http2HeadersFrame {
     end_stream: PlanValue<bool>,
     end_headers: PlanValue<bool>,
-    r: PlanValue<bool>,
-    stream_id: PlanValue<u32>,
     priority: Option<Http2HeadersFramePriority>,
     header_block_fragment: PlanValue<BytesOutput>,
     padding: Option<PlanValue<BytesOutput>>,
@@ -204,15 +254,6 @@ impl TryFrom<bindings::Http2HeadersFrame> for Http2HeadersFrame {
                 .map(PlanValue::try_from)
                 .transpose()?
                 .unwrap_or(PlanValue::Literal(false)),
-            r: binding
-                .r
-                .map(PlanValue::try_from)
-                .transpose()?
-                .unwrap_or(PlanValue::Literal(false)),
-            stream_id: binding
-                .stream_id
-                .map(PlanValue::try_from)
-                .ok_or_else(|| anyhow!("stream_id is required for HTTP2 HEADERS frame"))??,
             priority: binding
                 .priority
                 .map(Http2HeadersFramePriority::try_from)
@@ -232,30 +273,12 @@ impl Evaluate<Http2HeadersFrameOutput> for Http2HeadersFrame {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Http2HeadersFrameOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
-        let mut flags: Http2FrameFlag = 0.into();
-        let end_stream = self.end_stream.evaluate(state)?;
-        if end_stream {
-            flags |= Http2FrameFlag::EndStream;
-        }
-        let end_headers = self.end_headers.evaluate(state)?;
-        if end_headers {
-            flags |= Http2FrameFlag::EndHeaders;
-        }
-        if self.padding.is_some() {
-            flags |= Http2FrameFlag::Padded
-        }
-        if self.priority.is_some() {
-            flags |= Http2FrameFlag::Priority
-        }
         Ok(Http2HeadersFrameOutput {
-            flags,
-            end_stream,
-            end_headers,
-            r: self.r.evaluate(state)?,
-            stream_id: self.stream_id.evaluate(state)?,
+            end_stream: self.end_stream.evaluate(state)?,
+            end_headers: self.end_headers.evaluate(state)?,
             priority: self.priority.evaluate(state)?,
             header_block_fragment: self.header_block_fragment.evaluate(state)?,
             padding: self.padding.evaluate(state)?,
@@ -299,7 +322,7 @@ impl Evaluate<Http2HeadersFramePriorityOutput> for Http2HeadersFramePriority {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Http2HeadersFramePriorityOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
         Ok(Http2HeadersFramePriorityOutput {
@@ -312,8 +335,6 @@ impl Evaluate<Http2HeadersFramePriorityOutput> for Http2HeadersFramePriority {
 
 #[derive(Debug, Clone)]
 pub struct Http2PriorityFrame {
-    r: PlanValue<bool>,
-    stream_id: PlanValue<u32>,
     e: PlanValue<bool>,
     stream_dependency: PlanValue<u32>,
     weight: PlanValue<u8>,
@@ -323,15 +344,6 @@ impl TryFrom<bindings::Http2PriorityFrame> for Http2PriorityFrame {
     type Error = Error;
     fn try_from(binding: bindings::Http2PriorityFrame) -> std::result::Result<Self, Self::Error> {
         Ok(Self {
-            r: binding
-                .r
-                .map(PlanValue::try_from)
-                .transpose()?
-                .unwrap_or(PlanValue::Literal(false)),
-            stream_id: binding
-                .stream_id
-                .map(PlanValue::try_from)
-                .ok_or_else(|| anyhow!("stream_id is required for HTTP2 PRIORITY frame"))??,
             e: binding
                 .e
                 .map(PlanValue::try_from)
@@ -355,13 +367,10 @@ impl Evaluate<Http2PriorityFrameOutput> for Http2PriorityFrame {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Http2PriorityFrameOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
         Ok(Http2PriorityFrameOutput {
-            flags: 0.into(),
-            r: self.r.evaluate(state)?,
-            stream_id: self.stream_id.evaluate(state)?,
             e: self.e.evaluate(state)?,
             stream_dependency: self.stream_dependency.evaluate(state)?,
             weight: self.weight.evaluate(state)?,
@@ -371,8 +380,6 @@ impl Evaluate<Http2PriorityFrameOutput> for Http2PriorityFrame {
 
 #[derive(Debug, Clone)]
 pub struct Http2RstStreamFrame {
-    r: PlanValue<bool>,
-    stream_id: PlanValue<u32>,
     error_code: PlanValue<u32>,
 }
 
@@ -380,15 +387,6 @@ impl TryFrom<bindings::Http2RstStreamFrame> for Http2RstStreamFrame {
     type Error = Error;
     fn try_from(binding: bindings::Http2RstStreamFrame) -> std::result::Result<Self, Self::Error> {
         Ok(Self {
-            r: binding
-                .r
-                .map(PlanValue::try_from)
-                .transpose()?
-                .unwrap_or(PlanValue::Literal(false)),
-            stream_id: binding
-                .stream_id
-                .map(PlanValue::try_from)
-                .ok_or_else(|| anyhow!("stream_id is required for HTTP2 RST_STREAM frame"))??,
             error_code: binding
                 .error_code
                 .map(PlanValue::try_from)
@@ -402,13 +400,10 @@ impl Evaluate<Http2RstStreamFrameOutput> for Http2RstStreamFrame {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Http2RstStreamFrameOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
         Ok(Http2RstStreamFrameOutput {
-            flags: 0.into(),
-            r: self.r.evaluate(state)?,
-            stream_id: self.stream_id.evaluate(state)?,
             error_code: self.error_code.evaluate(state)?,
         })
     }
@@ -417,8 +412,6 @@ impl Evaluate<Http2RstStreamFrameOutput> for Http2RstStreamFrame {
 #[derive(Debug, Clone)]
 pub struct Http2SettingsFrame {
     ack: PlanValue<bool>,
-    r: PlanValue<bool>,
-    stream_id: PlanValue<u32>,
     parameters: Vec<Http2SettingsParameter>,
 }
 
@@ -431,16 +424,6 @@ impl TryFrom<bindings::Http2SettingsFrame> for Http2SettingsFrame {
                 .map(PlanValue::try_from)
                 .transpose()?
                 .unwrap_or(PlanValue::Literal(false)),
-            r: binding
-                .r
-                .map(PlanValue::try_from)
-                .transpose()?
-                .unwrap_or(PlanValue::Literal(false)),
-            stream_id: binding
-                .stream_id
-                .map(PlanValue::try_from)
-                .transpose()?
-                .unwrap_or(PlanValue::Literal(0)),
             parameters: binding
                 .parameters
                 .ok_or_else(|| anyhow!("parameters is required for HTTP2 SETTINGS frame"))?
@@ -455,19 +438,11 @@ impl Evaluate<Http2SettingsFrameOutput> for Http2SettingsFrame {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Http2SettingsFrameOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
-        let mut flags: Http2FrameFlag = 0.into();
-        let ack = self.ack.evaluate(state)?;
-        if ack {
-            flags |= Http2FrameFlag::Ack;
-        }
         Ok(Http2SettingsFrameOutput {
-            flags,
-            ack,
-            r: self.r.evaluate(state)?,
-            stream_id: self.stream_id.evaluate(state)?,
+            ack: self.ack.evaluate(state)?,
             parameters: self.parameters.evaluate(state)?,
         })
     }
@@ -501,7 +476,7 @@ impl Evaluate<Http2SettingsParameterOutput> for Http2SettingsParameter {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Http2SettingsParameterOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
         Ok(Http2SettingsParameterOutput {
@@ -515,8 +490,6 @@ impl Evaluate<Http2SettingsParameterOutput> for Http2SettingsParameter {
 #[derive(Debug, Clone)]
 pub struct Http2PushPromiseFrame {
     end_headers: PlanValue<bool>,
-    r: PlanValue<bool>,
-    stream_id: PlanValue<u32>,
     promised_r: PlanValue<bool>,
     promised_stream_id: PlanValue<u32>,
     header_block_fragment: PlanValue<BytesOutput>,
@@ -534,14 +507,6 @@ impl TryFrom<bindings::Http2PushPromiseFrame> for Http2PushPromiseFrame {
                 .map(PlanValue::try_from)
                 .transpose()?
                 .unwrap_or(PlanValue::Literal(false)),
-            r: binding
-                .r
-                .map(PlanValue::try_from)
-                .transpose()?
-                .unwrap_or(PlanValue::Literal(false)),
-            stream_id: binding.stream_id.map(PlanValue::try_from).ok_or_else(|| {
-                anyhow!("stream_id is required is required for HTTP2 PUSH_PROMISE frame")
-            })??,
             promised_r: binding
                 .promised_r
                 .map(PlanValue::try_from)
@@ -568,21 +533,11 @@ impl Evaluate<Http2PushPromiseFrameOutput> for Http2PushPromiseFrame {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Http2PushPromiseFrameOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
-        let mut flags: Http2FrameFlag = 0.into();
-        let end_headers = self.end_headers.evaluate(state)?;
-        if end_headers {
-            flags |= Http2FrameFlag::EndHeaders;
-        }
-        if self.padding.is_some() {
-            flags |= Http2FrameFlag::Padded
-        }
         Ok(Http2PushPromiseFrameOutput {
-            flags,
-            r: self.r.evaluate(state)?,
-            stream_id: self.stream_id.evaluate(state)?,
+            end_headers: self.end_headers.evaluate(state)?,
             promised_r: self.promised_r.evaluate(state)?,
             promised_stream_id: self.promised_stream_id.evaluate(state)?,
             header_block_fragment: self.header_block_fragment.evaluate(state)?,
@@ -594,8 +549,6 @@ impl Evaluate<Http2PushPromiseFrameOutput> for Http2PushPromiseFrame {
 #[derive(Debug, Clone)]
 pub struct Http2PingFrame {
     ack: PlanValue<bool>,
-    r: PlanValue<bool>,
-    stream_id: PlanValue<u32>,
     data: PlanValue<BytesOutput>,
 }
 
@@ -608,16 +561,6 @@ impl TryFrom<bindings::Http2PingFrame> for Http2PingFrame {
                 .map(PlanValue::try_from)
                 .transpose()?
                 .unwrap_or(PlanValue::Literal(false)),
-            r: binding
-                .r
-                .map(PlanValue::try_from)
-                .transpose()?
-                .unwrap_or(PlanValue::Literal(false)),
-            stream_id: binding
-                .stream_id
-                .map(PlanValue::try_from)
-                .transpose()?
-                .unwrap_or(PlanValue::Literal(0)),
             data: binding
                 .data
                 .map(PlanValue::try_from)
@@ -631,19 +574,11 @@ impl Evaluate<Http2PingFrameOutput> for Http2PingFrame {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Http2PingFrameOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
-        let mut flags: Http2FrameFlag = 0.into();
-        let ack = self.ack.evaluate(state)?;
-        if ack {
-            flags |= Http2FrameFlag::Ack;
-        }
         Ok(Http2PingFrameOutput {
-            flags,
-            ack,
-            r: self.r.evaluate(state)?,
-            stream_id: self.stream_id.evaluate(state)?,
+            ack: self.ack.evaluate(state)?,
             data: self.data.evaluate(state)?,
         })
     }
@@ -651,8 +586,6 @@ impl Evaluate<Http2PingFrameOutput> for Http2PingFrame {
 
 #[derive(Debug, Clone)]
 pub struct Http2GoawayFrame {
-    r: PlanValue<bool>,
-    stream_id: PlanValue<u32>,
     last_r: PlanValue<bool>,
     last_stream_id: PlanValue<u32>,
     error_code: PlanValue<u32>,
@@ -663,14 +596,6 @@ impl TryFrom<bindings::Http2GoawayFrame> for Http2GoawayFrame {
     type Error = Error;
     fn try_from(binding: bindings::Http2GoawayFrame) -> std::result::Result<Self, Self::Error> {
         Ok(Self {
-            r: binding
-                .r
-                .map(PlanValue::try_from)
-                .transpose()?
-                .unwrap_or(PlanValue::Literal(false)),
-            stream_id: binding.stream_id.map(PlanValue::try_from).ok_or_else(|| {
-                anyhow!("stream_id is required is required for HTTP2 GOAWAY frame")
-            })??,
             last_r: binding
                 .last_r
                 .map(PlanValue::try_from)
@@ -701,13 +626,10 @@ impl Evaluate<Http2GoawayFrameOutput> for Http2GoawayFrame {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Http2GoawayFrameOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
         Ok(Http2GoawayFrameOutput {
-            flags: 0.into(),
-            r: self.r.evaluate(state)?,
-            stream_id: self.stream_id.evaluate(state)?,
             last_r: self.last_r.evaluate(state)?,
             last_stream_id: self.last_stream_id.evaluate(state)?,
             error_code: self.error_code.evaluate(state)?,
@@ -718,8 +640,6 @@ impl Evaluate<Http2GoawayFrameOutput> for Http2GoawayFrame {
 
 #[derive(Debug, Clone)]
 pub struct Http2WindowUpdateFrame {
-    r: PlanValue<bool>,
-    stream_id: PlanValue<u32>,
     window_r: PlanValue<bool>,
     window_size_increment: PlanValue<u32>,
 }
@@ -730,14 +650,6 @@ impl TryFrom<bindings::Http2WindowUpdateFrame> for Http2WindowUpdateFrame {
         binding: bindings::Http2WindowUpdateFrame,
     ) -> std::result::Result<Self, Self::Error> {
         Ok(Self {
-            r: binding
-                .r
-                .map(PlanValue::try_from)
-                .transpose()?
-                .unwrap_or(PlanValue::Literal(false)),
-            stream_id: binding.stream_id.map(PlanValue::try_from).ok_or_else(|| {
-                anyhow!("stream_id is required is required for HTTP2 WINDOW_UPDATE frame")
-            })??,
             window_r: binding
                 .window_r
                 .map(PlanValue::try_from)
@@ -759,13 +671,10 @@ impl Evaluate<Http2WindowUpdateFrameOutput> for Http2WindowUpdateFrame {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Http2WindowUpdateFrameOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
         Ok(Http2WindowUpdateFrameOutput {
-            flags: 0.into(),
-            r: self.r.evaluate(state)?,
-            stream_id: self.stream_id.evaluate(state)?,
             window_r: self.window_r.evaluate(state)?,
             window_size_increment: self.window_size_increment.evaluate(state)?,
         })
@@ -775,8 +684,6 @@ impl Evaluate<Http2WindowUpdateFrameOutput> for Http2WindowUpdateFrame {
 #[derive(Debug, Clone)]
 pub struct Http2ContinuationFrame {
     end_headers: PlanValue<bool>,
-    r: PlanValue<bool>,
-    stream_id: PlanValue<u32>,
     header_block_fragment: PlanValue<BytesOutput>,
 }
 
@@ -791,14 +698,6 @@ impl TryFrom<bindings::Http2ContinuationFrame> for Http2ContinuationFrame {
                 .map(PlanValue::try_from)
                 .transpose()?
                 .unwrap_or(PlanValue::Literal(false)),
-            r: binding
-                .r
-                .map(PlanValue::try_from)
-                .transpose()?
-                .unwrap_or(PlanValue::Literal(false)),
-            stream_id: binding.stream_id.map(PlanValue::try_from).ok_or_else(|| {
-                anyhow!("stream_id is required is required for HTTP2 CONTINUATION frame")
-            })??,
             header_block_fragment: binding
                 .header_block_fragment
                 .map(PlanValue::try_from)
@@ -815,19 +714,11 @@ impl Evaluate<Http2ContinuationFrameOutput> for Http2ContinuationFrame {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Http2ContinuationFrameOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
-        let mut flags: Http2FrameFlag = 0.into();
-        let end_headers = self.end_headers.evaluate(state)?;
-        if end_headers {
-            flags |= Http2FrameFlag::EndHeaders;
-        }
         Ok(Http2ContinuationFrameOutput {
-            flags: 0.into(),
-            end_headers,
-            r: self.r.evaluate(state)?,
-            stream_id: self.stream_id.evaluate(state)?,
+            end_headers: self.end_headers.evaluate(state)?,
             header_block_fragment: self.header_block_fragment.evaluate(state)?,
         })
     }
@@ -836,9 +727,6 @@ impl Evaluate<Http2ContinuationFrameOutput> for Http2ContinuationFrame {
 #[derive(Debug, Clone)]
 pub struct Http2GenericFrame {
     r#type: PlanValue<u8>,
-    flags: PlanValue<u8>,
-    r: PlanValue<bool>,
-    stream_id: PlanValue<u32>,
     payload: PlanValue<BytesOutput>,
 }
 
@@ -850,20 +738,6 @@ impl TryFrom<bindings::Http2GenericFrame> for Http2GenericFrame {
                 .r#type
                 .map(PlanValue::try_from)
                 .ok_or_else(|| anyhow!("type is required is required for HTTP2 frame"))??,
-            flags: binding
-                .flags
-                .map(PlanValue::try_from)
-                .transpose()?
-                .unwrap_or(PlanValue::Literal(0)),
-            r: binding
-                .r
-                .map(PlanValue::try_from)
-                .transpose()?
-                .unwrap_or(PlanValue::Literal(false)),
-            stream_id: binding
-                .stream_id
-                .map(PlanValue::try_from)
-                .ok_or_else(|| anyhow!("stream_id is required is required for HTTP2 frame"))??,
             payload: binding
                 .payload
                 .map(PlanValue::try_from)
@@ -876,15 +750,12 @@ impl Evaluate<Http2GenericFrameOutput> for Http2GenericFrame {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<Http2GenericFrameOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
         Ok(Http2GenericFrameOutput {
             // TODO: allow using type and flag names for in bindings for generic frames.
             r#type: Http2FrameType::new(self.r#type.evaluate(state)?),
-            flags: self.flags.evaluate(state)?.into(),
-            r: self.r.evaluate(state)?,
-            stream_id: self.stream_id.evaluate(state)?,
             payload: self.payload.evaluate(state)?,
         })
     }

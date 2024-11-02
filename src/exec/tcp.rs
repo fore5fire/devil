@@ -78,13 +78,13 @@ impl TcpRunner {
         let (local_addr, remote_addr) = raw.resolved_addrs();
         let remote_addr_string = remote_addr.ip().to_string();
 
-        self.out.sent = Some(TcpSentOutput {
+        self.out.sent = Some(Arc::new(TcpSentOutput {
             dest_ip: remote_addr_string,
             dest_port: remote_addr.port(),
             body: MaybeUtf8::default(),
             time_to_first_byte: None,
             time_to_last_byte: None,
-        });
+        }));
 
         let start = Instant::now();
         let socket = TcpSocket::new_v4().inspect_err(|e| {
@@ -273,7 +273,7 @@ impl TcpRunner {
         //    pattern_match: pattern_match.map(|range| reads[range].to_owned()),
         //};
 
-        if let Some(sent) = &mut self.out.sent {
+        if let Some(sent) = self.out.sent.as_mut().map(Arc::make_mut) {
             if let Some(first_write) = writer.first_write() {
                 sent.time_to_first_byte =
                     Some(TimeDelta::from_std(first_write - start).unwrap().into());
@@ -285,7 +285,7 @@ impl TcpRunner {
             sent.body = MaybeUtf8(Bytes::from(writes).into());
         }
         if !reads.is_empty() {
-            self.out.received = Some(TcpReceivedOutput {
+            self.out.received = Some(Arc::new(TcpReceivedOutput {
                 body: MaybeUtf8(Bytes::from(reads).into()),
                 time_to_first_byte: reader
                     .first_read()
@@ -301,7 +301,7 @@ impl TcpRunner {
                     .transpose()
                     .unwrap()
                     .map(Duration),
-            });
+            }));
         }
         self.out.duration = TimeDelta::from_std(end_time - start).unwrap().into();
         self.state = State::Completed;

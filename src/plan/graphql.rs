@@ -4,16 +4,16 @@ use anyhow::anyhow;
 use url::Url;
 
 #[derive(Debug, Clone)]
-pub struct GraphQlRequest {
+pub struct GraphqlRequest {
     pub url: PlanValue<Url>,
     pub query: PlanValue<String>,
     pub params: Option<PlanValueTable<MaybeUtf8, serde_json::Value>>,
     pub operation: PlanValue<Option<serde_json::Value>>,
 }
 
-impl TryFrom<bindings::GraphQl> for GraphQlRequest {
+impl TryFrom<bindings::Graphql> for GraphqlRequest {
     type Error = Error;
-    fn try_from(binding: bindings::GraphQl) -> Result<Self> {
+    fn try_from(binding: bindings::Graphql) -> Result<Self> {
         Ok(Self {
             url: binding
                 .url
@@ -29,14 +29,14 @@ impl TryFrom<bindings::GraphQl> for GraphQlRequest {
     }
 }
 
-impl Evaluate<crate::GraphQlPlanOutput> for GraphQlRequest {
-    fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::GraphQlPlanOutput>
+impl Evaluate<crate::GraphqlPlanOutput> for GraphqlRequest {
+    fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::GraphqlPlanOutput>
     where
         S: State<'a, O, I>,
         O: Into<&'a str>,
         I: IntoIterator<Item = O>,
     {
-        Ok(crate::GraphQlPlanOutput {
+        Ok(crate::GraphqlPlanOutput {
             url: self.url.evaluate(state)?,
             query: self.query.evaluate(state)?,
             operation: self.operation.evaluate(state)?,

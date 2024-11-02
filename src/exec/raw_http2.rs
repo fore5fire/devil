@@ -15,7 +15,8 @@ use tokio::task::JoinHandle;
 use tracing::{debug, debug_span, Instrument};
 
 use crate::{
-    Http2FrameOutput, Http2FrameType, MaybeUtf8, RawHttp2Error, RawHttp2Output, RawHttp2PlanOutput,
+    Direction, Http2FrameOutput, Http2FrameType, MaybeUtf8, RawHttp2Error, RawHttp2Output,
+    RawHttp2PlanOutput,
 };
 
 use super::extract;
@@ -27,7 +28,7 @@ pub struct RawHttp2Runner {
     out: RawHttp2Output,
     state: State,
     start_time: Option<Instant>,
-    send_frames: Vec<Http2FrameOutput>,
+    send_frames: Vec<Arc<Http2FrameOutput>>,
     send_preface: MaybeUtf8,
 }
 
@@ -99,7 +100,7 @@ impl RawHttp2Runner {
                 Ok::<_, io::Error>(())
             },
             async {
-                let mut parser = FrameParser::new(FrameParserState::FrameHeader);
+                let mut parser = FrameParser::new(FrameParserState::FrameHeader, Direction::Recv);
                 let mut buf = [0; 2048];
                 loop {
                     match recv.read(&mut buf).await {
@@ -227,15 +228,17 @@ const WRITE_PREFACE: &str = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 struct FrameParser {
     buf: BytesMut,
     state: FrameParserState,
-    out: Vec<Http2FrameOutput>,
+    out: Vec<Arc<Http2FrameOutput>>,
+    direction: Direction,
 }
 
 impl FrameParser {
-    fn new(state: FrameParserState) -> Self {
+    fn new(state: FrameParserState, direction: Direction) -> Self {
         Self {
             buf: BytesMut::new(),
             state,
             out: Vec::new(),
+            direction,
         }
     }
 
@@ -297,13 +300,14 @@ impl FrameParser {
                         break;
                     }
                     buf = &buf[to_copy..];
-                    let out = Http2FrameOutput::new(
+                    let out = Arc::new(Http2FrameOutput::new(
                         Http2FrameType::new(*kind),
                         (*flags).into(),
                         *r,
                         *stream_id,
                         self.buf.split().freeze(),
-                    );
+                        self.direction,
+                    ));
                     debug!(out = ?out, "push finished frame");
                     self.out.push(out);
                     self.buf.clear();
@@ -326,12 +330,21 @@ impl FrameParserStream {
     fn new(transport: Runner) -> Self {
         Self {
             transport,
-            write: FrameParser::new(FrameParserState::Preface(WRITE_PREFACE.as_bytes())),
-            read: FrameParser::new(FrameParserState::FrameHeader),
+            write: FrameParser::new(
+                FrameParserState::Preface(WRITE_PREFACE.as_bytes()),
+                Direction::Send,
+            ),
+            read: FrameParser::new(FrameParserState::FrameHeader, Direction::Recv),
         }
     }
 
-    fn finish(self) -> (Vec<Http2FrameOutput>, Vec<Http2FrameOutput>, Runner) {
+    fn finish(
+        self,
+    ) -> (
+        Vec<Arc<Http2FrameOutput>>,
+        Vec<Arc<Http2FrameOutput>>,
+        Runner,
+    ) {
         (self.read.out, self.write.out, self.transport)
     }
 }

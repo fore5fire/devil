@@ -68,6 +68,13 @@ impl Default for BytesOutput {
     }
 }
 
+impl Default for &BytesOutput {
+    fn default() -> Self {
+        static DEFAULT: BytesOutput = BytesOutput::Bytes(Bytes::new());
+        &DEFAULT
+    }
+}
+
 impl From<Arc<Vec<u8>>> for BytesOutput {
     fn from(value: Arc<Vec<u8>>) -> Self {
         Self::Vec(value)
@@ -139,6 +146,13 @@ impl BytesOutput {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct MaybeUtf8(pub BytesOutput);
+
+impl Default for &MaybeUtf8 {
+    fn default() -> Self {
+        static DEFAULT: MaybeUtf8 = MaybeUtf8(BytesOutput::Bytes(Bytes::new()));
+        &DEFAULT
+    }
+}
 
 impl Serialize for MaybeUtf8 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>

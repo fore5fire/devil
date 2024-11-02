@@ -1,6 +1,9 @@
+use std::sync::Arc;
+
 use super::{Evaluate, PlanValue};
 use crate::{
-    bindings, BytesOutput, Error, Result, State, TcpSegmentOptionOutput, TcpSegmentOutput,
+    bindings, BytesOutput, Direction, Error, PduName, ProtocolOutputDiscriminants, Result, State,
+    TcpSegmentOptionOutput, TcpSegmentOutput,
 };
 use anyhow::anyhow;
 use itertools::Itertools;
@@ -22,7 +25,7 @@ impl Evaluate<crate::RawTcpPlanOutput> for RawTcpRequest {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::RawTcpPlanOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
         Ok(crate::RawTcpPlanOutput {
@@ -35,7 +38,12 @@ impl Evaluate<crate::RawTcpPlanOutput> for RawTcpRequest {
             segments: self
                 .segments
                 .iter()
-                .map(|segments| segments.evaluate(state))
+                .enumerate()
+                .map(|(i, segments)| {
+                    segments
+                        .evaluate(state, i.try_into().unwrap())
+                        .map(Arc::new)
+                })
                 .try_collect()?,
         })
     }
@@ -92,14 +100,19 @@ pub struct TcpSegment {
     pub payload: PlanValue<BytesOutput>,
 }
 
-impl Evaluate<TcpSegmentOutput> for TcpSegment {
-    fn evaluate<'a, S, O, I>(&self, state: &S) -> Result<TcpSegmentOutput>
+impl TcpSegment {
+    fn evaluate<'a, S, O, I>(&self, state: &S, id: u64) -> Result<TcpSegmentOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
         Ok(TcpSegmentOutput {
+            name: PduName::with_job(
+                state.job_name().unwrap().clone(),
+                ProtocolOutputDiscriminants::RawTcp,
+                id,
+            ),
             source: self.source.evaluate(state)?,
             destination: self.destination.evaluate(state)?,
             sequence_number: self.sequence_number.evaluate(state)?,
@@ -114,6 +127,8 @@ impl Evaluate<TcpSegmentOutput> for TcpSegment {
             payload: self.payload.evaluate(state)?,
             received: None,
             sent: None,
+            // HACK: currently we only specify values to send in plans.
+            direction: Direction::Send,
         })
     }
 }

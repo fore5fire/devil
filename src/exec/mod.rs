@@ -20,47 +20,56 @@ use std::sync::Arc;
 use anyhow::bail;
 use futures::future::try_join_all;
 use itertools::{Either, Itertools, Position};
+use svix_ksuid::{KsuidLike, KsuidMs};
 use tokio_task_pool::Pool;
 use tracing::debug;
 
 use crate::{
-    location, Evaluate, IterableKey, JobOutput, Parallelism, Plan, PlanWrapper, Protocol,
-    ProtocolField, Step, StepOutput, StepPlanOutput, StepPlanOutputs,
+    location, Evaluate, IterableKey, JobName, JobOutput, Parallelism, Plan, PlanWrapper, Protocol,
+    ProtocolField, RunName, Step, StepOutput, StepPlanOutput, StepPlanOutputs,
 };
 
 use self::runner::Runner;
 use sync::*;
 
-pub struct Executor<'a> {
+pub struct Executor {
     locals: HashMap<cel_interpreter::objects::Key, cel_interpreter::Value>,
-    steps: VecDeque<(&'a str, Step)>,
-    outputs: HashMap<&'a str, StepOutput>,
+    steps: VecDeque<(Arc<String>, Step)>,
+    outputs: HashMap<Arc<String>, StepOutput>,
+    run: RunName,
 }
 
-impl<'a> Executor<'a> {
+impl<'a> Executor {
     pub fn new(plan: &'a Plan) -> Result<Self, crate::Error> {
-        // Evaluate the locals in order.
         let mut locals = HashMap::new();
+        let run_name = RunName {
+            plan: plan.name.clone(),
+            run: KsuidMs::new(None, None),
+        };
+        // Evaluate the locals in order.
         for (k, v) in plan.locals.iter() {
             let inputs = State {
                 data: &HashMap::new(),
-                locals: &locals,
+                locals: &mut locals,
                 current: StepPlanOutputs::default(),
                 run_while: None,
                 run_for: None,
                 run_count: None,
+                run_name: &run_name,
+                job_name: None,
             };
             let out = v.evaluate(&inputs)?;
             locals.insert(k.clone().into(), out.0);
         }
         Ok(Executor {
-            locals: locals.into(),
             steps: plan
                 .steps
                 .iter()
-                .map(|(name, step)| (name.as_str(), step.to_owned()))
+                .map(|(name, step)| (name.clone(), step.to_owned()))
                 .collect(),
             outputs: HashMap::with_capacity(plan.steps.len()),
+            run: run_name,
+            locals: locals.into(),
         })
     }
 
@@ -68,13 +77,16 @@ impl<'a> Executor<'a> {
         let Some((name, step)) = self.steps.pop_front() else {
             bail!(Error::Done);
         };
+        let job_name = JobName::with_run(self.run.clone(), name.clone(), IterableKey::Uint(0));
         let mut inputs = State {
             data: &self.outputs,
-            locals: &self.locals,
+            locals: &mut self.locals,
             current: StepPlanOutputs::default(),
             run_while: None,
             run_for: None,
             run_count: None,
+            run_name: &job_name.run_name(),
+            job_name: Some(job_name),
         };
 
         // Check the if condition only before the first iteration.
@@ -159,7 +171,14 @@ impl<'a> Executor<'a> {
                                 key: k.clone(),
                                 value: v.0.try_into()?,
                             });
-                            key = Some(k.clone());
+                            if let Some(job_name) = &mut inputs.job_name {
+                                job_name.job = k.clone();
+                            }
+                            key = Some(k);
+                        } else {
+                            if let Some(job_name) = &mut inputs.job_name {
+                                job_name.job = IterableKey::Uint(i);
+                            }
                         }
 
                         inputs.run_count = Some(crate::RunCountOutput { index: i });
@@ -204,6 +223,7 @@ impl<'a> Executor<'a> {
                 for ((key, runners, shared), shared_transport) in
                     states.into_iter().zip(shared_transports)
                 {
+                    let job_name = inputs.job_name.clone().unwrap();
                     let op = task_pool
                         .spawn(async move {
                             anyhow::Ok((
@@ -213,6 +233,7 @@ impl<'a> Executor<'a> {
                                         .await?
                                         .expect("any stack should have at least one protocol"),
                                     shared,
+                                    job_name,
                                 )
                                 .await?,
                             ))
@@ -228,7 +249,7 @@ impl<'a> Executor<'a> {
                         .into_iter()
                         .collect::<Result<anyhow::Result<Vec<_>>, _>>()??
                         .into_iter()
-                        .map(|(key, (out, _))| (key.to_owned(), out)),
+                        .map(|(key, (out, _))| (key.to_owned(), Arc::new(out))),
                 );
             }
             Parallelism::Serial => {
@@ -270,9 +291,10 @@ impl<'a> Executor<'a> {
                             .await?
                             .expect("any stack should have at least one protocol"),
                         shared,
+                        inputs.job_name.as_ref().unwrap().clone(),
                     )
                     .await?;
-                    output.jobs.insert(key, out);
+                    output.jobs.insert(key, Arc::new(out));
                 }
             }
             Parallelism::Pipelined => {
@@ -296,7 +318,7 @@ impl<'a> Executor<'a> {
             .map(|proto| {
                 let req = proto.evaluate(inputs)?;
                 match req.clone() {
-                    StepPlanOutput::GraphQl(req) => {
+                    StepPlanOutput::Graphql(req) => {
                         inputs.current.graphql = Some(PlanWrapper::new(req))
                     }
                     StepPlanOutput::Http(req) => inputs.current.http = Some(PlanWrapper::new(req)),
@@ -365,9 +387,10 @@ impl<'a> Executor<'a> {
     async fn iteration(
         mut runner: Runner,
         shared: Option<ProtocolField>,
+        name: JobName,
     ) -> anyhow::Result<(JobOutput, Option<Runner>)> {
         runner.execute().await;
-        let mut output = JobOutput::default();
+        let mut output = JobOutput::empty(name);
         let mut current = Some(runner);
         while let Some(r) = current {
             if let Some(shared) = shared {
@@ -385,16 +408,18 @@ impl<'a> Executor<'a> {
 
 #[derive(Debug, Clone)]
 struct State<'a> {
-    data: &'a HashMap<&'a str, StepOutput>,
+    data: &'a HashMap<Arc<String>, StepOutput>,
     current: StepPlanOutputs,
     run_while: Option<crate::RunWhileOutput>,
     run_for: Option<crate::RunForOutput>,
     run_count: Option<crate::RunCountOutput>,
     locals: &'a HashMap<cel_interpreter::objects::Key, cel_interpreter::Value>,
+    run_name: &'a RunName,
+    job_name: Option<JobName>,
 }
 
-impl<'a> crate::State<'a, &'a str, StateIterator<'a>> for State<'a> {
-    fn get(&self, name: &'a str) -> Option<&StepOutput> {
+impl<'a> crate::State<'a, &'a Arc<String>, StateIterator<'a>> for State<'a> {
+    fn get(&self, name: &'a Arc<String>) -> Option<&StepOutput> {
         self.data.get(name)
     }
     fn current(&self) -> &StepPlanOutputs {
@@ -414,17 +439,23 @@ impl<'a> crate::State<'a, &'a str, StateIterator<'a>> for State<'a> {
     }
     fn iter(&self) -> StateIterator<'a> {
         StateIterator {
-            data: self.data.keys().map(ToOwned::to_owned).collect(),
+            data: self.data.keys().collect(),
         }
+    }
+    fn run_name(&self) -> &crate::RunName {
+        &self.run_name
+    }
+    fn job_name(&self) -> Option<&crate::JobName> {
+        self.job_name.as_ref()
     }
 }
 
 struct StateIterator<'a> {
-    data: VecDeque<&'a str>,
+    data: VecDeque<&'a Arc<String>>,
 }
 
 impl<'a> Iterator for StateIterator<'a> {
-    type Item = &'a str;
+    type Item = &'a Arc<String>;
     fn next(&mut self) -> Option<Self::Item> {
         self.data.pop_front()
     }

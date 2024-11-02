@@ -5,12 +5,12 @@ use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::{runner::Runner, Context};
-use crate::{GraphQlError, GraphQlOutput, GraphQlPlanOutput};
+use crate::{GraphqlError, GraphqlOutput, GraphqlPlanOutput};
 
 #[derive(Debug)]
-pub(super) struct GraphQlRunner {
+pub(super) struct GraphqlRunner {
     ctx: Arc<Context>,
-    out: GraphQlOutput,
+    out: GraphqlOutput,
     http_body: Vec<u8>,
     resp: Vec<u8>,
     state: State,
@@ -30,9 +30,9 @@ enum State {
     },
 }
 
-impl GraphQlRunner {
-    pub(super) fn new(ctx: Arc<Context>, plan: GraphQlPlanOutput) -> crate::Result<Self> {
-        let body = GraphQlRequestPayload {
+impl GraphqlRunner {
+    pub(super) fn new(ctx: Arc<Context>, plan: GraphqlPlanOutput) -> crate::Result<Self> {
+        let body = GraphqlRequestPayload {
             query: serde_json::Value::String(plan.query.clone()),
             operation_name: plan.operation.clone(),
             variables: plan.params.clone().map(|params| {
@@ -46,7 +46,7 @@ impl GraphQlRunner {
         };
 
         Ok(Self {
-            out: GraphQlOutput {
+            out: GraphqlOutput {
                 request: None,
                 response: None,
                 errors: Vec::new(),
@@ -63,7 +63,7 @@ impl GraphQlRunner {
     }
 }
 
-impl<'a> GraphQlRunner {
+impl<'a> GraphqlRunner {
     pub fn size_hint(&mut self, hint: Option<usize>) -> Option<usize> {
         hint
     }
@@ -85,14 +85,14 @@ impl<'a> GraphQlRunner {
             panic!("execute called in unsupported state: {:?}", self.state)
         };
         if let Err(e) = transport.write_all(&self.http_body).await {
-            self.out.errors.push(GraphQlError {
+            self.out.errors.push(GraphqlError {
                 kind: e.kind().to_string(),
                 message: e.to_string(),
             });
             return;
         }
         if let Err(e) = transport.flush().await {
-            self.out.errors.push(GraphQlError {
+            self.out.errors.push(GraphqlError {
                 kind: e.kind().to_string(),
                 message: e.to_string(),
             });
@@ -100,7 +100,7 @@ impl<'a> GraphQlRunner {
         }
         self.resp_start_time = Some(Instant::now());
         if let Err(e) = transport.read_to_end(&mut self.resp).await {
-            self.out.errors.push(GraphQlError {
+            self.out.errors.push(GraphqlError {
                 kind: e.kind().to_string(),
                 message: e.to_string(),
             });
@@ -109,7 +109,7 @@ impl<'a> GraphQlRunner {
         self.end_time = Some(Instant::now());
     }
 
-    pub fn finish(mut self) -> (GraphQlOutput, Option<Runner>) {
+    pub fn finish(mut self) -> (GraphqlOutput, Option<Runner>) {
         let end_time = self.end_time.unwrap_or(Instant::now());
 
         let State::Running {
@@ -123,7 +123,7 @@ impl<'a> GraphQlRunner {
         let resp_body: Option<serde_json::Value> = match serde_json::from_slice(&self.resp) {
             Ok(resp) => Some(resp),
             Err(e) => {
-                self.out.errors.push(GraphQlError {
+                self.out.errors.push(GraphqlError {
                     kind: "json response body deserialize".to_owned(),
                     message: e.to_string(),
                 });
@@ -131,29 +131,30 @@ impl<'a> GraphQlRunner {
             }
         };
 
-        if let Some(resp) = &mut self.out.response {
-            if let Some(resp_body) = resp_body {
-                resp.data = resp_body
+        if let Some(resp_body) = resp_body {
+            self.out.response = Some(Arc::new(crate::GraphqlResponse {
+                data: resp_body
                     .get("data")
                     .unwrap_or(&serde_json::Value::Null)
                     .clone()
-                    .into();
-                resp.data = resp_body
+                    .into(),
+                errors: resp_body
                     .get("errors")
                     .unwrap_or(&serde_json::Value::Null)
                     .clone()
-                    .into();
-                resp.full = resp_body.into();
-            }
-            resp.duration = chrono::Duration::from_std(
-                end_time
-                    - self
-                        .resp_start_time
-                        .expect("response start time should be set before header is processed"),
-            )
-            .unwrap()
-            .into();
+                    .into(),
+                full: resp_body.into(),
+                duration: chrono::Duration::from_std(
+                    end_time
+                        - self
+                            .resp_start_time
+                            .expect("response start time should be set before header is processed"),
+                )
+                .unwrap()
+                .into(),
+            }));
         }
+
         self.out.duration = chrono::Duration::from_std(end_time - start_time)
             .unwrap()
             .into();
@@ -163,7 +164,7 @@ impl<'a> GraphQlRunner {
 }
 
 #[derive(Debug, Serialize)]
-struct GraphQlRequestPayload {
+struct GraphqlRequestPayload {
     query: serde_json::Value,
     #[serde(rename = "operationName", skip_serializing_if = "Option::is_none")]
     operation_name: Option<serde_json::Value>,

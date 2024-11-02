@@ -75,7 +75,7 @@ impl Validate for Settings {
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Defaults {
     pub selector: Option<Selector>,
-    pub graphql: Option<GraphQl>,
+    pub graphql: Option<Graphql>,
     pub http: Option<Http>,
     pub h1c: Option<Http1>,
     pub h1: Option<Http1>,
@@ -110,18 +110,12 @@ impl Defaults {
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProtocolKind {
-    #[serde(rename = "graphql")]
-    GraphQl,
-    #[serde(rename = "graphql_h1c")]
-    GraphQlH1c,
-    #[serde(rename = "graphql_h1")]
-    GraphQlH1,
-    #[serde(rename = "graphql_h2c")]
-    GraphQlH2c,
-    #[serde(rename = "graphql_h2")]
-    GraphQlH2,
-    #[serde(rename = "graphql_h3")]
-    GraphQlH3,
+    Graphql,
+    GraphqlH1c,
+    GraphqlH1,
+    GraphqlH2c,
+    GraphqlH2,
+    GraphqlH3,
     Http,
     H1c,
     H1,
@@ -141,7 +135,7 @@ pub enum ProtocolKind {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Protocol {
-    GraphQl(GraphQl),
+    Graphql(Graphql),
     Http(Http),
     Http1(Http1),
     Http2(Http2),
@@ -203,7 +197,7 @@ impl Step {
             pause.validate()?;
         }
         match &self.protocols {
-            StepProtocols::GraphQl { graphql, http } => {
+            StepProtocols::Graphql { graphql, http } => {
                 self.unrecognized.remove("graphql");
                 self.unrecognized.remove("http");
                 graphql.validate()?;
@@ -211,7 +205,7 @@ impl Step {
                     x.validate()?;
                 };
             }
-            StepProtocols::GraphQlH1c {
+            StepProtocols::GraphqlH1c {
                 graphql,
                 h1c,
                 tcp,
@@ -233,7 +227,7 @@ impl Step {
                     x.validate()?;
                 };
             }
-            StepProtocols::GraphQlH1 {
+            StepProtocols::GraphqlH1 {
                 graphql,
                 h1,
                 tls,
@@ -259,7 +253,7 @@ impl Step {
                     x.validate()?;
                 };
             }
-            StepProtocols::GraphQlH2c {
+            StepProtocols::GraphqlH2c {
                 graphql,
                 h2c,
                 raw_h2c,
@@ -286,7 +280,7 @@ impl Step {
                     x.validate()?;
                 };
             }
-            StepProtocols::GraphQlH2 {
+            StepProtocols::GraphqlH2 {
                 graphql,
                 h2,
                 raw_h2,
@@ -317,7 +311,7 @@ impl Step {
                     x.validate()?;
                 };
             }
-            StepProtocols::GraphQlH3 {
+            StepProtocols::GraphqlH3 {
                 graphql,
                 h3,
                 quic,
@@ -534,42 +528,42 @@ impl Step {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum StepProtocols {
-    GraphQl {
-        graphql: GraphQl,
+    Graphql {
+        graphql: Graphql,
         http: Option<Http>,
     },
     // If only graphql and tcp are specified we assume GraphQLH1c.
-    GraphQlH1c {
-        graphql: GraphQl,
+    GraphqlH1c {
+        graphql: Graphql,
         h1c: Option<Http1>,
         tcp: Option<Tcp>,
         raw_tcp: Option<RawTcp>,
     },
     // If only graphql and tls are specified we assume GraphQLH1.
-    GraphQlH1 {
-        graphql: GraphQl,
+    GraphqlH1 {
+        graphql: Graphql,
         h1: Option<Http1>,
         tls: Option<Tls>,
         tcp: Option<Tcp>,
         raw_tcp: Option<RawTcp>,
     },
-    GraphQlH2c {
-        graphql: GraphQl,
+    GraphqlH2c {
+        graphql: Graphql,
         h2c: Option<Http2>,
         raw_h2c: Option<RawHttp2>,
         tcp: Option<Tcp>,
         raw_tcp: Option<RawTcp>,
     },
-    GraphQlH2 {
-        graphql: GraphQl,
+    GraphqlH2 {
+        graphql: Graphql,
         h2: Option<Http2>,
         raw_h2: Option<RawHttp2>,
         tls: Option<Tls>,
         tcp: Option<Tcp>,
         raw_tcp: Option<RawTcp>,
     },
-    GraphQlH3 {
-        graphql: GraphQl,
+    GraphqlH3 {
+        graphql: Graphql,
         h3: Option<Http3>,
         quic: Option<Quic>,
         udp: Option<Udp>,
@@ -655,55 +649,55 @@ impl StepProtocols {
     #[inline]
     fn merge(self, default: Defaults) -> Self {
         match self {
-            Self::GraphQl { graphql, http } => Self::GraphQl {
-                graphql: GraphQl::merge(graphql, default.graphql),
+            Self::Graphql { graphql, http } => Self::Graphql {
+                graphql: Graphql::merge(graphql, default.graphql),
                 http: Some(http.unwrap_or_default().merge(default.http)),
             },
-            Self::GraphQlH1c {
+            Self::GraphqlH1c {
                 graphql,
                 h1c,
                 tcp,
                 raw_tcp,
-            } => Self::GraphQlH1c {
+            } => Self::GraphqlH1c {
                 graphql: graphql.merge(default.graphql),
                 h1c: Some(h1c.unwrap_or_default().merge(default.h1c)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
                 raw_tcp: Some(raw_tcp.unwrap_or_default().merge(default.raw_tcp)),
             },
-            Self::GraphQlH1 {
+            Self::GraphqlH1 {
                 graphql,
                 h1,
                 tls,
                 tcp,
                 raw_tcp,
-            } => Self::GraphQlH1 {
+            } => Self::GraphqlH1 {
                 graphql: graphql.merge(default.graphql),
                 h1: Some(h1.unwrap_or_default().merge(default.h1)),
                 tls: Some(tls.unwrap_or_default().merge(default.tls)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
                 raw_tcp: Some(raw_tcp.unwrap_or_default().merge(default.raw_tcp)),
             },
-            Self::GraphQlH2c {
+            Self::GraphqlH2c {
                 graphql,
                 h2c,
                 raw_h2c,
                 tcp,
                 raw_tcp,
-            } => Self::GraphQlH2c {
+            } => Self::GraphqlH2c {
                 graphql: graphql.merge(default.graphql),
                 h2c: Some(h2c.unwrap_or_default().merge(default.h2c)),
                 raw_h2c: Some(raw_h2c.unwrap_or_default().merge(default.raw_h2c)),
                 tcp: Some(tcp.unwrap_or_default().merge(default.tcp)),
                 raw_tcp: Some(raw_tcp.unwrap_or_default().merge(default.raw_tcp)),
             },
-            Self::GraphQlH2 {
+            Self::GraphqlH2 {
                 graphql,
                 h2,
                 raw_h2,
                 tls,
                 tcp,
                 raw_tcp,
-            } => Self::GraphQlH2 {
+            } => Self::GraphqlH2 {
                 graphql: graphql.merge(default.graphql),
                 h2: Some(h2.unwrap_or_default().merge(default.h2)),
                 raw_h2: Some(raw_h2.unwrap_or_default().merge(default.raw_h2)),
@@ -712,12 +706,12 @@ impl StepProtocols {
                 raw_tcp: Some(raw_tcp.unwrap_or_default().merge(default.raw_tcp)),
             },
 
-            Self::GraphQlH3 {
+            Self::GraphqlH3 {
                 graphql,
                 h3,
                 quic,
                 udp,
-            } => Self::GraphQlH3 {
+            } => Self::GraphqlH3 {
                 graphql: graphql.merge(default.graphql),
                 h3: Some(h3.unwrap_or_default().merge(default.h3)),
                 quic: Some(quic.unwrap_or_default().merge(default.quic)),
@@ -817,12 +811,12 @@ impl StepProtocols {
 
     fn kind(&self) -> ProtocolKind {
         match self {
-            Self::GraphQl { .. } => ProtocolKind::GraphQl,
-            Self::GraphQlH1c { .. } => ProtocolKind::GraphQlH1c,
-            Self::GraphQlH1 { .. } => ProtocolKind::GraphQlH1,
-            Self::GraphQlH2c { .. } => ProtocolKind::GraphQlH2c,
-            Self::GraphQlH2 { .. } => ProtocolKind::GraphQlH2,
-            Self::GraphQlH3 { .. } => ProtocolKind::GraphQlH3,
+            Self::Graphql { .. } => ProtocolKind::Graphql,
+            Self::GraphqlH1c { .. } => ProtocolKind::GraphqlH1c,
+            Self::GraphqlH1 { .. } => ProtocolKind::GraphqlH1,
+            Self::GraphqlH2c { .. } => ProtocolKind::GraphqlH2c,
+            Self::GraphqlH2 { .. } => ProtocolKind::GraphqlH2,
+            Self::GraphqlH3 { .. } => ProtocolKind::GraphqlH3,
             Self::Http { .. } => ProtocolKind::Http,
             Self::H1c { .. } => ProtocolKind::H1c,
             Self::H1 { .. } => ProtocolKind::H1,
@@ -887,7 +881,7 @@ pub enum Sync {
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct GraphQl {
+pub struct Graphql {
     pub url: Option<Value>,
     pub query: Option<Value>,
     pub params: Option<Table>,
@@ -896,7 +890,7 @@ pub struct GraphQl {
     pub unrecognized: toml::Table,
 }
 
-impl GraphQl {
+impl Graphql {
     fn merge(self, second: Option<Self>) -> Self {
         let Some(second) = second else {
             return self;

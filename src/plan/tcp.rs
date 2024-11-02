@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::{Evaluate, PlanValue};
 use crate::{bindings, Error, MaybeUtf8, Result, State};
 use anyhow::anyhow;
@@ -14,7 +16,7 @@ impl Evaluate<crate::TcpPlanOutput> for TcpRequest {
     fn evaluate<'a, S, O, I>(&self, state: &S) -> crate::Result<crate::TcpPlanOutput>
     where
         S: State<'a, O, I>,
-        O: Into<&'a str>,
+        O: Into<&'a Arc<String>>,
         I: IntoIterator<Item = O>,
     {
         Ok(crate::TcpPlanOutput {
