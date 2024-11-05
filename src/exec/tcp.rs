@@ -13,8 +13,8 @@ use tokio::net::{TcpSocket, TcpStream};
 use tokio::spawn;
 
 use crate::{
-    MaybeUtf8, PduName, ProtocolName, ProtocolOutputDiscriminants, TcpError, TcpOutput,
-    TcpPlanOutput, TcpReceivedOutput, TcpSentOutput,
+    MaybeUtf8, PduName, ProtocolDiscriminants, ProtocolName, TcpError, TcpOutput, TcpPlanOutput,
+    TcpReceivedOutput, TcpSentOutput,
 };
 
 use super::pause::{PauseReader, PauseSpec, PauseWriter};
@@ -51,10 +51,7 @@ impl TcpRunner {
             state: State::Pending,
             reader: None,
             out: TcpOutput {
-                name: ProtocolName::with_job(
-                    ctx.job_name.clone(),
-                    ProtocolOutputDiscriminants::Tcp,
-                ),
+                name: ProtocolName::with_job(ctx.job_name.clone(), ProtocolDiscriminants::Tcp),
                 sent: None,
                 plan,
                 received: None,

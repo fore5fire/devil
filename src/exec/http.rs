@@ -11,8 +11,8 @@ use super::tcp::TcpRunner;
 use super::tls::TlsRunner;
 use super::{http1::Http1Runner, Context};
 use crate::{
-    HttpOutput, HttpPlanOutput, HttpRequestOutput, HttpResponse, MaybeUtf8,
-    ProtocolOutputDiscriminants, RawTcpPlanOutput, TcpPlanOutput, TlsPlanOutput,
+    HttpOutput, HttpPlanOutput, HttpRequestOutput, HttpResponse, MaybeUtf8, ProtocolDiscriminants,
+    RawTcpPlanOutput, TcpPlanOutput, TlsPlanOutput,
 };
 
 #[derive(Debug)]
@@ -154,7 +154,7 @@ impl HttpRunner {
                     headers: plan.headers,
                     body: plan.body,
                 },
-                ProtocolOutputDiscriminants::Http,
+                ProtocolDiscriminants::Http,
             )),
         })
     }

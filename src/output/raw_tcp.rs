@@ -1,12 +1,15 @@
 use std::sync::Arc;
 
 use cel_interpreter::Duration;
+use devil_derive::{BigQuerySchema, Record};
 use serde::Serialize;
 
 use super::{BytesOutput, Direction, PduName, ProtocolName};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema, Record)]
 #[serde(tag = "kind", rename = "raw_tcp")]
+#[bigquery(tag = "kind")]
+#[record(rename = "raw_tcp")]
 pub struct RawTcpOutput {
     pub name: ProtocolName,
     pub plan: RawTcpPlanOutput,
@@ -21,7 +24,7 @@ pub struct RawTcpOutput {
     pub handshake_duration: Option<Duration>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema)]
 pub struct RawTcpPlanOutput {
     pub dest_host: String,
     pub dest_port: u16,
@@ -32,8 +35,10 @@ pub struct RawTcpPlanOutput {
     pub segments: Vec<Arc<TcpSegmentOutput>>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema, Record)]
 #[serde(tag = "kind", rename = "raw_tcp_segment")]
+#[bigquery(tag = "kind")]
+#[record(rename = "raw_tcp_segment")]
 pub struct TcpSegmentOutput {
     pub name: PduName,
     pub source: u16,
@@ -53,7 +58,7 @@ pub struct TcpSegmentOutput {
     pub direction: Direction,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TcpSegmentOptionOutput {
     // bool value is unused, but required to support serialization to parquet.
@@ -105,7 +110,7 @@ impl TcpSegmentOptionOutput {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema)]
 pub struct RawTcpError {
     pub kind: String,
     pub message: String,

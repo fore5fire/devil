@@ -1,13 +1,16 @@
 use std::{collections::HashMap, sync::Arc};
 
 use cel_interpreter::Duration;
+use devil_derive::{BigQuerySchema, Record};
 use serde::Serialize;
 use url::Url;
 
 use super::{MaybeUtf8, PduName, ProtocolName};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema, Record)]
 #[serde(tag = "kind", rename = "graphql")]
+#[bigquery(tag = "kind")]
+#[record(rename = "graphql")]
 pub struct GraphqlOutput {
     pub name: ProtocolName,
     pub plan: GraphqlPlanOutput,
@@ -17,7 +20,7 @@ pub struct GraphqlOutput {
     pub duration: Duration,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema)]
 pub struct GraphqlPlanOutput {
     pub url: Url,
     pub query: String,
@@ -25,8 +28,10 @@ pub struct GraphqlPlanOutput {
     pub params: Option<HashMap<MaybeUtf8, serde_json::Value>>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema, Record)]
 #[serde(tag = "kind", rename = "graphql_request")]
+#[bigquery(tag = "kind")]
+#[record(rename = "graphql_request")]
 pub struct GraphqlRequestOutput {
     pub name: PduName,
     pub url: Url,
@@ -36,8 +41,10 @@ pub struct GraphqlRequestOutput {
     pub duration: Duration,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema, Record)]
 #[serde(tag = "kind", rename = "graphql_response")]
+#[bigquery(tag = "kind")]
+#[record(rename = "graphql_response")]
 pub struct GraphqlResponse {
     pub name: PduName,
     pub data: serde_json::Value,
@@ -46,7 +53,7 @@ pub struct GraphqlResponse {
     pub duration: Duration,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema)]
 pub struct GraphqlError {
     pub kind: String,
     pub message: String,

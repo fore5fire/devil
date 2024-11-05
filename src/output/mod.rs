@@ -4,9 +4,10 @@ use std::sync::Arc;
 
 use anyhow::bail;
 use cel_interpreter::{Duration, Value};
+use devil_derive::{BigQuerySchema, Record};
 use indexmap::IndexMap;
 use serde::Serialize;
-use strum::{Display, EnumDiscriminants, EnumIs};
+use strum::EnumIs;
 
 use crate::{location, IterableKey, Parallelism, ProtocolField};
 
@@ -16,6 +17,7 @@ mod http;
 mod http1;
 mod http2;
 mod name;
+mod normalize;
 mod raw_http2;
 mod raw_tcp;
 mod tcp;
@@ -28,6 +30,7 @@ pub use http::*;
 pub use http1::*;
 pub use http2::*;
 pub use name::*;
+pub use normalize::*;
 pub use raw_http2::*;
 pub use raw_tcp::*;
 pub use tcp::*;
@@ -90,8 +93,10 @@ impl<T: Debug + Clone> PlanWrapper<T> {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, BigQuerySchema, Record)]
 #[serde(tag = "kind", rename = "run")]
+#[bigquery(tag = "kind")]
+#[record(rename = "run")]
 pub struct RunOutput {
     pub name: RunName,
     pub steps: IndexMap<Arc<String>, Arc<StepOutput>>,
@@ -106,8 +111,10 @@ impl RunOutput {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema, Record)]
 #[serde(tag = "kind", rename = "step")]
+#[bigquery(tag = "kind")]
+#[record(rename = "step")]
 pub struct StepOutput {
     pub name: StepName,
     pub jobs: IndexMap<IterableKey, Arc<JobOutput>>,
@@ -122,144 +129,10 @@ impl StepOutput {
     }
 }
 
-#[derive(Debug, Clone, Serialize, EnumDiscriminants)]
-// Serialized into normalized tables, so leave untagged.
-#[serde(untagged)]
-#[strum_discriminants(derive(Display))]
-#[strum(serialize_all = "snake_case")]
-pub enum ProtocolOutput {
-    Graphql(Arc<GraphqlOutput>),
-    Http(Arc<HttpOutput>),
-    H1c(Arc<Http1Output>),
-    H1(Arc<Http1Output>),
-    H2c(Arc<Http2Output>),
-    RawH2c(Arc<RawHttp2Output>),
-    H2(Arc<Http2Output>),
-    RawH2(Arc<RawHttp2Output>),
-    //Http3(Arc<Http3Output>),
-    Tls(Arc<TlsOutput>),
-    Tcp(Arc<TcpOutput>),
-    RawTcp(Arc<RawTcpOutput>),
-}
-
-impl ProtocolOutput {
-    pub fn pdus(&self) -> Vec<Pdu> {
-        match self {
-            Self::Graphql(o) => [
-                o.request.as_ref().cloned().map(Pdu::GraphqlRequest),
-                o.response.as_ref().cloned().map(Pdu::GraphqlResponse),
-            ]
-            .into_iter()
-            .filter_map(|x| x)
-            .collect(),
-            Self::Http(o) => [
-                o.request.as_ref().cloned().map(Pdu::HttpRequest),
-                o.response.as_ref().cloned().map(Pdu::HttpResponse),
-            ]
-            .into_iter()
-            .filter_map(|x| x)
-            .collect(),
-            Self::H1c(o) => [
-                o.request.as_ref().cloned().map(Pdu::H1cRequest),
-                o.response.as_ref().cloned().map(Pdu::H1cResponse),
-            ]
-            .into_iter()
-            .filter_map(|x| x)
-            .collect(),
-            Self::H1(o) => [
-                o.request.as_ref().cloned().map(Pdu::H1Request),
-                o.response.as_ref().cloned().map(Pdu::H1Response),
-            ]
-            .into_iter()
-            .filter_map(|x| x)
-            .collect(),
-            Self::H2c(o) => [
-                o.request.as_ref().cloned().map(Pdu::H2cRequest),
-                o.response.as_ref().cloned().map(Pdu::H2cResponse),
-            ]
-            .into_iter()
-            .filter_map(|x| x)
-            .collect(),
-            Self::H2(o) => [
-                o.request.as_ref().cloned().map(Pdu::H2Request),
-                o.response.as_ref().cloned().map(Pdu::H2Response),
-            ]
-            .into_iter()
-            .filter_map(|x| x)
-            .collect(),
-            Self::RawH2c(o) => o
-                .sent
-                .iter()
-                .cloned()
-                .map(Pdu::RawH2c)
-                .chain(o.received.iter().cloned().map(Pdu::RawH2c))
-                .into_iter()
-                .collect(),
-            Self::RawH2(o) => o
-                .sent
-                .iter()
-                .cloned()
-                .map(Pdu::RawH2)
-                .chain(o.received.iter().cloned().map(Pdu::RawH2))
-                .into_iter()
-                .collect(),
-            Self::Tls(o) => [
-                o.sent.as_ref().cloned().map(Pdu::TlsSent),
-                o.received.as_ref().cloned().map(Pdu::TlsReceived),
-            ]
-            .into_iter()
-            .filter_map(|x| x)
-            .collect(),
-            Self::Tcp(o) => [
-                o.sent.as_ref().cloned().map(Pdu::TcpSent),
-                o.received.as_ref().cloned().map(Pdu::TcpReceived),
-            ]
-            .into_iter()
-            .filter_map(|x| x)
-            .collect(),
-            Self::RawTcp(o) => o
-                .sent
-                .iter()
-                .cloned()
-                .map(Pdu::RawTcp)
-                .chain(o.received.iter().cloned().map(Pdu::RawTcp))
-                .into_iter()
-                .collect(),
-        }
-    }
-}
-
-pub type OutputStack = Vec<ProtocolOutput>;
-
-#[derive(Debug, Clone, Serialize, EnumDiscriminants)]
-// Serialized into normalized tables, so leave untagged.
-#[serde(untagged)]
-pub enum Pdu {
-    GraphqlRequest(Arc<GraphqlRequestOutput>),
-    GraphqlResponse(Arc<GraphqlResponse>),
-    HttpRequest(Arc<HttpRequestOutput>),
-    HttpResponse(Arc<HttpResponse>),
-    H1cRequest(Arc<Http1RequestOutput>),
-    H1cResponse(Arc<Http1Response>),
-    H1Request(Arc<Http1RequestOutput>),
-    H1Response(Arc<Http1Response>),
-    H2cRequest(Arc<Http2RequestOutput>),
-    H2cResponse(Arc<Http2Response>),
-    H2Request(Arc<Http2RequestOutput>),
-    H2Response(Arc<Http2Response>),
-    RawH2c(Arc<Http2FrameOutput>),
-    RawH2(Arc<Http2FrameOutput>),
-    //Http3Request(Arc<Http3RequestOutput>),
-    //Http3Response(Arc<Http3Response>),
-    TlsSent(Arc<TlsSentOutput>),
-    TlsReceived(Arc<TlsReceivedOutput>),
-    TcpSent(Arc<TcpSentOutput>),
-    TcpReceived(Arc<TcpReceivedOutput>),
-    RawTcp(Arc<TcpSegmentOutput>),
-}
-
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema, Record)]
 #[serde(tag = "kind", rename = "job")]
+#[bigquery(tag = "kind")]
+#[record(rename = "job")]
 pub struct JobOutput {
     pub name: JobName,
     pub graphql: Option<Arc<GraphqlOutput>>,
@@ -302,24 +175,6 @@ impl JobOutput {
     }
     pub fn raw_http2(&self) -> Option<&Arc<RawHttp2Output>> {
         self.raw_h2.as_ref().or_else(|| self.raw_h2c.as_ref())
-    }
-    pub fn stack(&self) -> Vec<ProtocolOutput> {
-        [
-            self.graphql.as_ref().cloned().map(ProtocolOutput::Graphql),
-            self.http.as_ref().cloned().map(ProtocolOutput::Http),
-            self.h1.as_ref().cloned().map(ProtocolOutput::H1),
-            self.h1c.as_ref().cloned().map(ProtocolOutput::H1c),
-            self.h2.as_ref().cloned().map(ProtocolOutput::H2),
-            self.h2c.as_ref().cloned().map(ProtocolOutput::H2c),
-            self.raw_h2.as_ref().cloned().map(ProtocolOutput::RawH2),
-            self.raw_h2c.as_ref().cloned().map(ProtocolOutput::RawH2c),
-            self.tls.as_ref().cloned().map(ProtocolOutput::Tls),
-            self.tcp.as_ref().cloned().map(ProtocolOutput::Tcp),
-            self.raw_tcp.as_ref().cloned().map(ProtocolOutput::RawTcp),
-        ]
-        .into_iter()
-        .filter_map(|x| x)
-        .collect()
     }
 }
 
@@ -440,7 +295,7 @@ pub struct RunCountOutput {
     pub index: u64,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, EnumIs)]
+#[derive(Debug, Clone, Copy, Serialize, EnumIs, BigQuerySchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Direction {
     Send,

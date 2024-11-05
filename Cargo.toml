@@ -57,3 +57,4 @@ prost = "0.13.3"
 serde_bytes = "0.11.15"
 async-broadcast = "0.7.1"
 svix-ksuid = "0.8.0"
+devil_derive = { version = "0.1.0", path = "devil_derive" }

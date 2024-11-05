@@ -5,8 +5,11 @@ use std::sync::Arc;
 use std::{fmt::Debug, ops::Deref};
 
 use bytes::Bytes;
+use gcp_bigquery_client::model::table_field_schema::TableFieldSchema;
 use serde::ser::SerializeStruct;
 use serde::Serialize;
+
+use crate::record::BigQuerySchema;
 
 #[derive(Debug, Clone, Eq)]
 pub enum BytesOutput {
@@ -14,6 +17,13 @@ pub enum BytesOutput {
     String(Arc<String>),
     StaticStr(&'static str),
     Bytes(Bytes),
+}
+
+impl BigQuerySchema for BytesOutput {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        // TODO: use bytes format with newer protobuf API.
+        TableFieldSchema::string(name)
+    }
 }
 
 impl Display for BytesOutput {
@@ -151,6 +161,19 @@ impl Default for &MaybeUtf8 {
     fn default() -> Self {
         static DEFAULT: MaybeUtf8 = MaybeUtf8(BytesOutput::Bytes(Bytes::new()));
         &DEFAULT
+    }
+}
+
+impl BigQuerySchema for MaybeUtf8 {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        TableFieldSchema::record(
+            name,
+            vec![
+                TableFieldSchema::string("utf8"),
+                TableFieldSchema::string("base64"),
+                TableFieldSchema::bytes("raw"),
+            ],
+        )
     }
 }
 

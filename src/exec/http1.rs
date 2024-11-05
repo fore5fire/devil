@@ -24,10 +24,11 @@ use crate::AddContentLength;
 use crate::Http1Error;
 use crate::Http1PlanOutput;
 use crate::Http1RequestOutput;
+use crate::HttpHeader;
 use crate::MaybeUtf8;
 use crate::PduName;
+use crate::ProtocolDiscriminants;
 use crate::ProtocolName;
-use crate::ProtocolOutputDiscriminants;
 use crate::{Http1Output, Http1Response};
 
 #[derive(Debug)]
@@ -46,7 +47,7 @@ pub(super) struct Http1Runner {
     req_body_buf: BytesMut,
     resp_body_buf: BytesMut,
     size_hint: Option<usize>,
-    send_headers: Vec<(MaybeUtf8, MaybeUtf8)>,
+    send_headers: Vec<HttpHeader>,
 }
 
 #[derive(Debug)]
@@ -201,7 +202,7 @@ impl Http1Runner {
     pub(super) fn new(
         ctx: Arc<Context>,
         plan: Http1PlanOutput,
-        protocol: ProtocolOutputDiscriminants,
+        protocol: ProtocolDiscriminants,
     ) -> Self {
         Self {
             send_headers: plan.headers.clone(),
@@ -231,7 +232,7 @@ impl Http1Runner {
     }
 
     #[inline]
-    fn compute_header(plan: &Http1PlanOutput, headers: &[(MaybeUtf8, MaybeUtf8)]) -> BytesMut {
+    fn compute_header(plan: &Http1PlanOutput, headers: &[HttpHeader]) -> BytesMut {
         // Build a buffer with the header contents to avoid the overhead of separate writes.
         // TODO: We may actually want to split packets based on info at the HTTP layer, that logic
         // will go here once I figure out the right configuration to express it.
@@ -247,9 +248,9 @@ impl Http1Runner {
                     .map(MaybeUtf8::len)
                     .unwrap_or(0)
                 + 2
-                + headers
-                    .iter()
-                    .fold(0, |sum, (k, v)| sum + k.len() + 2 + v.len() + 2)
+                + headers.iter().fold(0, |sum, h| {
+                    sum + h.key.as_ref().unwrap_or_default().len() + 2 + h.value.len() + 2
+                })
                 + 2
                 + plan.body.len(),
         );
@@ -267,10 +268,12 @@ impl Http1Runner {
             buf.put_slice(p);
         }
         buf.put(b"\r\n".as_slice());
-        for (k, v) in headers {
-            buf.put_slice(k.as_slice());
-            buf.put_slice(b": ");
-            buf.put_slice(v.as_slice());
+        for header in headers {
+            if let Some(key) = &header.key {
+                buf.put_slice(key.as_slice());
+                buf.put_slice(b": ");
+            }
+            buf.put_slice(header.value.as_slice());
             buf.put_slice(b"\r\n");
         }
         buf.put(b"\r\n".as_slice());
@@ -350,13 +353,13 @@ impl Http1Runner {
                         resp.headers
                             .into_iter()
                             .map(|h| {
-                                (
+                                HttpHeader {
                                     // TODO: We could probably avoid extra copies here since these
                                     // are backed by a BytesMut, but the current approach reparses
                                     // the whole buffer so it's not trivial.
-                                    MaybeUtf8(Arc::new(h.name.to_owned()).into()),
-                                    MaybeUtf8(Bytes::copy_from_slice(h.value).into()),
-                                )
+                                    key: Some(MaybeUtf8(Arc::new(h.name.to_owned()).into())),
+                                    value: MaybeUtf8(Bytes::copy_from_slice(h.value).into()),
+                                }
                             })
                             .collect()
                     }),
@@ -420,14 +423,18 @@ impl Http1Runner {
                     && self
                         .send_headers
                         .iter()
-                        .find(|(k, _)| k.eq_ignore_ascii_case(b"content-length"))
+                        .find(|h| {
+                            h.key
+                                .as_ref()
+                                .is_some_and(|k| k.eq_ignore_ascii_case(b"content-length"))
+                        })
                         .is_none()
             //&& self.out.plan.chunked_transfer_encoding != ChunkedTransferEncoding::Force
             {
-                self.send_headers.push((
-                    MaybeUtf8("Content-Length".into()),
-                    MaybeUtf8(Arc::new(size_hint.to_string()).into()),
-                ))
+                self.send_headers.push(HttpHeader {
+                    key: Some(MaybeUtf8("Content-Length".into())),
+                    value: MaybeUtf8(Arc::new(size_hint.to_string()).into()),
+                })
             }
         }
 

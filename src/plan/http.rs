@@ -1,13 +1,14 @@
 use super::{Evaluate, PlanData, PlanValue, PlanValueTable, TryFromPlanData};
 use crate::bindings::Literal;
-use crate::{bindings, Error, MaybeUtf8, Result, State};
+use crate::{bindings, Error, HttpHeader, MaybeUtf8, Result, State};
 use anyhow::{anyhow, bail};
+use devil_derive::BigQuerySchema;
 use serde::Serialize;
 use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, BigQuerySchema)]
 pub enum AddContentLength {
     Never,
     Auto,
@@ -100,7 +101,12 @@ impl Evaluate<crate::HttpPlanOutput> for HttpRequest {
             url: self.url.evaluate(state)?,
             method: self.method.evaluate(state)?,
             add_content_length: self.add_content_length.evaluate(state)?,
-            headers: self.headers.evaluate(state)?,
+            headers: self
+                .headers
+                .evaluate(state)?
+                .into_iter()
+                .map(HttpHeader::from)
+                .collect(),
             body: self.body.evaluate(state)?.unwrap_or_default(),
         })
     }

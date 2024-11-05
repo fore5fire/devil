@@ -19,6 +19,7 @@ use location::{HttpLocation, Side};
 pub use raw_http2::*;
 pub use http2::*;
 pub use http3::*;
+use strum::{Display, EnumDiscriminants};
 pub use tls::*;
 pub use udp::*;
 pub use quic::*;
@@ -846,17 +847,17 @@ impl Step {
                 tcp: tcp.unwrap_or_default().try_into()?,
                 raw_tcp: raw_tcp.unwrap_or_default().try_into()?,
             },
-            bindings::StepProtocols::GraphqlH3 {
-                graphql,
-                h3,
-                quic,
-                udp,
-            } => StepProtocols::GraphqlH3 {
-                graphql: graphql.try_into()?,
-                h3: h3.unwrap_or_default().try_into()?,
-                quic: quic.unwrap_or_default().try_into()?,
-                udp: udp.unwrap_or_default().try_into()?,
-            },
+            //bindings::StepProtocols::GraphqlH3 {
+            //    graphql,
+            //    h3,
+            //    quic,
+            //    udp,
+            //} => StepProtocols::GraphqlH3 {
+            //    graphql: graphql.try_into()?,
+            //    h3: h3.unwrap_or_default().try_into()?,
+            //    quic: quic.unwrap_or_default().try_into()?,
+            //    udp: udp.unwrap_or_default().try_into()?,
+            //},
             bindings::StepProtocols::Http { http } => StepProtocols::Http {
                 http: http.try_into()?,
             },
@@ -904,11 +905,11 @@ impl Step {
                 tcp: tcp.unwrap_or_default().try_into()?,
                 raw_tcp: raw_tcp.unwrap_or_default().try_into()?,
             },
-            bindings::StepProtocols::H3 { h3, quic, udp } => StepProtocols::H3 {
-                h3: h3.try_into()?,
-                quic: quic.unwrap_or_default().try_into()?,
-                udp: udp.unwrap_or_default().try_into()?,
-            },
+            //bindings::StepProtocols::H3 { h3, quic, udp } => StepProtocols::H3 {
+            //    h3: h3.try_into()?,
+            //    quic: quic.unwrap_or_default().try_into()?,
+            //    udp: udp.unwrap_or_default().try_into()?,
+            //},
             bindings::StepProtocols::RawH2c {
                 raw_h2c,
                 tcp,
@@ -938,10 +939,10 @@ impl Step {
                 tcp: tcp.unwrap_or_default().try_into()?,
                 raw_tcp: raw_tcp.unwrap_or_default().try_into()?,
             },
-            bindings::StepProtocols::Dtls { dtls, udp } => StepProtocols::Dtls {
-                dtls: dtls.try_into()?,
-                udp: udp.unwrap_or_default().try_into()?,
-            },
+            //bindings::StepProtocols::Dtls { dtls, udp } => StepProtocols::Dtls {
+            //    dtls: dtls.try_into()?,
+            //    udp: udp.unwrap_or_default().try_into()?,
+            //},
             bindings::StepProtocols::Tcp { tcp, raw_tcp } => StepProtocols::Tcp {
                 tcp: tcp.try_into()?,
                 raw_tcp: raw_tcp.unwrap_or_default().try_into()?,
@@ -949,13 +950,14 @@ impl Step {
             bindings::StepProtocols::RawTcp { raw_tcp } => StepProtocols::RawTcp {
                 raw_tcp: raw_tcp.try_into()?,
             },
-            bindings::StepProtocols::Quic { quic, udp } => StepProtocols::Quic {
-                quic: quic.try_into()?,
-                udp: udp.unwrap_or_default().try_into()?,
-            },
-            bindings::StepProtocols::Udp { udp } => StepProtocols::Udp {
-                udp: udp.try_into()?,
-            },
+            //bindings::StepProtocols::Quic { quic, udp } => StepProtocols::Quic {
+            //    quic: quic.try_into()?,
+            //    udp: udp.unwrap_or_default().try_into()?,
+            //},
+            //bindings::StepProtocols::Udp { udp } => StepProtocols::Udp {
+            //    udp: udp.try_into()?,
+            //},
+            _ => unimplemented!(),
         };
 
         Ok(Step {
@@ -1190,12 +1192,12 @@ pub enum StepProtocols {
         tcp: TcpRequest,
         raw_tcp: RawTcpRequest,
     },
-    GraphqlH3 {
-        graphql: GraphqlRequest,
-        h3: Http3Request,
-        quic: QuicRequest,
-        udp: UdpRequest,
-    },
+    //GraphqlH3 {
+    //    graphql: GraphqlRequest,
+    //    h3: Http3Request,
+    //    quic: QuicRequest,
+    //    udp: UdpRequest,
+    //},
     Http {
         http: HttpRequest,
     },
@@ -1223,11 +1225,11 @@ pub enum StepProtocols {
         tcp: TcpRequest,
         raw_tcp: RawTcpRequest,
     },
-    H3 {
-        h3: Http3Request,
-        quic: QuicRequest,
-        udp: UdpRequest,
-    },
+    //H3 {
+    //    h3: Http3Request,
+    //    quic: QuicRequest,
+    //    udp: UdpRequest,
+    //},
     RawH2c {
         raw_h2c: RawHttp2Request,
         tcp: TcpRequest,
@@ -1244,10 +1246,10 @@ pub enum StepProtocols {
         tcp: TcpRequest,
         raw_tcp: RawTcpRequest,
     },
-    Dtls {
-        dtls: TlsRequest,
-        udp: UdpRequest,
-    },
+    //Dtls {
+    //    dtls: TlsRequest,
+    //    udp: UdpRequest,
+    //},
     Tcp {
         tcp: TcpRequest,
         raw_tcp: RawTcpRequest,
@@ -1255,13 +1257,13 @@ pub enum StepProtocols {
     RawTcp {
         raw_tcp: RawTcpRequest,
     },
-    Quic {
-        quic: QuicRequest,
-        udp: UdpRequest,
-    },
-    Udp {
-        udp: UdpRequest,
-    },
+    //Quic {
+    //    quic: QuicRequest,
+    //    udp: UdpRequest,
+    //},
+    //Udp {
+    //    udp: UdpRequest,
+    //},
 }
 
 impl StepProtocols {
@@ -1330,19 +1332,19 @@ impl StepProtocols {
                     Protocol::RawTcp(raw_tcp),
                 ]
             }
-            Self::GraphqlH3 {
-                graphql,
-                h3,
-                quic,
-                udp,
-            } => {
-                vec![
-                    Protocol::Graphql(graphql),
-                    Protocol::H3(h3),
-                    Protocol::Quic(quic),
-                    Protocol::Udp(udp),
-                ]
-            }
+            //Self::GraphqlH3 {
+            //    graphql,
+            //    h3,
+            //    quic,
+            //    udp,
+            //} => {
+            //    vec![
+            //        Protocol::Graphql(graphql),
+            //        Protocol::H3(h3),
+            //        Protocol::Quic(quic),
+            //        Protocol::Udp(udp),
+            //    ]
+            //}
             Self::Http { http } => {
                 vec![Protocol::Http(http)]
             }
@@ -1398,9 +1400,9 @@ impl StepProtocols {
                     Protocol::RawTcp(raw_tcp),
                 ]
             }
-            Self::H3 { h3, quic, udp } => {
-                vec![Protocol::H3(h3), Protocol::Quic(quic), Protocol::Udp(udp)]
-            }
+            //Self::H3 { h3, quic, udp } => {
+            //    vec![Protocol::H3(h3), Protocol::Quic(quic), Protocol::Udp(udp)]
+            //}
             Self::RawH2c {
                 raw_h2c,
                 tcp,
@@ -1436,26 +1438,28 @@ impl StepProtocols {
                     Protocol::RawTcp(raw_tcp),
                 ]
             }
-            Self::Dtls { dtls, udp } => {
-                vec![Protocol::Tls(dtls), Protocol::Udp(udp)]
-            }
+            //Self::Dtls { dtls, udp } => {
+            //    vec![Protocol::Tls(dtls), Protocol::Udp(udp)]
+            //}
             Self::Tcp { tcp, raw_tcp } => {
                 vec![Protocol::Tcp(tcp), Protocol::RawTcp(raw_tcp)]
             }
             Self::RawTcp { raw_tcp } => {
                 vec![Protocol::RawTcp(raw_tcp)]
             }
-            Self::Quic { quic, udp } => {
-                vec![Protocol::Udp(udp), Protocol::Quic(quic)]
-            }
-            Self::Udp { udp } => {
-                vec![Protocol::Udp(udp)]
-            }
+            //Self::Quic { quic, udp } => {
+            //    vec![Protocol::Udp(udp), Protocol::Quic(quic)]
+            //}
+            //Self::Udp { udp } => {
+            //    vec![Protocol::Udp(udp)]
+            //}
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, EnumDiscriminants)]
+#[strum_discriminants(derive(Display))]
+#[strum(serialize_all = "snake_case")]
 pub enum Protocol {
     Graphql(GraphqlRequest),
     Http(HttpRequest),
@@ -1465,12 +1469,12 @@ pub enum Protocol {
     RawH2c(RawHttp2Request),
     H2(Http2Request),
     RawH2(RawHttp2Request),
-    H3(Http3Request),
+    //H3(Http3Request),
     Tls(TlsRequest),
     Tcp(TcpRequest),
     RawTcp(RawTcpRequest),
-    Quic(QuicRequest),
-    Udp(UdpRequest),
+    //Quic(QuicRequest),
+    //Udp(UdpRequest),
 }
 
 impl Protocol {
@@ -1484,12 +1488,12 @@ impl Protocol {
             Self::RawH2c(_) => ProtocolField::RawH2c,
             Self::H2(_) => ProtocolField::H2,
             Self::RawH2(_) => ProtocolField::RawH2,
-            Self::H3(_) => ProtocolField::H3,
+            //Self::H3(_) => ProtocolField::H3,
             Self::Tls(_) => ProtocolField::Tls,
             Self::Tcp(_) => ProtocolField::Tcp,
             Self::RawTcp(_) => ProtocolField::RawTcp,
-            Self::Quic(_) => ProtocolField::Quic,
-            Self::Udp(_) => ProtocolField::Udp,
+            //Self::Quic(_) => ProtocolField::Quic,
+            //Self::Udp(_) => ProtocolField::Udp,
         }
     }
 }

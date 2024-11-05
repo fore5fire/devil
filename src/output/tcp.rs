@@ -1,12 +1,15 @@
 use std::sync::Arc;
 
 use cel_interpreter::Duration;
+use devil_derive::{BigQuerySchema, Record};
 use serde::Serialize;
 
 use super::{MaybeUtf8, PduName, ProtocolName};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema, Record)]
 #[serde(tag = "kind", rename = "tcp")]
+#[bigquery(tag = "kind")]
+#[record(rename = "tcp")]
 pub struct TcpOutput {
     pub name: ProtocolName,
     pub plan: TcpPlanOutput,
@@ -25,7 +28,7 @@ pub struct TcpOutput {
 //    pub pattern_match: Option<Vec<u8>>,
 //}
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema)]
 pub struct TcpPlanOutput {
     pub host: String,
     pub port: u16,
@@ -41,8 +44,10 @@ pub struct TcpPlanOutput {
 //    pub read_length: Option<u64>,
 //}
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema, Record)]
 #[serde(tag = "kind", rename = "tcp_sent")]
+#[bigquery(tag = "kind")]
+#[record(rename = "tcp_sent")]
 pub struct TcpSentOutput {
     pub name: PduName,
     pub dest_ip: String,
@@ -52,8 +57,10 @@ pub struct TcpSentOutput {
     pub time_to_last_byte: Option<Duration>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename = "tcp_recv")]
+#[derive(Debug, Clone, Serialize, BigQuerySchema, Record)]
+#[serde(tag = "kind", rename = "tcp_received")]
+#[bigquery(tag = "kind")]
+#[record(rename = "tcp_received")]
 pub struct TcpReceivedOutput {
     pub name: PduName,
     pub body: MaybeUtf8,
@@ -61,7 +68,7 @@ pub struct TcpReceivedOutput {
     pub time_to_last_byte: Option<Duration>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema)]
 pub struct TcpError {
     pub kind: String,
     pub message: String,

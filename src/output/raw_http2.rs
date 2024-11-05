@@ -5,13 +5,19 @@ use bitmask_enum::bitmask;
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{Buf, Bytes};
 use cel_interpreter::Duration;
+use devil_derive::{BigQuerySchema, Record};
+use gcp_bigquery_client::model::table_field_schema::TableFieldSchema;
 use serde::Serialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
+use crate::record::BigQuerySchema;
+
 use super::{BytesOutput, Direction, MaybeUtf8, PduName, ProtocolName};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema, Record)]
 #[serde(rename_all = "snake_case", tag = "kind", rename = "raw_http2_frame")]
+#[bigquery(tag = "kind")]
+#[record(rename = "raw_http2_frame")]
 pub struct Http2FrameOutput {
     pub name: PduName,
     pub flags: Http2FrameFlag,
@@ -68,7 +74,7 @@ impl Http2FrameOutput {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Http2FramePayloadOutput {
     Data(Http2DataFrameOutput),
@@ -243,7 +249,7 @@ impl Http2FramePayloadOutput {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, BigQuerySchema)]
 pub enum Http2FrameType {
     Data,
     Headers,
@@ -332,6 +338,12 @@ pub enum Http2FrameFlag {
     Priority = 0x20,
 }
 
+impl BigQuerySchema for Http2FrameFlag {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        TableFieldSchema::integer(name)
+    }
+}
+
 impl Http2FrameFlag {
     #[inline]
     pub fn min_bytes(self, flags: Self) -> usize {
@@ -358,7 +370,7 @@ impl Http2FrameFlag {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, BigQuerySchema)]
 pub enum Http2SettingsParameterId {
     HeaderTableSize,
     EnablePush,
@@ -421,7 +433,7 @@ impl Display for Http2SettingsParameterId {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema)]
 pub struct Http2DataFrameOutput {
     pub end_stream: bool,
     pub data: BytesOutput,
@@ -467,7 +479,7 @@ impl Http2DataFrameOutput {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema)]
 pub struct Http2HeadersFrameOutput {
     pub end_stream: bool,
     pub end_headers: bool,
@@ -524,14 +536,14 @@ impl Http2HeadersFrameOutput {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema)]
 pub struct Http2HeadersFramePriorityOutput {
     pub e: bool,
     pub stream_dependency: u32,
     pub weight: u8,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema)]
 pub struct Http2PriorityFrameOutput {
     pub e: bool,
     pub stream_dependency: u32,
@@ -556,7 +568,7 @@ impl Http2PriorityFrameOutput {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema)]
 pub struct Http2RstStreamFrameOutput {
     pub error_code: u32,
 }
@@ -576,7 +588,7 @@ impl Http2RstStreamFrameOutput {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema)]
 pub struct Http2SettingsFrameOutput {
     pub ack: bool,
     pub parameters: Vec<Http2SettingsParameterOutput>,
@@ -603,13 +615,13 @@ impl Http2SettingsFrameOutput {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema)]
 pub struct Http2SettingsParameterOutput {
     pub id: Http2SettingsParameterId,
     pub value: u32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema)]
 pub struct Http2PushPromiseFrameOutput {
     pub end_headers: bool,
     pub promised_r: bool,
@@ -664,7 +676,7 @@ impl Http2PushPromiseFrameOutput {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema)]
 pub struct Http2PingFrameOutput {
     pub ack: bool,
     pub data: BytesOutput,
@@ -690,7 +702,7 @@ impl Http2PingFrameOutput {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema)]
 pub struct Http2GoawayFrameOutput {
     pub last_r: bool,
     pub last_stream_id: u32,
@@ -717,7 +729,7 @@ impl Http2GoawayFrameOutput {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema)]
 pub struct Http2WindowUpdateFrameOutput {
     pub window_r: bool,
     pub window_size_increment: u32,
@@ -740,7 +752,7 @@ impl Http2WindowUpdateFrameOutput {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema)]
 pub struct Http2ContinuationFrameOutput {
     pub end_headers: bool,
     pub header_block_fragment: BytesOutput,
@@ -765,7 +777,7 @@ impl Http2ContinuationFrameOutput {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema)]
 pub struct Http2GenericFrameOutput {
     pub r#type: Http2FrameType,
     pub payload: BytesOutput,
@@ -783,8 +795,10 @@ impl Http2GenericFrameOutput {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema, Record)]
 #[serde(tag = "kind", rename = "raw_http2")]
+#[bigquery(tag = "kind")]
+#[record(rename = "raw_http2")]
 pub struct RawHttp2Output {
     pub name: ProtocolName,
     pub plan: RawHttp2PlanOutput,
@@ -794,7 +808,7 @@ pub struct RawHttp2Output {
     pub duration: Duration,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema)]
 pub struct RawHttp2PlanOutput {
     pub host: String,
     pub port: u16,
@@ -802,7 +816,7 @@ pub struct RawHttp2PlanOutput {
     pub frames: Vec<Arc<Http2FrameOutput>>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, BigQuerySchema)]
 pub struct RawHttp2Error {
     pub kind: String,
     pub message: String,

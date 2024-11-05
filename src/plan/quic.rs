@@ -1,5 +1,5 @@
-use super::{PlanValue, TlsVersion};
-use crate::{bindings, Error, MaybeUtf8, Result};
+use super::PlanValue;
+use crate::{bindings, Error, MaybeUtf8, Result, TlsVersion};
 use anyhow::anyhow;
 
 #[derive(Debug, Default, Clone)]

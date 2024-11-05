@@ -20,8 +20,8 @@ use tokio::{
 };
 
 use crate::{
-    AddContentLength, Http2Error, Http2Output, Http2PlanOutput, Http2RequestOutput, MaybeUtf8,
-    PduName, ProtocolName, ProtocolOutputDiscriminants,
+    AddContentLength, Http2Error, Http2Output, Http2PlanOutput, Http2RequestOutput, HttpHeader,
+    MaybeUtf8, PduName, ProtocolDiscriminants, ProtocolName,
 };
 
 use super::{
@@ -94,7 +94,7 @@ impl Http2Runner {
     pub(super) fn new(
         ctx: Arc<Context>,
         plan: Http2PlanOutput,
-        protocol: ProtocolOutputDiscriminants,
+        protocol: ProtocolDiscriminants,
     ) -> crate::Result<Self> {
         Ok(Self {
             write_state: WriteState::Pending {
@@ -103,6 +103,7 @@ impl Http2Runner {
                     url: plan.url.clone(),
                     method: plan.method.clone(),
                     headers: plan.headers.clone(),
+                    trailers: plan.trailers.clone(),
                     body: plan.body.clone(),
                     duration: TimeDelta::zero().into(),
                     headers_duration: None,
@@ -150,8 +151,15 @@ impl Http2Runner {
                 .as_str()
                 .expect("non-utf8 method is not yet supported with http2"),
         );
-        for (k, v) in &plan.headers {
-            req = req.header(k.as_bytes(), v.as_bytes());
+        for header in &plan.headers {
+            req = req.header(
+                header
+                    .key
+                    .as_ref()
+                    .expect("sent headers should include key and value")
+                    .as_bytes(),
+                header.value.as_bytes(),
+            );
         }
         req.body(())
     }
@@ -323,12 +331,18 @@ impl Http2Runner {
                         .trailers
                         .clone()
                         .into_iter()
-                        .map(|(k, v)| {
+                        .map(|header| {
                             (
-                                http::HeaderName::from_bytes(&k)
-                                    .expect("out-of-spec http2 headers names are supported yet"),
-                                http::HeaderValue::from_bytes(v.as_bytes()).expect(
-                                    "out-of-spec http2 header values are not yet supported",
+                                header
+                                    .key
+                                    .as_ref()
+                                    .map(|key| http::HeaderName::from_bytes(&key))
+                                    .expect("http2 trailer names are required")
+                                    .expect(
+                                        "out-of-spec http2 trailer names are not supported yet",
+                                    ),
+                                http::HeaderValue::from_bytes(header.value.as_bytes()).expect(
+                                    "out-of-spec http2 trailer values are not yet supported",
                                 ),
                             )
                         })
@@ -396,11 +410,9 @@ impl Http2Runner {
                 resp_head
                     .headers
                     .into_iter()
-                    .map(|(k, v)| {
-                        (
-                            k.map(|k| MaybeUtf8(k.to_string().into())),
-                            MaybeUtf8(Bytes::copy_from_slice(v.as_bytes()).into()),
-                        )
+                    .map(|(k, v)| HttpHeader {
+                        key: k.map(|k| MaybeUtf8(k.to_string().into())),
+                        value: MaybeUtf8(Bytes::copy_from_slice(v.as_bytes()).into()),
                     })
                     .collect(),
             ),
@@ -408,11 +420,9 @@ impl Http2Runner {
             trailers: mem::take(&mut self.receive_trailers).map(|trailers| {
                 trailers
                     .into_iter()
-                    .map(|(k, v)| {
-                        (
-                            k.map(|k| MaybeUtf8(k.to_string().into())),
-                            MaybeUtf8(Bytes::copy_from_slice(v.as_bytes()).into()),
-                        )
+                    .map(|(k, v)| HttpHeader {
+                        key: k.map(|k| MaybeUtf8(k.to_string().into())),
+                        value: MaybeUtf8(Bytes::copy_from_slice(v.as_bytes()).into()),
                     })
                     .collect()
             }),

@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use super::{Evaluate, PlanValue};
+use super::{Evaluate, PlanValue, ProtocolDiscriminants};
 use crate::{
-    bindings, BytesOutput, Direction, Error, PduName, ProtocolOutputDiscriminants, Result, State,
-    TcpSegmentOptionOutput, TcpSegmentOutput,
+    bindings, BytesOutput, Direction, Error, PduName, Result, State, TcpSegmentOptionOutput,
+    TcpSegmentOutput,
 };
 use anyhow::anyhow;
 use itertools::Itertools;
@@ -110,7 +110,7 @@ impl TcpSegment {
         Ok(TcpSegmentOutput {
             name: PduName::with_job(
                 state.job_name().unwrap().clone(),
-                ProtocolOutputDiscriminants::RawTcp,
+                ProtocolDiscriminants::RawTcp,
                 id,
             ),
             source: self.source.evaluate(state)?,

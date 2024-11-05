@@ -1,27 +1,159 @@
-use std::{io::Write, mem, sync::Arc};
+use std::{collections::HashMap, io::Write, mem, sync::Arc};
 
+use anyhow::bail;
 use derivative::Derivative;
-use gcp_bigquery_client::model::{
-    table_data_insert_all_request::TableDataInsertAllRequest,
-    table_data_insert_all_request_rows::TableDataInsertAllRequestRows,
+use gcp_bigquery_client::{
+    error::{BQError, NestedResponseError},
+    model::{
+        table_data_insert_all_request::TableDataInsertAllRequest,
+        table_data_insert_all_request_rows::TableDataInsertAllRequestRows,
+        table_field_schema::TableFieldSchema,
+    },
 };
+use indexmap::IndexMap;
 use itertools::Itertools;
 use serde::Serialize;
 use tokio::{
     fs::File,
     io::{stdout, AsyncWriteExt, Stdout},
 };
+use tracing::{debug, info, info_span, span, Instrument};
 
 use crate::{
     Direction, GraphqlOutput, GraphqlRequestOutput, GraphqlResponse, Http1Output,
     Http1RequestOutput, Http1Response, Http2FrameOutput, Http2FramePayloadOutput, Http2Output,
-    Http2PushPromiseFrameOutput, Http2RequestOutput, Http2Response, HttpOutput, HttpRequestOutput,
-    HttpResponse, JobOutput, Pdu, ProtocolOutput, ProtocolOutputDiscriminants, RawHttp2Output,
-    RawTcpOutput, Result, RunOutput, StepOutput, TcpOutput, TcpReceivedOutput, TcpSegmentOutput,
-    TcpSentOutput, TlsOutput, TlsReceivedOutput, TlsSentOutput,
+    Http2RequestOutput, Http2Response, HttpHeader, HttpOutput, HttpRequestOutput, HttpResponse,
+    JobOutput, ProtocolDiscriminants, RawHttp2Output, RawTcpOutput, Result, RunOutput, StepOutput,
+    TcpOutput, TcpReceivedOutput, TcpSegmentOutput, TcpSentOutput, TlsOutput, TlsReceivedOutput,
+    TlsSentOutput,
 };
 
-pub trait Record: Serialize + Describe {}
+pub trait BigQuerySchema {
+    fn big_query_schema(name: &str) -> TableFieldSchema;
+}
+
+impl<T: BigQuerySchema> BigQuerySchema for Arc<T> {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        T::big_query_schema(name)
+    }
+}
+
+impl<T: BigQuerySchema> BigQuerySchema for Option<T> {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        let mut inner = T::big_query_schema(name);
+        inner.mode = Some("NULLABLE".to_owned());
+        inner
+    }
+}
+
+impl<T: BigQuerySchema> BigQuerySchema for Vec<T> {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        let mut inner = T::big_query_schema(name);
+        inner.mode = Some("REPEATED".to_owned());
+        inner
+    }
+}
+
+impl<K: ToString, V: BigQuerySchema> BigQuerySchema for IndexMap<K, V> {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        TableFieldSchema::json(name)
+    }
+}
+
+impl<K: ToString, V: BigQuerySchema> BigQuerySchema for HashMap<K, V> {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        TableFieldSchema::json(name)
+    }
+}
+
+impl BigQuerySchema for String {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        TableFieldSchema::string(name)
+    }
+}
+
+impl BigQuerySchema for &str {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        TableFieldSchema::string(name)
+    }
+}
+
+impl BigQuerySchema for usize {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        TableFieldSchema::integer(name)
+    }
+}
+
+impl BigQuerySchema for u64 {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        TableFieldSchema::integer(name)
+    }
+}
+
+impl BigQuerySchema for u32 {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        TableFieldSchema::integer(name)
+    }
+}
+
+impl BigQuerySchema for u16 {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        TableFieldSchema::integer(name)
+    }
+}
+
+impl BigQuerySchema for u8 {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        TableFieldSchema::integer(name)
+    }
+}
+
+impl BigQuerySchema for i64 {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        TableFieldSchema::integer(name)
+    }
+}
+
+impl BigQuerySchema for bool {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        TableFieldSchema::bool(name)
+    }
+}
+
+impl BigQuerySchema for cel_interpreter::Duration {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        TableFieldSchema::record(
+            name,
+            vec![
+                // TODO: use duration types constants once exposed.
+                TableFieldSchema::integer("secs"),
+                TableFieldSchema::integer("nanos"),
+            ],
+        )
+    }
+}
+
+impl BigQuerySchema for url::Url {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        TableFieldSchema::string(name)
+    }
+}
+
+impl BigQuerySchema for serde_json::Value {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        TableFieldSchema::json(name)
+    }
+}
+
+pub trait Record: Serialize + Describe + BigQuerySchema {
+    fn table_name() -> &'static str;
+}
+
+impl<T: Record> Record for Arc<T> {
+    fn table_name() -> &'static str {
+        T::table_name()
+    }
+}
 
 #[derive(Debug)]
 pub enum Serializer {
@@ -35,7 +167,7 @@ impl Serializer {
         &mut self,
         mut writer: W,
         records: &[R],
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> Result<()> {
         // TODO: refactor layers to work with all formats
         match self {
@@ -73,7 +205,7 @@ impl RecordWriter {
     pub async fn write<R: Record>(
         &mut self,
         records: &[R],
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> Result<()> {
         match self {
             Self::Stdout(w) => w.write(records, layers).await,
@@ -110,7 +242,7 @@ impl StdoutWriter {
     pub async fn write<R: Record>(
         &mut self,
         records: &[R],
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> Result<()> {
         self.buf.clear();
         self.ser.serialize(&mut self.buf, records, layers)?;
@@ -139,7 +271,7 @@ impl FileWriter {
     pub async fn write<R: Record>(
         &mut self,
         records: &[R],
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> Result<()> {
         self.buf.clear();
         self.ser.serialize(&mut self.buf, records, layers)?;
@@ -156,22 +288,32 @@ pub struct BigQueryWriter {
     client: gcp_bigquery_client::Client,
     project: String,
     dataset: String,
-    table: String,
-    request: TableDataInsertAllRequest,
+    table_prefix: String,
+    //request: TableDataInsertAllRequest,
     //name: StreamName,
     //trace_id: String,
 }
 
 impl BigQueryWriter {
-    const BUFFER_RECORDS: usize = 100;
+    //const BUFFER_RECORDS: usize = 100;
 
-    pub async fn with_project_id(project: String, dataset: String, table: String) -> Result<Self> {
+    pub async fn new(
+        project: String,
+        dataset: String,
+        table_prefix: String,
+        creds: Option<&str>,
+    ) -> Result<Self> {
+        let client = if let Some(creds) = creds {
+            gcp_bigquery_client::Client::from_service_account_key_file(creds).await?
+        } else {
+            gcp_bigquery_client::Client::from_application_default_credentials().await?
+        };
         Ok(Self {
-            client: gcp_bigquery_client::Client::from_application_default_credentials().await?,
+            client,
             project,
             dataset,
-            table,
-            request: TableDataInsertAllRequest::new(),
+            table_prefix,
+            //request: TableDataInsertAllRequest::new(),
             //name: StreamName::new_default(project, dataset, table),
             //trace_id: "devil".to_owned(),
         })
@@ -180,8 +322,9 @@ impl BigQueryWriter {
     pub async fn write<R: Record>(
         &mut self,
         records: &[R],
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> Result<()> {
+        let mut request = TableDataInsertAllRequest::new();
         let rows = records
             .iter()
             .map(|r| {
@@ -191,48 +334,75 @@ impl BigQueryWriter {
                 })
             })
             .try_collect()?;
-        self.request.add_rows(rows)?;
-        if self.request.len() > Self::BUFFER_RECORDS {
-            self.flush().await?;
+        request.add_rows(rows)?;
+
+        let table = self.table_prefix.clone() + R::table_name();
+
+        // HACK: we should be smarter about only creating tables when needed.
+        match self
+            .client
+            .table()
+            .get(&self.project, &self.dataset, &table, None)
+            .await
+        {
+            Err(BQError::ResponseError { error }) if error.error.code == 404 => {
+                let span = info_span!("creat table", "{table}");
+                let fields = R::big_query_schema("dummy").fields;
+                span.in_scope(|| debug!("{:?}", fields));
+                self.client
+                    .table()
+                    .create(gcp_bigquery_client::model::table::Table::new(
+                        &self.project,
+                        &self.dataset,
+                        &table,
+                        gcp_bigquery_client::model::table_schema::TableSchema { fields },
+                    ))
+                    .instrument(span)
+                    .await?;
+            }
+            Ok(resp) => debug!("table '{table}' already exists: {resp:?}"),
+            e => bail!("{e:?}"),
         }
+
+        let span = info_span!("insert data", "{table}");
+        span.in_scope(|| debug!("request: {request:?}"));
+        let resp = self
+            .client
+            .tabledata()
+            .insert_all(&self.project, &self.dataset, &table, request)
+            .instrument(span)
+            .await?;
+        debug!("insert into '{table}' response: {resp:?}");
+
+        //if self.request.len() > Self::BUFFER_RECORDS {
+        //    self.flush(name).await?;
+        //}
         Ok(())
     }
 
-    #[inline]
-    pub async fn flush(&mut self) -> Result<()> {
-        let request = mem::take(&mut self.request);
-        self.client
-            .tabledata()
-            .insert_all(&self.project, &self.dataset, &self.table, request)
-            .await?;
-        Ok(())
-    }
+    //#[inline]
+    //pub async fn flush(&mut self, table: &str) -> Result<()> {
+    //    let request = mem::take(&mut self.request);
+    //    self.client
+    //        .tabledata()
+    //        .insert_all(&self.project, &self.dataset, table, request)
+    //        .await?;
+    //    Ok(())
+    //}
 }
 
 pub trait Describe {
-    fn describe<W: Write>(
-        &self,
-        w: W,
-        layers: &[ProtocolOutputDiscriminants],
-    ) -> std::io::Result<()>;
+    fn describe<W: Write>(&self, w: W, layers: &[ProtocolDiscriminants]) -> std::io::Result<()>;
 }
 
 impl<T: Describe> Describe for &T {
-    fn describe<W: Write>(
-        &self,
-        w: W,
-        layers: &[ProtocolOutputDiscriminants],
-    ) -> std::io::Result<()> {
+    fn describe<W: Write>(&self, w: W, layers: &[ProtocolDiscriminants]) -> std::io::Result<()> {
         (*self).describe(w, layers)
     }
 }
 
 impl<T: Describe> Describe for Arc<T> {
-    fn describe<W: Write>(
-        &self,
-        w: W,
-        layers: &[ProtocolOutputDiscriminants],
-    ) -> std::io::Result<()> {
+    fn describe<W: Write>(&self, w: W, layers: &[ProtocolDiscriminants]) -> std::io::Result<()> {
         self.as_ref().describe(w, layers)
     }
 }
@@ -241,7 +411,7 @@ impl Describe for RunOutput {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
         for (step_name, step) in &self.steps {
             writeln!(w, "------- step {step_name} --------")?;
@@ -255,7 +425,7 @@ impl Describe for StepOutput {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
         for (job_name, job) in &self.jobs {
             writeln!(w, "---- job {job_name} ----")?;
@@ -268,34 +438,34 @@ impl Describe for StepOutput {
 impl JobOutput {
     fn default_layers<'a>(
         &self,
-        input: &'a [ProtocolOutputDiscriminants],
-    ) -> &'a [ProtocolOutputDiscriminants] {
+        input: &'a [ProtocolDiscriminants],
+    ) -> &'a [ProtocolDiscriminants] {
         if !input.is_empty() {
             return input;
         } else if self.graphql.is_some() {
-            &[ProtocolOutputDiscriminants::Graphql]
+            &[ProtocolDiscriminants::Graphql]
         //} else if proto.http3.is_some() {
-        //    vec![ProtocolOutputDiscriminants::HTTP]
+        //    vec![ProtocolDiscriminants::HTTP]
         } else if self.h2.is_some() {
-            &[ProtocolOutputDiscriminants::H2]
+            &[ProtocolDiscriminants::H2]
         } else if self.h2c.is_some() {
-            &[ProtocolOutputDiscriminants::H2c]
+            &[ProtocolDiscriminants::H2c]
         } else if self.h1.is_some() {
-            &[ProtocolOutputDiscriminants::H1]
+            &[ProtocolDiscriminants::H1]
         } else if self.h1c.is_some() {
-            &[ProtocolOutputDiscriminants::H1c]
+            &[ProtocolDiscriminants::H1c]
         } else if self.http.is_some() {
-            &[ProtocolOutputDiscriminants::Http]
+            &[ProtocolDiscriminants::Http]
         } else if self.raw_h2.is_some() {
-            &[ProtocolOutputDiscriminants::RawH2]
+            &[ProtocolDiscriminants::RawH2]
         } else if self.raw_h2c.is_some() {
-            &[ProtocolOutputDiscriminants::RawH2c]
+            &[ProtocolDiscriminants::RawH2c]
         } else if self.tls.is_some() {
-            &[ProtocolOutputDiscriminants::Tls]
+            &[ProtocolDiscriminants::Tls]
         } else if self.tcp.is_some() {
-            &[ProtocolOutputDiscriminants::Tcp]
+            &[ProtocolDiscriminants::Tcp]
         } else if self.raw_tcp.is_some() {
-            &[ProtocolOutputDiscriminants::RawTcp]
+            &[ProtocolDiscriminants::RawTcp]
         } else {
             &[]
         }
@@ -306,63 +476,63 @@ impl Describe for JobOutput {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
         // TODO: escape or refuse to print dangerous term characters in output.
 
         for level in self.default_layers(layers) {
             match level {
-                ProtocolOutputDiscriminants::RawTcp => {
+                ProtocolDiscriminants::RawTcp => {
                     if let Some(segments) = &self.raw_tcp {
                         segments.describe(&mut w, layers)?;
                     }
                 }
-                ProtocolOutputDiscriminants::Tcp => {
+                ProtocolDiscriminants::Tcp => {
                     if let Some(tcp) = &self.tcp {
                         tcp.describe(&mut w, layers)?;
                     }
                 }
-                ProtocolOutputDiscriminants::Tls => {
+                ProtocolDiscriminants::Tls => {
                     if let Some(tls) = &self.tls {
                         tls.describe(&mut w, layers)?;
                     }
                 }
-                ProtocolOutputDiscriminants::RawH2 => {
+                ProtocolDiscriminants::RawH2 => {
                     if let Some(http) = &self.raw_h2 {
                         http.describe(&mut w, layers)?;
                     }
                 }
-                ProtocolOutputDiscriminants::RawH2c => {
+                ProtocolDiscriminants::RawH2c => {
                     if let Some(http) = &self.raw_h2 {
                         http.describe(&mut w, layers)?;
                     }
                 }
-                ProtocolOutputDiscriminants::Http => {
+                ProtocolDiscriminants::Http => {
                     if let Some(http) = &self.http {
                         http.describe(&mut w, layers)?;
                     }
                 }
-                ProtocolOutputDiscriminants::H1 => {
+                ProtocolDiscriminants::H1 => {
                     if let Some(http) = &self.h1 {
                         http.describe(&mut w, layers)?;
                     }
                 }
-                ProtocolOutputDiscriminants::H1c => {
+                ProtocolDiscriminants::H1c => {
                     if let Some(http) = &self.h1c {
                         http.describe(&mut w, layers)?;
                     }
                 }
-                ProtocolOutputDiscriminants::H2 => {
+                ProtocolDiscriminants::H2 => {
                     if let Some(http) = &self.h2 {
                         http.describe(&mut w, layers)?;
                     }
                 }
-                ProtocolOutputDiscriminants::H2c => {
+                ProtocolDiscriminants::H2c => {
                     if let Some(http) = &self.h2c {
                         http.describe(&mut w, layers)?;
                     }
                 }
-                ProtocolOutputDiscriminants::Graphql => {
+                ProtocolDiscriminants::Graphql => {
                     if let Some(graphql) = &self.graphql {
                         graphql.describe(&mut w, layers)?;
                     }
@@ -373,65 +543,13 @@ impl Describe for JobOutput {
     }
 }
 
-impl Describe for ProtocolOutput {
-    fn describe<W: Write>(
-        &self,
-        w: W,
-        layers: &[ProtocolOutputDiscriminants],
-    ) -> std::io::Result<()> {
-        match self {
-            Self::Graphql(o) => o.describe(w, layers),
-            Self::Http(o) => o.describe(w, layers),
-            Self::H1c(o) => o.describe(w, layers),
-            Self::H1(o) => o.describe(w, layers),
-            Self::H2c(o) => o.describe(w, layers),
-            Self::RawH2c(o) => o.describe(w, layers),
-            Self::H2(o) => o.describe(w, layers),
-            Self::RawH2(o) => o.describe(w, layers),
-            Self::Tls(o) => o.describe(w, layers),
-            Self::Tcp(o) => o.describe(w, layers),
-            Self::RawTcp(o) => o.describe(w, layers),
-        }
-    }
-}
-
-impl Describe for Pdu {
-    fn describe<W: Write>(
-        &self,
-        w: W,
-        layers: &[ProtocolOutputDiscriminants],
-    ) -> std::io::Result<()> {
-        match self {
-            Self::GraphqlRequest(o) => o.describe(w, layers),
-            Self::GraphqlResponse(o) => o.describe(w, layers),
-            Self::HttpRequest(o) => o.describe(w, layers),
-            Self::HttpResponse(o) => o.describe(w, layers),
-            Self::H1cRequest(o) => o.describe(w, layers),
-            Self::H1cResponse(o) => o.describe(w, layers),
-            Self::H1Request(o) => o.describe(w, layers),
-            Self::H1Response(o) => o.describe(w, layers),
-            Self::H2cRequest(o) => o.describe(w, layers),
-            Self::H2cResponse(o) => o.describe(w, layers),
-            Self::H2Request(o) => o.describe(w, layers),
-            Self::H2Response(o) => o.describe(w, layers),
-            Self::RawH2c(o) => o.describe(w, layers),
-            Self::RawH2(o) => o.describe(w, layers),
-            Self::TlsSent(o) => o.describe(w, layers),
-            Self::TlsReceived(o) => o.describe(w, layers),
-            Self::TcpSent(o) => o.describe(w, layers),
-            Self::TcpReceived(o) => o.describe(w, layers),
-            Self::RawTcp(o) => o.describe(w, layers),
-        }
-    }
-}
-
 impl Describe for GraphqlOutput {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
-        if !layers.contains(&ProtocolOutputDiscriminants::Graphql) {
+        if !layers.contains(&ProtocolDiscriminants::Graphql) {
             return Ok(());
         }
         if let Some(req) = &self.request {
@@ -451,9 +569,9 @@ impl Describe for GraphqlRequestOutput {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
-        if !layers.contains(&ProtocolOutputDiscriminants::Graphql) {
+        if !layers.contains(&ProtocolDiscriminants::Graphql) {
             return Ok(());
         }
         writeln!(w, "> {}", &self.query.replace("\n", "\n> "))?;
@@ -465,9 +583,9 @@ impl Describe for GraphqlResponse {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
-        if !layers.contains(&ProtocolOutputDiscriminants::Graphql) {
+        if !layers.contains(&ProtocolDiscriminants::Graphql) {
             return Ok(());
         }
         writeln!(
@@ -485,10 +603,10 @@ impl Describe for Http2Output {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
-        if !layers.contains(&ProtocolOutputDiscriminants::H2)
-            && !layers.contains(&ProtocolOutputDiscriminants::H2c)
+        if !layers.contains(&ProtocolDiscriminants::H2)
+            && !layers.contains(&ProtocolDiscriminants::H2c)
         {
             return Ok(());
         }
@@ -533,10 +651,10 @@ impl Describe for Http2RequestOutput {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
-        if !layers.contains(&ProtocolOutputDiscriminants::H2)
-            && !layers.contains(&ProtocolOutputDiscriminants::H2c)
+        if !layers.contains(&ProtocolDiscriminants::H2)
+            && !layers.contains(&ProtocolDiscriminants::H2c)
         {
             return Ok(());
         }
@@ -547,8 +665,8 @@ impl Describe for Http2RequestOutput {
             if self.method.is_some() { " " } else { "" },
             self.url,
         )?;
-        for (k, v) in &self.headers {
-            writeln!(w, ">   {}: {}", k, v)?;
+        for header in &self.headers {
+            header.describe(&mut w, layers)?;
         }
         writeln!(w, "> {}", &self.body.to_string().replace("\n", "\n> "))?;
         if let Some(ttfb) = &self.time_to_first_byte {
@@ -562,21 +680,17 @@ impl Describe for Http2Response {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
-        if !layers.contains(&ProtocolOutputDiscriminants::H2)
-            && !layers.contains(&ProtocolOutputDiscriminants::H2c)
+        if !layers.contains(&ProtocolDiscriminants::H2)
+            && !layers.contains(&ProtocolDiscriminants::H2c)
         {
             return Ok(());
         }
         writeln!(w, "< {} HTTP/2", self.status_code.unwrap_or(0))?;
         if let Some(headers) = &self.headers {
-            for (k, v) in headers {
-                if let Some(k) = k {
-                    writeln!(w, "< {}: {}", k, v)?;
-                } else {
-                    writeln!(w, "< {}", v)?;
-                }
+            for header in headers {
+                header.describe(&mut w, layers)?;
             }
         }
         writeln!(w, "< ")?;
@@ -594,10 +708,10 @@ impl Describe for Http1Output {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
-        if !layers.contains(&ProtocolOutputDiscriminants::H1)
-            && !layers.contains(&ProtocolOutputDiscriminants::H1c)
+        if !layers.contains(&ProtocolDiscriminants::H1)
+            && !layers.contains(&ProtocolDiscriminants::H1c)
         {
             return Ok(());
         }
@@ -642,11 +756,11 @@ impl Describe for Http1RequestOutput {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
         // TODO: How to handle allowing h1c when h1 is skipped or vice-versa?
-        if !layers.contains(&ProtocolOutputDiscriminants::H1)
-            && !layers.contains(&ProtocolOutputDiscriminants::H1c)
+        if !layers.contains(&ProtocolDiscriminants::H1)
+            && !layers.contains(&ProtocolDiscriminants::H1c)
         {
             return Ok(());
         }
@@ -663,8 +777,8 @@ impl Describe for Http1RequestOutput {
             },
             self.version_string.as_ref().unwrap_or_default(),
         )?;
-        for (k, v) in &self.headers {
-            writeln!(w, ">   {}: {}", k, v)?;
+        for header in &self.headers {
+            header.describe(&mut w, layers)?;
         }
         writeln!(w, "> {}", &self.body.to_string().replace("\n", "\n> "))?;
         if let Some(ttfb) = &self.time_to_first_byte {
@@ -678,10 +792,10 @@ impl Describe for Http1Response {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
-        if !layers.contains(&ProtocolOutputDiscriminants::H1)
-            && !layers.contains(&ProtocolOutputDiscriminants::H1c)
+        if !layers.contains(&ProtocolDiscriminants::H1)
+            && !layers.contains(&ProtocolDiscriminants::H1c)
         {
             return Ok(());
         }
@@ -695,8 +809,8 @@ impl Describe for Http1Response {
                 .unwrap_or_default()
         )?;
         if let Some(headers) = &self.headers {
-            for (k, v) in headers {
-                writeln!(w, "< {}: {}", k, v)?;
+            for header in headers {
+                header.describe(&mut w, layers)?;
             }
         }
         writeln!(w, "< ")?;
@@ -714,9 +828,9 @@ impl Describe for HttpOutput {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
-        if !layers.contains(&ProtocolOutputDiscriminants::Http) {
+        if !layers.contains(&ProtocolDiscriminants::Http) {
             return Ok(());
         }
         if let Some(req) = &self.request {
@@ -760,9 +874,9 @@ impl Describe for HttpRequestOutput {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
-        if !layers.contains(&ProtocolOutputDiscriminants::Http) {
+        if !layers.contains(&ProtocolDiscriminants::Http) {
             return Ok(());
         }
         writeln!(
@@ -773,8 +887,8 @@ impl Describe for HttpRequestOutput {
             self.url,
             self.protocol
         )?;
-        for (k, v) in &self.headers {
-            writeln!(w, ">   {}: {}", k, v)?;
+        for header in &self.headers {
+            header.describe(&mut w, layers)?;
         }
 
         writeln!(w, "> {}", &self.body.to_string().replace("\n", "\n> "))?;
@@ -790,9 +904,9 @@ impl Describe for HttpResponse {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
-        if !layers.contains(&ProtocolOutputDiscriminants::Http) {
+        if !layers.contains(&ProtocolDiscriminants::Http) {
             return Ok(());
         }
         writeln!(
@@ -802,8 +916,8 @@ impl Describe for HttpResponse {
             self.protocol.as_ref().unwrap_or_default()
         )?;
         if let Some(headers) = &self.headers {
-            for (k, v) in headers {
-                writeln!(w, "< {}: {}", k, v)?;
+            for header in headers {
+                header.describe(&mut w, layers)?;
             }
         }
         writeln!(w, "< ")?;
@@ -817,14 +931,28 @@ impl Describe for HttpResponse {
     }
 }
 
+impl Describe for HttpHeader {
+    fn describe<W: Write>(
+        &self,
+        mut w: W,
+        layers: &[ProtocolDiscriminants],
+    ) -> std::io::Result<()> {
+        if let Some(k) = &self.key {
+            writeln!(w, "< {}: {}", k, self.value)
+        } else {
+            writeln!(w, "< {}", self.value)
+        }
+    }
+}
+
 impl Describe for RawHttp2Output {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
-        if !layers.contains(&ProtocolOutputDiscriminants::RawH2)
-            && !layers.contains(&ProtocolOutputDiscriminants::RawH2c)
+        if !layers.contains(&ProtocolDiscriminants::RawH2)
+            && !layers.contains(&ProtocolDiscriminants::RawH2c)
         {
             return Ok(());
         }
@@ -842,10 +970,10 @@ impl Describe for Http2FrameOutput {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
-        if !layers.contains(&ProtocolOutputDiscriminants::RawH2)
-            && !layers.contains(&ProtocolOutputDiscriminants::RawH2c)
+        if !layers.contains(&ProtocolDiscriminants::RawH2)
+            && !layers.contains(&ProtocolDiscriminants::RawH2c)
         {
             return Ok(());
         }
@@ -961,9 +1089,9 @@ impl Describe for TlsOutput {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
-        if !layers.contains(&ProtocolOutputDiscriminants::Tls) {
+        if !layers.contains(&ProtocolDiscriminants::Tls) {
             return Ok(());
         }
         if let Some(req) = &self.sent {
@@ -1001,9 +1129,9 @@ impl Describe for TlsSentOutput {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
-        if !layers.contains(&ProtocolOutputDiscriminants::Tls) {
+        if !layers.contains(&ProtocolDiscriminants::Tls) {
             return Ok(());
         }
         writeln!(w, "> {}", &self.body.to_string().replace("\n", "\n> "))?;
@@ -1018,9 +1146,9 @@ impl Describe for TlsReceivedOutput {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
-        if !layers.contains(&ProtocolOutputDiscriminants::Tls) {
+        if !layers.contains(&ProtocolDiscriminants::Tls) {
             return Ok(());
         }
         writeln!(w, "< {}", &self.body.to_string().replace("\n", "\n< "))?;
@@ -1035,9 +1163,9 @@ impl Describe for TcpOutput {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
-        if !layers.contains(&ProtocolOutputDiscriminants::Tcp) {
+        if !layers.contains(&ProtocolDiscriminants::Tcp) {
             return Ok(());
         }
         if let Some(req) = &self.sent {
@@ -1075,9 +1203,9 @@ impl Describe for TcpSentOutput {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
-        if !layers.contains(&ProtocolOutputDiscriminants::Tcp) {
+        if !layers.contains(&ProtocolDiscriminants::Tcp) {
             return Ok(());
         }
         writeln!(w, "> {}", &self.body.to_string().replace("\n", "\n> "))?;
@@ -1092,9 +1220,9 @@ impl Describe for TcpReceivedOutput {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
-        if !layers.contains(&ProtocolOutputDiscriminants::Tcp) {
+        if !layers.contains(&ProtocolDiscriminants::Tcp) {
             return Ok(());
         }
         writeln!(w, "< {}", &self.body.to_string().replace("\n", "\n< "))?;
@@ -1109,9 +1237,9 @@ impl Describe for RawTcpOutput {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
-        if !layers.contains(&ProtocolOutputDiscriminants::RawTcp) {
+        if !layers.contains(&ProtocolDiscriminants::RawTcp) {
             return Ok(());
         }
         for segment in &self.sent {
@@ -1139,9 +1267,9 @@ impl Describe for TcpSegmentOutput {
     fn describe<W: Write>(
         &self,
         mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
+        layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
-        if !layers.contains(&ProtocolOutputDiscriminants::RawTcp) {
+        if !layers.contains(&ProtocolDiscriminants::RawTcp) {
             return Ok(());
         }
         let d = match self.direction {

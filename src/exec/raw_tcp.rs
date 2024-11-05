@@ -30,7 +30,7 @@ use tokio::{
 use tracing::{debug, info};
 
 use crate::{
-    Direction, PduName, ProtocolName, ProtocolOutputDiscriminants, RawTcpError, RawTcpOutput,
+    Direction, PduName, ProtocolDiscriminants, ProtocolName, RawTcpError, RawTcpOutput,
     RawTcpPlanOutput, TcpSegmentOptionOutput, TcpSegmentOutput,
 };
 
@@ -90,10 +90,7 @@ impl RawTcpRunner {
             remote_ip: None,
             local_ip: None,
             out: RawTcpOutput {
-                name: ProtocolName::with_job(
-                    ctx.job_name.clone(),
-                    ProtocolOutputDiscriminants::RawTcp,
-                ),
+                name: ProtocolName::with_job(ctx.job_name.clone(), ProtocolDiscriminants::RawTcp),
                 dest_ip: String::new(),
                 dest_port: plan.dest_port,
                 sent: Vec::new(),

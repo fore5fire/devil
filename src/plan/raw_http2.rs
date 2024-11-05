@@ -11,7 +11,7 @@ use crate::{
     Http2HeadersFramePriorityOutput, Http2PingFrameOutput, Http2PriorityFrameOutput,
     Http2PushPromiseFrameOutput, Http2RstStreamFrameOutput, Http2SettingsFrameOutput,
     Http2SettingsParameterId, Http2SettingsParameterOutput, Http2WindowUpdateFrameOutput,
-    MaybeUtf8, PduName, PlanValue, ProtocolOutputDiscriminants, Result, State,
+    MaybeUtf8, PduName, PlanValue, ProtocolDiscriminants, Result, State,
 };
 
 #[derive(Debug, Clone)]
@@ -156,7 +156,7 @@ impl Http2Frame {
         Ok(Http2FrameOutput {
             name: PduName::with_job(
                 state.job_name().unwrap().clone(),
-                ProtocolOutputDiscriminants::RawTcp,
+                ProtocolDiscriminants::RawTcp,
                 id,
             ),
             flags: Http2FrameFlag::from(self.flags.evaluate(state)?) | payload.compute_flags(),

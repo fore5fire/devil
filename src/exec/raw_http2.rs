@@ -16,8 +16,8 @@ use tokio::task::JoinHandle;
 use tracing::{debug, debug_span, Instrument};
 
 use crate::{
-    Direction, Http2FrameOutput, Http2FrameType, MaybeUtf8, PduName, ProtocolName,
-    ProtocolOutputDiscriminants, RawHttp2Error, RawHttp2Output, RawHttp2PlanOutput,
+    Direction, Http2FrameOutput, Http2FrameType, MaybeUtf8, PduName, ProtocolDiscriminants,
+    ProtocolName, RawHttp2Error, RawHttp2Output, RawHttp2PlanOutput,
 };
 
 use super::extract;
@@ -56,7 +56,7 @@ impl RawHttp2Runner {
     pub(super) fn new(
         ctx: Arc<Context>,
         mut plan: RawHttp2PlanOutput,
-        protocol: ProtocolOutputDiscriminants,
+        protocol: ProtocolDiscriminants,
         executor: bool,
     ) -> Self {
         Self {

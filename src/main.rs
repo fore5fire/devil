@@ -1,16 +1,12 @@
 use anyhow::anyhow;
 use async_broadcast::{broadcast, Receiver, RecvError, Sender};
-use clap::{ArgGroup, Parser, ValueEnum};
+use clap::{Parser, ValueEnum};
 use devil::exec::Executor;
-use devil::record::{BigQueryWriter, Describe, FileWriter, Record, RecordWriter, StdoutWriter};
-use devil::{
-    JobOutput, Pdu, Plan, ProtocolOutput, ProtocolOutputDiscriminants, RunName, RunOutput,
-    StepOutput,
-};
+use devil::record::{BigQueryWriter, FileWriter, RecordWriter, StdoutWriter};
+use devil::{Normalized, Plan, ProtocolDiscriminants, RunName, RunOutput, StepOutput};
 use futures::future::try_join_all;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::io::Write;
 use std::sync::Arc;
 use strum::Display;
 use tokio::spawn;
@@ -75,9 +71,11 @@ enum Output {
         normalize: Normalize,
     },
     BigQuery {
-        project: String,
-        dataset: String,
-        table: String,
+        google_project: String,
+        bigquery_dataset: String,
+        #[serde(default)]
+        table_prefix: String,
+        service_account_key_file: Option<String>,
         #[serde(default)]
         layers: Vec<Protocol>,
         #[serde(default)]
@@ -119,6 +117,18 @@ impl Normalize {
     }
 }
 
+impl From<Normalize> for devil::Normalize {
+    fn from(value: Normalize) -> Self {
+        match value {
+            Normalize::Pdu => Self::Pdu,
+            Normalize::Protocol => Self::Protocol,
+            Normalize::Job => Self::Job,
+            Normalize::Step => Self::Step,
+            Normalize::None => Self::None,
+        }
+    }
+}
+
 #[derive(ValueEnum, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[clap(rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
@@ -139,7 +149,7 @@ enum Protocol {
     //Ip,
 }
 
-impl From<&Protocol> for devil::ProtocolOutputDiscriminants {
+impl From<&Protocol> for devil::ProtocolDiscriminants {
     fn from(value: &Protocol) -> Self {
         match value {
             Protocol::Graphql => Self::Graphql,
@@ -277,63 +287,10 @@ enum FlushMessages {
 
 impl FlushMessages {
     fn normalize(self, target: Normalize) -> Vec<Normalized> {
-        match (self, target) {
-            (Self::Plan(p), Normalize::None) => vec![Normalized::None(p)],
-
-            (Self::Step(s), Normalize::Step) => vec![Normalized::Step(s)],
-            (Self::Step(s), Normalize::Job) => s
-                .jobs
-                .values()
-                .cloned()
-                .map(|j| Normalized::Job(j))
-                .collect(),
-            (Self::Step(s), Normalize::Protocol) => s
-                .jobs
-                .values()
-                .map(|s| s.stack())
-                .flatten()
-                .map(Normalized::Protocol)
-                .collect(),
-            (Self::Step(s), Normalize::Pdu) => s
-                .jobs
-                .values()
-                .map(|s| s.stack())
-                .flatten()
-                .map(|p| p.pdus())
-                .flatten()
-                .map(Normalized::Pdu)
-                .collect(),
-
-            // Skip unmatched since it should be handled at a different flush level.
-            _ => Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-#[serde(untagged)]
-pub enum Normalized {
-    None(Arc<RunOutput>),
-    Step(Arc<StepOutput>),
-    Job(Arc<JobOutput>),
-    Protocol(ProtocolOutput),
-    Pdu(Pdu),
-}
-
-impl Record for Normalized {}
-
-impl Describe for Normalized {
-    fn describe<W: Write>(
-        &self,
-        mut w: W,
-        layers: &[ProtocolOutputDiscriminants],
-    ) -> std::io::Result<()> {
         match self {
-            Self::None(o) => o.describe(w, layers),
-            Self::Step(o) => o.describe(&mut w, layers),
-            Self::Job(o) => o.describe(&mut w, layers),
-            Self::Protocol(o) => o.describe(&mut w, layers),
-            Self::Pdu(o) => o.describe(&mut w, layers),
+            Self::Plan(p) => p.normalize(target.into()),
+            Self::Step(s) => s.normalize(target.into()),
+            //Self::Job(j) => j.normalize(target.into()),
         }
     }
 }
@@ -341,7 +298,7 @@ impl Describe for Normalized {
 struct Writer {
     inner: RecordWriter,
     normalize: Normalize,
-    layers: Vec<ProtocolOutputDiscriminants>,
+    layers: Vec<ProtocolDiscriminants>,
 }
 
 impl Writer {
@@ -359,7 +316,7 @@ impl Writer {
                 })),
                 layers: layers
                     .iter()
-                    .map(devil::ProtocolOutputDiscriminants::from)
+                    .map(devil::ProtocolDiscriminants::from)
                     .collect(),
                 normalize,
             }),
@@ -382,28 +339,30 @@ impl Writer {
                 ),
                 layers: layers
                     .iter()
-                    .map(devil::ProtocolOutputDiscriminants::from)
+                    .map(devil::ProtocolDiscriminants::from)
                     .collect(),
                 normalize,
             }),
             Output::BigQuery {
-                project,
-                dataset,
-                table,
+                google_project,
+                bigquery_dataset,
+                table_prefix,
+                service_account_key_file,
                 normalize,
                 layers,
             } => Ok(Writer {
                 inner: RecordWriter::BigQuery(
-                    BigQueryWriter::with_project_id(
-                        project.clone(),
-                        dataset.clone(),
-                        table.clone(),
+                    BigQueryWriter::new(
+                        google_project,
+                        bigquery_dataset,
+                        table_prefix,
+                        service_account_key_file.as_deref(),
                     )
                     .await?,
                 ),
                 layers: layers
                     .iter()
-                    .map(devil::ProtocolOutputDiscriminants::from)
+                    .map(devil::ProtocolDiscriminants::from)
                     .collect(),
                 normalize,
             }),
@@ -413,9 +372,8 @@ impl Writer {
     async fn handle(&mut self, recv: &mut Receiver<FlushMessages>) -> anyhow::Result<()> {
         match recv.recv_direct().await {
             Ok(flush) => {
-                let normalized = flush.normalize(self.normalize);
-                if !normalized.is_empty() {
-                    self.inner.write(&normalized, &self.layers).await?;
+                for n in flush.normalize(self.normalize) {
+                    n.write(&mut self.inner, &self.layers).await?;
                 }
             }
             Err(RecvError::Overflowed(n)) => {

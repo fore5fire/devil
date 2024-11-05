@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::{AddContentLength, Evaluate, PlanValue, PlanValueTable};
-use crate::{bindings, Error, MaybeUtf8, Result, State};
+use crate::{bindings, Error, HttpHeader, MaybeUtf8, Result, State};
 use anyhow::anyhow;
 use url::Url;
 
@@ -26,8 +26,18 @@ impl Evaluate<crate::Http2PlanOutput> for Http2Request {
             url: self.url.evaluate(state)?,
             method: self.method.evaluate(state)?,
             add_content_length: self.add_content_length.evaluate(state)?,
-            headers: self.headers.evaluate(state)?,
-            trailers: self.trailers.evaluate(state)?,
+            headers: self
+                .headers
+                .evaluate(state)?
+                .into_iter()
+                .map(HttpHeader::from)
+                .collect(),
+            trailers: self
+                .trailers
+                .evaluate(state)?
+                .into_iter()
+                .map(HttpHeader::from)
+                .collect(),
             body: self.body.evaluate(state)?.unwrap_or_default(),
         })
     }

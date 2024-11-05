@@ -1,11 +1,10 @@
 use std::{fmt::Display, sync::Arc};
 
+use gcp_bigquery_client::model::table_field_schema::TableFieldSchema;
 use serde::Serialize;
 use svix_ksuid::{KsuidLike, KsuidMs};
 
-use crate::IterableKey;
-
-use super::ProtocolOutputDiscriminants;
+use crate::{record::BigQuerySchema, IterableKey, ProtocolDiscriminants};
 
 #[derive(Debug, Clone)]
 pub struct RunName {
@@ -19,6 +18,12 @@ impl RunName {
             plan,
             run: KsuidMs::new(None, None),
         }
+    }
+}
+
+impl BigQuerySchema for RunName {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        TableFieldSchema::string(name)
     }
 }
 
@@ -51,6 +56,12 @@ impl StepName {
             run: run.run,
             step,
         }
+    }
+}
+
+impl BigQuerySchema for StepName {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        TableFieldSchema::string(name)
     }
 }
 
@@ -111,6 +122,12 @@ impl JobName {
     }
 }
 
+impl BigQuerySchema for JobName {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        TableFieldSchema::string(name)
+    }
+}
+
 impl Display for JobName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}.{}.{}.{}", self.plan, self.run, self.step, self.job)
@@ -132,11 +149,11 @@ pub struct ProtocolName {
     pub run: KsuidMs,
     pub step: Arc<String>,
     pub job: IterableKey,
-    pub protocol: ProtocolOutputDiscriminants,
+    pub protocol: ProtocolDiscriminants,
 }
 
 impl ProtocolName {
-    pub fn with_job(job: JobName, protocol: ProtocolOutputDiscriminants) -> Self {
+    pub fn with_job(job: JobName, protocol: ProtocolDiscriminants) -> Self {
         Self {
             plan: job.plan,
             run: job.run,
@@ -144,6 +161,12 @@ impl ProtocolName {
             job: job.job,
             protocol,
         }
+    }
+}
+
+impl BigQuerySchema for ProtocolName {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        TableFieldSchema::string(name)
     }
 }
 
@@ -172,7 +195,7 @@ pub struct PduName {
     pub run: KsuidMs,
     pub step: Arc<String>,
     pub job: IterableKey,
-    pub protocol: ProtocolOutputDiscriminants,
+    pub protocol: ProtocolDiscriminants,
     pub pdu: u64,
 }
 
@@ -188,7 +211,7 @@ impl PduName {
         }
     }
 
-    pub fn with_job(job: JobName, protocol: ProtocolOutputDiscriminants, pdu: u64) -> Self {
+    pub fn with_job(job: JobName, protocol: ProtocolDiscriminants, pdu: u64) -> Self {
         Self {
             plan: job.plan,
             run: job.run,
@@ -197,6 +220,12 @@ impl PduName {
             protocol,
             pdu,
         }
+    }
+}
+
+impl BigQuerySchema for PduName {
+    fn big_query_schema(name: &str) -> TableFieldSchema {
+        TableFieldSchema::string(name)
     }
 }
 

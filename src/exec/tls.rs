@@ -21,8 +21,8 @@ use super::timing::Timing;
 use super::Context;
 use crate::exec::pause::{Pause, PauseSpec};
 use crate::{
-    MaybeUtf8, PduName, ProtocolName, ProtocolOutputDiscriminants, TlsError, TlsOutput,
-    TlsPlanOutput, TlsReceivedOutput, TlsSentOutput, TlsVersion,
+    MaybeUtf8, PduName, ProtocolDiscriminants, ProtocolName, TlsError, TlsOutput, TlsPlanOutput,
+    TlsReceivedOutput, TlsSentOutput, TlsVersion,
 };
 
 #[derive(Debug)]
@@ -71,18 +71,11 @@ impl TlsRunner {
                 domain: Box::new(plan.host.clone()),
             },
             out: TlsOutput {
-                name: ProtocolName::with_job(
-                    ctx.job_name.clone(),
-                    ProtocolOutputDiscriminants::Tls,
-                ),
+                name: ProtocolName::with_job(ctx.job_name.clone(), ProtocolDiscriminants::Tls),
                 sent: Some(Arc::new(TlsSentOutput {
                     // TODO: if we pause before sending data, receive all data, then send data, this should
                     // really be numbered 1 not 0.
-                    name: PduName::with_job(
-                        ctx.job_name.clone(),
-                        ProtocolOutputDiscriminants::Tls,
-                        0,
-                    ),
+                    name: PduName::with_job(ctx.job_name.clone(), ProtocolDiscriminants::Tls, 0),
                     host: plan.host.clone(),
                     port: plan.port,
                     body: MaybeUtf8::default(),
@@ -321,20 +314,7 @@ impl TlsRunner {
 
         self.state = State::Completed { transport: inner };
 
-        self.out.version = match conn.protocol_version() {
-            Some(rustls::ProtocolVersion::SSLv2) => Some(TlsVersion::Ssl2),
-            Some(rustls::ProtocolVersion::SSLv3) => Some(TlsVersion::Ssl3),
-            Some(rustls::ProtocolVersion::TLSv1_0) => Some(TlsVersion::Tls1_0),
-            Some(rustls::ProtocolVersion::TLSv1_1) => Some(TlsVersion::Tls1_1),
-            Some(rustls::ProtocolVersion::TLSv1_2) => Some(TlsVersion::Tls1_2),
-            Some(rustls::ProtocolVersion::TLSv1_3) => Some(TlsVersion::Tls1_3),
-            Some(rustls::ProtocolVersion::DTLSv1_0) => Some(TlsVersion::Dtls1_0),
-            Some(rustls::ProtocolVersion::DTLSv1_2) => Some(TlsVersion::Dtls1_2),
-            Some(rustls::ProtocolVersion::DTLSv1_3) => Some(TlsVersion::Dtls1_3),
-            Some(rustls::ProtocolVersion::Unknown(val)) => Some(TlsVersion::Other(val)),
-            Some(_) => Some(TlsVersion::Other(0)),
-            None => None,
-        };
+        self.out.version = conn.protocol_version().map(TlsVersion::from);
     }
 }
 

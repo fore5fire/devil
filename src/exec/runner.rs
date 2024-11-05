@@ -6,7 +6,7 @@ use tracing::info;
 
 use super::raw_http2::RawHttp2Runner;
 use super::{http2::Http2Runner, raw_tcp::RawTcpRunner};
-use crate::{JobOutput, ProtocolField, ProtocolOutputDiscriminants, StepPlanOutput};
+use crate::{JobOutput, ProtocolDiscriminants, ProtocolField, StepPlanOutput};
 
 use super::{
     graphql::GraphqlRunner, http::HttpRunner, http1::Http1Runner, tcp::TcpRunner, tls::TlsRunner,
@@ -50,33 +50,33 @@ impl Runner {
             StepPlanOutput::H1c(output) => Runner::H1c(Box::new(Http1Runner::new(
                 ctx,
                 output,
-                ProtocolOutputDiscriminants::H1c,
+                ProtocolDiscriminants::H1c,
             ))),
             StepPlanOutput::H1(output) => Runner::H1(Box::new(Http1Runner::new(
                 ctx,
                 output,
-                ProtocolOutputDiscriminants::H1,
+                ProtocolDiscriminants::H1,
             ))),
             StepPlanOutput::H2c(output) => Self::H2c(Box::new(Http2Runner::new(
                 ctx,
                 output,
-                ProtocolOutputDiscriminants::H2c,
+                ProtocolDiscriminants::H2c,
             )?)),
             StepPlanOutput::RawH2c(output) => Self::RawH2c(Box::new(RawHttp2Runner::new(
                 ctx,
                 output,
-                ProtocolOutputDiscriminants::RawH2c,
+                ProtocolDiscriminants::RawH2c,
                 executor,
             ))),
             StepPlanOutput::H2(output) => Self::H2(Box::new(Http2Runner::new(
                 ctx,
                 output,
-                ProtocolOutputDiscriminants::H2,
+                ProtocolDiscriminants::H2,
             )?)),
             StepPlanOutput::RawH2(output) => Self::RawH2(Box::new(RawHttp2Runner::new(
                 ctx,
                 output,
-                ProtocolOutputDiscriminants::RawH2,
+                ProtocolDiscriminants::RawH2,
                 executor,
             ))),
             StepPlanOutput::Graphql(output) => {

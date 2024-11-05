@@ -6,8 +6,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::{runner::Runner, Context};
 use crate::{
-    GraphqlError, GraphqlOutput, GraphqlPlanOutput, GraphqlRequestOutput, PduName, ProtocolName,
-    ProtocolOutputDiscriminants,
+    GraphqlError, GraphqlOutput, GraphqlPlanOutput, GraphqlRequestOutput, PduName,
+    ProtocolDiscriminants, ProtocolName,
 };
 
 #[derive(Debug)]
@@ -50,10 +50,7 @@ impl GraphqlRunner {
 
         Ok(Self {
             out: GraphqlOutput {
-                name: ProtocolName::with_job(
-                    ctx.job_name.clone(),
-                    ProtocolOutputDiscriminants::Graphql,
-                ),
+                name: ProtocolName::with_job(ctx.job_name.clone(), ProtocolDiscriminants::Graphql),
                 request: None,
                 response: None,
                 errors: Vec::new(),
@@ -132,7 +129,7 @@ impl<'a> GraphqlRunner {
             self.out.request = Some(Arc::new(GraphqlRequestOutput {
                 name: PduName::with_job(
                     self.ctx.job_name.clone(),
-                    ProtocolOutputDiscriminants::Graphql,
+                    ProtocolDiscriminants::Graphql,
                     0,
                 ),
                 url: self.out.plan.url.clone(),
@@ -158,7 +155,7 @@ impl<'a> GraphqlRunner {
             self.out.response = Some(Arc::new(crate::GraphqlResponse {
                 name: PduName::with_job(
                     self.ctx.job_name.clone(),
-                    ProtocolOutputDiscriminants::Graphql,
+                    ProtocolDiscriminants::Graphql,
                     1,
                 ),
                 data: resp_body
