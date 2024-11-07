@@ -14,6 +14,8 @@ use cel_interpreter::Duration;
 use chrono::TimeDelta;
 use tokio::io::ReadBuf;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tracing::debug;
+use tracing::instrument;
 
 use super::pause;
 use super::pause::PauseSpec;
@@ -526,7 +528,9 @@ impl Http1Runner {
         Some(self.out.plan.body.len())
     }
 
+    #[instrument]
     pub async fn execute(&mut self) {
+        debug!("executing http1");
         if !self.out.plan.body.is_empty() {
             let body = std::mem::take(&mut self.out.plan.body);
             if let Err(e) = self.write_all(body.as_slice()).await {
@@ -536,6 +540,7 @@ impl Http1Runner {
                 });
                 return;
             }
+            debug!("wrote body: {body}");
             self.out.plan.body = body;
         }
         if let Err(e) = self.flush().await {
@@ -545,6 +550,7 @@ impl Http1Runner {
             });
             return;
         }
+        debug!("flushed");
         let mut response = Vec::new();
         if let Err(e) = self.read_to_end(&mut response).await {
             self.out.errors.push(Http1Error {
@@ -553,6 +559,7 @@ impl Http1Runner {
             });
             return;
         }
+        debug!("got response: {:?}", String::from_utf8_lossy(&response));
     }
 
     pub fn finish(mut self) -> (Http1Output, Option<Runner>) {

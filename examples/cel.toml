@@ -1,5 +1,10 @@
 devil.version = 0
 devil.name = "examples_cel"
 
-[printf.http]
-    url.cel = "printf('https://example.com/%05d', 10)"
+[printf.h1c]
+    url.cel = "printf('http://127.0.0.1:8080/%s0000000000', char(count.index % uint(26) + uint(97)))"
+    [printf.h1c.headers]
+    Host = "localhost"
+    Connection = "close"
+    [printf.run]
+    count.cel = "26 * 5"

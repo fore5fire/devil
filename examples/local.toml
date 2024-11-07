@@ -3,7 +3,7 @@ devil.name = "examples_local"
 
 [simple.tcp]
     host = "127.0.0.1"
-    port = 8888
+    port = 8080
     body = "GET /abc HTTP/1.0\r\n\r\n"
     #close.bytes = 2
 

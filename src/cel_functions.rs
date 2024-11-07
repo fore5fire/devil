@@ -57,6 +57,18 @@ pub fn bytes(This(string): This<Arc<String>>) -> Arc<Vec<u8>> {
     Arc::new(string.as_ref().clone().into_bytes())
 }
 
+pub fn char(ftx: &FunctionContext, This(int): This<Value>) -> Result<Arc<String>> {
+    match int {
+        Value::Int(int) => Ok(Arc::new(
+            String::from_utf8(vec![int as u8]).map_err(|e| ftx.error(e))?,
+        )),
+        Value::UInt(int) => Ok(Arc::new(
+            String::from_utf8(vec![int as u8]).map_err(|e| ftx.error(e))?,
+        )),
+        _ => Err(ftx.error("invalid unit")),
+    }
+}
+
 pub fn random_duration(
     ftx: &FunctionContext,
     min: i64,

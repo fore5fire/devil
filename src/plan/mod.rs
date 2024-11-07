@@ -2435,7 +2435,7 @@ where
             })
             .collect::<HashMap<_, _>>(),
     ).unwrap();
-    ctx.add_variable("current", state.current());
+    ctx.add_variable("current", state.current()).unwrap();
     ctx.add_variable("for", state.run_for()).unwrap();
     ctx.add_variable("while", state.run_while()).unwrap();
     ctx.add_variable("count", state.run_count()).unwrap();
@@ -2445,6 +2445,7 @@ where
         cel_functions::form_urlencoded_parts,
     );
     ctx.add_function("bytes", cel_functions::bytes);
+    ctx.add_function("char", cel_functions::char);
     ctx.add_function("randomDuration", cel_functions::random_duration);
     ctx.add_function("randomInt", cel_functions::random_int);
     ctx.add_function("printf", cel_functions::printf);

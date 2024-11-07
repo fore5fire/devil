@@ -1,6 +1,6 @@
 use convert_case::{Case, Casing};
 use darling::FromDeriveInput;
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use quote::{quote, quote_spanned, ToTokens};
 use syn::{spanned::Spanned, DeriveInput, Fields, FieldsNamed};
 
@@ -57,7 +57,7 @@ fn bigquery_macro_impl(input: proc_macro::TokenStream) -> syn::Result<TokenStrea
         syn::Data::Struct(s) => match &s.fields {
             Fields::Named(fields) => Ok(impl_wrapper(
                 root_name,
-                handle_named_fields(fields, "name", args.tag.as_deref())?,
+                handle_named_fields(fields, syn::Ident::new("name", Span::call_site()), args.tag.as_deref())?,
             )),
             _ => Err(syn::Error::new(
                 ast.ident.span(),

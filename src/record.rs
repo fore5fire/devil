@@ -41,7 +41,11 @@ impl<T: BigQuerySchema> BigQuerySchema for Arc<T> {
 impl<T: BigQuerySchema> BigQuerySchema for Option<T> {
     fn big_query_schema(name: &str) -> TableFieldSchema {
         let mut inner = T::big_query_schema(name);
-        inner.mode = Some("NULLABLE".to_owned());
+        // BigQuery can't directly represent an optional array, so just leave it as an array if its
+        // both.
+        if inner.mode.as_ref().map(String::as_ref) != Some("REPEATED") {
+            inner.mode = Some("NULLABLE".to_owned());
+        }
         inner
     }
 }
@@ -427,8 +431,8 @@ impl Describe for StepOutput {
         mut w: W,
         layers: &[ProtocolDiscriminants],
     ) -> std::io::Result<()> {
-        for (job_name, job) in &self.jobs {
-            writeln!(w, "---- job {job_name} ----")?;
+        for (_, job) in &self.jobs {
+            writeln!(w, "---- job {} ----", job.name)?;
             job.describe(&mut w, layers)?;
         }
         Ok(())
@@ -441,7 +445,7 @@ impl JobOutput {
         input: &'a [ProtocolDiscriminants],
     ) -> &'a [ProtocolDiscriminants] {
         if !input.is_empty() {
-            return input;
+            input
         } else if self.graphql.is_some() {
             &[ProtocolDiscriminants::Graphql]
         //} else if proto.http3.is_some() {
@@ -480,7 +484,8 @@ impl Describe for JobOutput {
     ) -> std::io::Result<()> {
         // TODO: escape or refuse to print dangerous term characters in output.
 
-        for level in self.default_layers(layers) {
+        let layers = self.default_layers(layers);
+        for level in layers {
             match level {
                 ProtocolDiscriminants::RawTcp => {
                     if let Some(segments) = &self.raw_tcp {
