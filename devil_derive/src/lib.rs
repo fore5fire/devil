@@ -1,8 +1,8 @@
 use convert_case::{Case, Casing};
-use darling::FromDeriveInput;
+use darling::{ast::{Data, Fields, Style}, util::SpannedValue, FromDeriveInput, FromField, FromVariant};
 use proc_macro2::{Span, TokenStream};
 use quote::{quote, quote_spanned, ToTokens};
-use syn::{spanned::Spanned, DeriveInput, Fields, FieldsNamed};
+use syn::{DeriveInput, Ident, Type};
 
 #[proc_macro_derive(Record, attributes(record))]
 pub fn record_macro_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
@@ -45,7 +45,27 @@ pub fn bigquery_macro_derive(input: proc_macro::TokenStream) -> proc_macro::Toke
 #[darling(attributes(bigquery))]
 struct BigQueryArgs {
     ident: syn::Ident,
+    data: Data<BigQueryVariant, SpannedValue<BigQueryField>>,
+
     tag: Option<String>,
+}
+
+#[derive(Debug, FromVariant)]
+#[darling(attributes(bigquery))]
+struct BigQueryVariant {
+    ident: Ident,
+    fields: Fields<SpannedValue<BigQueryField>>,
+    #[darling(default)]
+    skip: bool,
+}
+
+#[derive(Debug, FromField)]
+#[darling(attributes(bigquery))]
+struct BigQueryField {
+    ident: Option<Ident>,
+    ty: Type,
+
+    rename: Option<String>
 }
 
 fn bigquery_macro_impl(input: proc_macro::TokenStream) -> syn::Result<TokenStream> {
@@ -53,20 +73,22 @@ fn bigquery_macro_impl(input: proc_macro::TokenStream) -> syn::Result<TokenStrea
     let args = BigQueryArgs::from_derive_input(&ast)?;
     let root_name = &args.ident;
 
-    match &ast.data {
-        syn::Data::Struct(s) => match &s.fields {
-            Fields::Named(fields) => Ok(impl_wrapper(
+    match &args.data {
+        Data::Struct(s) => {
+            let Style::Struct = s.style else {
+                return Err(syn::Error::new(
+                    ast.ident.span(),
+                    "Unsupported struct type to derive BigQuerySchema",
+                ));
+            };
+            Ok(impl_wrapper(
                 root_name,
-                handle_named_fields(fields, syn::Ident::new("name", Span::call_site()), args.tag.as_deref())?,
-            )),
-            _ => Err(syn::Error::new(
-                ast.ident.span(),
-                "Unsupported struct type to derive BigQuerySchema",
-            )),
+                handle_named_fields(&s, syn::Ident::new("name", Span::call_site()), args.tag.as_deref())?,
+            ))
         },
-        syn::Data::Enum(e) => {
+        Data::Enum(variants) => {
             // If all fields are unit type, the type is just a string.
-            if e.variants.iter().all(|v| matches!(v.fields, Fields::Unit)) {
+            if variants.iter().all(|v| matches!(v.fields.style, Style::Unit)) {
                 return Ok(impl_wrapper(
                     root_name,
                     quote!(TableFieldSchema::string(name)),
@@ -75,25 +97,25 @@ fn bigquery_macro_impl(input: proc_macro::TokenStream) -> syn::Result<TokenStrea
 
             // If any but not all fields are unit type, the type could either be string or struct.
             // Let's just use JSON.
-            if e.variants.iter().any(|v| matches!(v.fields, Fields::Unit)) {
+            if variants.iter().any(|v| matches!(v.fields.style, Style::Unit)) {
                 return Ok(impl_wrapper(
                     root_name,
                     quote!(TableFieldSchema::json(name)),
                 ));
             }
 
-            let field_vals = e.variants.iter().map(|variant| {
+            let field_vals = variants.iter().map(|variant| {
                 let snake_ident = variant.ident.to_string().to_case(Case::Snake);
-                Ok(match &variant.fields {
+                Ok(match &variant.fields.style {
                     // Single unnamed field is serialized as structs snake_case variants for keys,
                     // and the fields' own serialization for the values.
-                    Fields::Unnamed(fields) => {
-                        let mut iter = fields.unnamed.iter();
+                    Style::Tuple => {
+                        let mut iter = variant.fields.fields.iter();
                         let (Some(f), None) = (iter.next(), iter.next()) else {
                             return 
                                 Err(syn::Error::new(
                                     variant.ident.span(),
-                                    "Tuple enums variants must have a single field to derive BigQuerySchema",
+                                    "Tuple enum variants must have a single field to derive BigQuerySchema",
                                 ));
                         };
                         let ty = &f.ty;
@@ -101,8 +123,8 @@ fn bigquery_macro_impl(input: proc_macro::TokenStream) -> syn::Result<TokenStrea
                     }
                     // Named fields are serialized the same as if the named fields were in their
                     // own struct.
-                    Fields::Named(fields) => handle_named_fields(fields, snake_ident, None)?,
-                    Fields::Unit => unreachable!(),
+                    Style::Struct => handle_named_fields(&variant.fields, snake_ident, None)?,
+                    Style::Unit => unreachable!(),
                 })
             })
             .chain(args.tag.into_iter().map(|tag| Ok(quote!(TableFieldSchema::string(#tag)))))
@@ -117,38 +139,27 @@ fn bigquery_macro_impl(input: proc_macro::TokenStream) -> syn::Result<TokenStrea
                 },
             ))
         }
-        _ => Err(syn::Error::new(
-            ast.ident.span(),
-            "Unsupported type to derive BigQuerySchema",
-        )),
     }
 }
 
+fn bigquery_prost(args: BigQueryArgs) {
+
+}
+
 fn handle_named_fields<T: ToTokens>(
-    fields: &FieldsNamed,
+    fields: &Fields<SpannedValue<BigQueryField>>,
     name: T,
     tag: Option<&str>,
 ) -> syn::Result<TokenStream> {
     let field_vals = fields
-        .named
         .iter()
         .map(|field| {
-            let ident = if let Some(attr) = field
-                .attrs
-                .iter()
-                .find(|attr| attr.meta.path().is_ident("bigquery"))
-            {
-                let f = &attr.meta.require_name_value()?.value;
-                quote!(stringify!(#f))
-            } else {
-                let f = field
-                    .ident
-                    .as_ref()
-                    .unwrap()
-                    .to_string()
-                    .to_case(Case::Snake);
-                quote!(#f)
-            };
+            let ident = field.rename.clone().unwrap_or_else(|| field
+                .ident
+                .as_ref()
+                .unwrap()
+                .to_string()
+                .to_case(Case::Snake));
             let ty = &field.ty;
             Ok(quote_spanned!(field.span() => <#ty>::big_query_schema(#ident)))
         })
