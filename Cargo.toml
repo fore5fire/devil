@@ -52,7 +52,7 @@ tracing = { version = "0.1.40", features = ["async-await", "log"] }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 strum = { version = "0.26.3", features = ["derive"] }
 serde-transcode = "1.1.1"
-gcp-bigquery-client = "0.23.0"
+gcp-bigquery-client = { git = "https://github.com/fore5fire/gcp-bigquery-client", branch = "storage_write_records" }
 prost = "0.13.3"
 serde_bytes = "0.11.15"
 async-broadcast = "0.7.1"
