@@ -1,34 +1,34 @@
-devil.version = 0
-devil.name = "implicit_defaults"
+doberman.version = 0
+doberman.name = "implicit_defaults"
 
-[[devil.defaults]]
+[[doberman.defaults]]
 selector = ["graphql", "graphql_h1c", "graphql_h1", "graphql_h2", "graphql_h2c", "graphql_h3"]
-    [devil.defaults.http]
+    [doberman.defaults.http]
     url.cel = "current.graphql.plan.url"
     method = "POST"
     headers.Content-Type = "application/json"
     headers.Host.cel = "current.graphql.plan.url.parse_url().host"
-    [devil.defaults.h1c]
+    [doberman.defaults.h1c]
     url.cel = "current.graphql.plan.url"
     method = "POST"
     headers.Content-Type = "application/json"
     headers.Host.cel = "current.graphql.plan.url.parse_url().host"
-    [devil.defaults.h1]
+    [doberman.defaults.h1]
     url.cel = "current.graphql.plan.url"
     method = "POST"
     headers.Content-Type = "application/json"
     headers.Host.cel = "current.graphql.plan.url.parse_url().host"
-    [devil.defaults.h2c]
+    [doberman.defaults.h2c]
     url.cel = "current.graphql.plan.url"
     method = "POST"
     headers.Content-Type = "application/json"
     headers.Host.cel = "current.graphql.plan.url.parse_url().host"
-    [devil.defaults.h2]
+    [doberman.defaults.h2]
     url.cel = "current.graphql.plan.url"
     method = "POST"
     headers.Content-Type = "application/json"
     headers.Host.cel = "current.graphql.plan.url.parse_url().host"
-    [devil.defaults.h3]
+    [doberman.defaults.h3]
     url.cel = "current.graphql.plan.url"
     method = "POST"
     body.cel = "current.graphql.plan.body.to_json()"
@@ -36,62 +36,62 @@ selector = ["graphql", "graphql_h1c", "graphql_h1", "graphql_h2", "graphql_h2c",
     headers.Content-Length.cel = "current.graphql.plan.body.to_json().len()"
     headers.Host.cel = "current.graphql.plan.url.parse_url().host"
 
-[[devil.defaults]]
+[[doberman.defaults]]
 selector = ["h1c", "graphql_h1c"]
-    [devil.defaults.tcp]
+    [doberman.defaults.tcp]
     host.cel = "current.h1c.plan.url.parse_url().host"
     port.cel = "current.h1c.plan.url.parse_url().port_or_default"
 
-[[devil.defaults]]
+[[doberman.defaults]]
 selector = ["h1", "graphql_h1"]
-    [devil.defaults.tls]
+    [doberman.defaults.tls]
     host.cel = "current.h1.plan.url.parse_url().host"
     port.cel = "current.h1.plan.url.parse_url().port_or_default"
 
-[[devil.defaults]]
+[[doberman.defaults]]
 selector = ["h2c", "graphql_h2c"]
-    [devil.defaults.raw_h2c]
+    [doberman.defaults.raw_h2c]
     host.cel = "current.h2c.plan.url.parse_url().host"
     port.cel = "current.h2c.plan.url.parse_url().port_or_default"
 
-[[devil.defaults]]
+[[doberman.defaults]]
 selector = ["raw_h2c", "h2c", "graphql_h2c"]
-    [devil.defaults.tcp]
+    [doberman.defaults.tcp]
     host.cel = "current.raw_h2c.plan.host"
     port.cel = "current.raw_h2c.plan.port"
 
-[[devil.defaults]]
+[[doberman.defaults]]
 selector = ["h2", "graphql_h2"]
-    [devil.defaults.raw_h2]
+    [doberman.defaults.raw_h2]
     host.cel = "current.h2.plan.url.parse_url().host"
     port.cel = "current.h2.plan.url.parse_url().port_or_default"
 
-[[devil.defaults]]
+[[doberman.defaults]]
 selector = ["raw_h2", "h2", "graphql_h2"]
-    [devil.defaults.tls]
+    [doberman.defaults.tls]
     host.cel = "current.raw_h2.plan.host"
     port.cel = "current.raw_h2.plan.port"
     alpn = "h2"
 
-[[devil.defaults]]
+[[doberman.defaults]]
 selector = ["tls", "h1", "raw_h2", "h2", "graphql_h1", "graphql_h2"]
-    [devil.defaults.tcp]
+    [doberman.defaults.tcp]
     host.cel = "current.tls.plan.host"
     port.cel = "current.tls.plan.port"
 
-[[devil.defaults]]
+[[doberman.defaults]]
 selector = ["tcp", "tls", "h1", "h1c", "raw_h2", "h2", "raw_h2c", "h2c", "graphql_h1", "graphql_h1c", "graphql_h2", "graphql_h2c"]
-    [devil.defaults.raw_tcp]
+    [doberman.defaults.raw_tcp]
     dest_host.cel = "current.tcp.plan.host"
     dest_port.cel = "current.tcp.plan.port"
 
-[[devil.defaults]]
+[[doberman.defaults]]
 selector = ["dtls"]
-    [devil.defaults.udp]
+    [doberman.defaults.udp]
     host.cel = "current.dtls.plan.host"
     port.cel = "current.dtls.plan.port"
 
-[[devil.defaults]]
+[[doberman.defaults]]
     http.method = "GET"
     http.add_content_length = "auto"
     h1c.method = "GET"

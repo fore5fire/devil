@@ -5,7 +5,7 @@ use bitmask_enum::bitmask;
 use byteorder::{ByteOrder, NetworkEndian};
 use bytes::{Buf, Bytes};
 use cel_interpreter::Duration;
-use devil_derive::{BigQuerySchema, Record};
+use doberman_derive::{BigQuerySchema, Record};
 use gcp_bigquery_client::model::table_field_schema::TableFieldSchema;
 use serde::Serialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt};

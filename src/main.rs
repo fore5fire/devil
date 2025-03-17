@@ -1,9 +1,9 @@
 use anyhow::anyhow;
 use async_broadcast::{broadcast, Receiver, RecvError, Sender};
 use clap::{Parser, ValueEnum};
-use devil::exec::Executor;
-use devil::record::{BigQueryWriter, FileWriter, RecordWriter, StdoutWriter};
-use devil::{Normalized, Plan, ProtocolDiscriminants, RunName, RunOutput, StepOutput};
+use doberman::exec::Executor;
+use doberman::record::{BigQueryWriter, FileWriter, RecordWriter, StdoutWriter};
+use doberman::{Normalized, Plan, ProtocolDiscriminants, RunName, RunOutput, StepOutput};
 use futures::future::try_join_all;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -117,7 +117,7 @@ impl Normalize {
     }
 }
 
-impl From<Normalize> for devil::Normalize {
+impl From<Normalize> for doberman::Normalize {
     fn from(value: Normalize) -> Self {
         match value {
             Normalize::Pdu => Self::Pdu,
@@ -149,7 +149,7 @@ enum Protocol {
     //Ip,
 }
 
-impl From<&Protocol> for devil::ProtocolDiscriminants {
+impl From<&Protocol> for doberman::ProtocolDiscriminants {
     fn from(value: &Protocol) -> Self {
         match value {
             Protocol::Graphql => Self::Graphql,
@@ -310,13 +310,13 @@ impl Writer {
                 normalize,
             } => Ok(Writer {
                 inner: RecordWriter::Stdout(StdoutWriter::new(match format {
-                    OutputFormat::Describe => devil::record::Serializer::Describe,
-                    OutputFormat::Json => devil::record::Serializer::Json,
-                    OutputFormat::Toml => devil::record::Serializer::Toml,
+                    OutputFormat::Describe => doberman::record::Serializer::Describe,
+                    OutputFormat::Json => doberman::record::Serializer::Json,
+                    OutputFormat::Toml => doberman::record::Serializer::Toml,
                 })),
                 layers: layers
                     .iter()
-                    .map(devil::ProtocolDiscriminants::from)
+                    .map(doberman::ProtocolDiscriminants::from)
                     .collect(),
                 normalize,
             }),
@@ -330,16 +330,16 @@ impl Writer {
                     FileWriter::new(
                         &path,
                         match format {
-                            OutputFormat::Describe => devil::record::Serializer::Describe,
-                            OutputFormat::Json => devil::record::Serializer::Json,
-                            OutputFormat::Toml => devil::record::Serializer::Toml,
+                            OutputFormat::Describe => doberman::record::Serializer::Describe,
+                            OutputFormat::Json => doberman::record::Serializer::Json,
+                            OutputFormat::Toml => doberman::record::Serializer::Toml,
                         },
                     )
                     .await?,
                 ),
                 layers: layers
                     .iter()
-                    .map(devil::ProtocolDiscriminants::from)
+                    .map(doberman::ProtocolDiscriminants::from)
                     .collect(),
                 normalize,
             }),
@@ -362,7 +362,7 @@ impl Writer {
                 ),
                 layers: layers
                     .iter()
-                    .map(devil::ProtocolDiscriminants::from)
+                    .map(doberman::ProtocolDiscriminants::from)
                     .collect(),
                 normalize,
             }),

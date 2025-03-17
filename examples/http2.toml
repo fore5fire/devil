@@ -1,5 +1,5 @@
-devil.version = 0
-devil.name = "examples_http2"
+doberman.version = 0
+doberman.name = "examples_http2"
 
 # Basic HTTP/2 request
 [basic.h2]

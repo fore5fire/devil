@@ -2,7 +2,7 @@ use std::{str::FromStr, sync::Arc};
 
 use anyhow::bail;
 use cel_interpreter::Duration;
-use devil_derive::{BigQuerySchema, Record};
+use doberman_derive::{BigQuerySchema, Record};
 use serde::Serialize;
 
 use super::{MaybeUtf8, PduName, ProtocolName};

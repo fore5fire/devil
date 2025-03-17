@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use cel_interpreter::Duration;
-use devil_derive::{BigQuerySchema, Record};
+use doberman_derive::{BigQuerySchema, Record};
 use serde::Serialize;
 use url::Url;
 

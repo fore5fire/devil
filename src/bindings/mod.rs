@@ -22,7 +22,7 @@ pub trait Merge: std::fmt::Debug + Clone + Serialize + Deserialize<'static> {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Plan {
-    pub devil: Settings,
+    pub doberman: Settings,
     #[serde(flatten)]
     pub steps: IndexMap<String, Step>,
 }
@@ -35,7 +35,7 @@ impl Plan {
     }
 
     fn validate(&mut self) -> crate::Result<()> {
-        self.devil.validate()?;
+        self.doberman.validate()?;
         for (name, step) in &mut self.steps {
             step.validate()
                 .map_err(|e| anyhow!("validate step {}: {}", name, e))?;
@@ -60,7 +60,7 @@ impl Validate for Settings {
     fn validate(&self) -> crate::Result<()> {
         if !self.unrecognized.is_empty() {
             bail!(
-                "unrecognized field devil.{} {}",
+                "unrecognized field doberman.{} {}",
                 if self.unrecognized.len() == 1 {
                     ""
                 } else {

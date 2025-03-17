@@ -1,5 +1,5 @@
-devil.version = 0
-devil.name = "examples_tls"
+doberman.version = 0
+doberman.name = "examples_tls"
 
 [simple.tls]
     host = "example.com"

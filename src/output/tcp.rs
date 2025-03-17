@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use cel_interpreter::Duration;
-use devil_derive::{BigQuerySchema, Record};
+use doberman_derive::{BigQuerySchema, Record};
 use serde::Serialize;
 
 use super::{MaybeUtf8, PduName, ProtocolName};

@@ -2,7 +2,7 @@ use super::{Evaluate, PlanData, PlanValue, PlanValueTable, TryFromPlanData};
 use crate::bindings::Literal;
 use crate::{bindings, Error, HttpHeader, MaybeUtf8, Result, State};
 use anyhow::{anyhow, bail};
-use devil_derive::BigQuerySchema;
+use doberman_derive::BigQuerySchema;
 use serde::Serialize;
 use std::str::FromStr;
 use std::sync::Arc;

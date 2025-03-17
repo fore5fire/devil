@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::bail;
 use cel_interpreter::{Duration, Value};
-use devil_derive::{BigQuerySchema, Record};
+use doberman_derive::{BigQuerySchema, Record};
 use indexmap::IndexMap;
 use serde::Serialize;
 use strum::EnumIs;

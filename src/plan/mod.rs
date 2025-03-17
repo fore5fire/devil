@@ -60,8 +60,8 @@ impl<'a> Plan {
     }
 
     pub fn from_binding(mut plan: bindings::Plan) -> Result<Self> {
-        if plan.devil.name.contains(".") {
-            bail!("devil.name may not contain a '.'");
+        if plan.doberman.name.contains(".") {
+            bail!("doberman.name may not contain a '.'");
         }
         static IMPLICIT_DEFUALTS: OnceLock<bindings::Plan> = OnceLock::new();
 
@@ -70,28 +70,28 @@ impl<'a> Plan {
             let raw = include_str!("../implicit_defaults.cp.toml");
             toml::de::from_str::<bindings::Plan>(raw).unwrap()
         });
-        plan.devil
+        plan.doberman
             .defaults
-            .extend(implicit_defaults.devil.defaults.clone());
+            .extend(implicit_defaults.doberman.defaults.clone());
         // Generate final steps.
         let steps: IndexMap<Arc<String>, Step> = plan
             .steps
             .into_iter()
             .map(|(name, value)| {
                 // Apply the user and implicit defaults.
-                let value = value.apply_defaults(plan.devil.defaults.clone());
+                let value = value.apply_defaults(plan.doberman.defaults.clone());
                 // Apply planner requirements and convert to planner structure.
                 Ok((Arc::new(name), Step::from_bindings(value)?))
             })
             .collect::<Result<_>>()?;
         let locals = plan
-            .devil
+            .doberman
             .locals
             .into_iter()
             .map(|(k, v)| Ok((k, PlanValue::try_from(v)?)))
             .collect::<Result<_>>()?;
 
-        Ok(Plan { name: plan.devil.name.into(), steps, locals })
+        Ok(Plan { name: plan.doberman.name.into(), steps, locals })
     }
 }
 
